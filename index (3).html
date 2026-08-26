@@ -1,0 +1,711 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Supervisión 2.0</title>
+<meta name="theme-color" content="#1e3a8a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📋</text></svg>">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:#f0f2f8;color:#1a1d29;-webkit-font-smoothing:antialiased}
+:root{--bg:#f0f2f8;--card:#fff;--text:#1a1d29;--dim:#6b7086;--border:#e2e4ec;--accent:#1e40af;--accent2:#3b82f6;--accent-light:#dbeafe;--input:#f8f9fc;--green:#16a34a;--yellow:#ca8a04;--red:#dc2626;--gbg:#f0fdf4;--ybg:#fefce8;--rbg:#fef2f2}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes fadeIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+.anim{animation:fadeIn .2s ease-out}
+input,textarea,select,button{font-family:inherit}
+textarea{resize:vertical}
+::-webkit-scrollbar{width:4px}::-webkit-scrollbar-thumb{background:#c4c8d4;border-radius:4px}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const{useState,useEffect,useRef,useCallback}=React;
+
+// ═══ CONFIG ═══
+const SHEET_ID='1Ph5T-m-Lkbdw1LBq-9wIIMW6C8bljOG1t5GfZQhNZ2o';
+const PLANTILLA_GID='913334386';
+const RANKING_ENT_GID='1643927631';
+const RANKING_GID='1495976066';
+const DOPOST_URL='https://script.google.com/macros/s/AKfycbx7DYc01sJV7QJsA9kVdtgW0JOZdyySjLqqHzszA9qsDE3xt8kpr7SfrdF2KqseVTr0/exec';
+const POSITIONS_ALLOWED=['DIRECTOR DISTRITAL','LIDER VENTAS','LIDER DE CANALES Y VENTA TECNICO','COACH VENTAS','COACH DE VENTAS TECNICO','COACH PROMOVENDEDOR PUNTO DE VENTA','VENDEDOR','PROMOVENDEDOR PUNTO DE VENTA'];
+
+// ═══ HELPERS ═══
+const today=()=>new Date().toISOString().slice(0,10);
+const now=()=>new Date().toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'});
+const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+const fmt=d=>{if(!d)return'';const p=d.split('-');return`${p[2]}/${p[1]}/${p[0]}`};
+
+const STATUS={
+  verde:{bg:'var(--gbg)',border:'var(--green)',label:'Verde'},
+  amarillo:{bg:'var(--ybg)',border:'var(--yellow)',label:'Amarillo'},
+  rojo:{bg:'var(--rbg)',border:'var(--red)',label:'Rojo'},
+};
+const TABS=[
+  {id:'arranque',icon:'☀️',label:'Arranque'},
+  {id:'permisos',icon:'📋',label:'Permisos'},
+  {id:'cierre',icon:'🌙',label:'Cierre'},
+  {id:'plan',icon:'📊',label:'Plan'},
+  {id:'feedback',icon:'💬',label:'Hallazgos'},
+  {id:'historial',icon:'📁',label:'Historial'},
+];
+const ABSENCE_REASONS=['Falta justificada','Falta injustificada','Incapacidad','Permiso autorizado','Vacaciones','Retardo','Otro'];
+const PERMISO_TIPOS=['Trabajo fuera de ruta','Trabajo por su cuenta','Salida anticipada','Llegada tardía','Cambio de zona','Actividad especial','Otro'];
+const FEEDBACK_TIPOS=['Acompañamiento','Feedback 1 a 1','Revisión semanal','Incidencia operativa','Incidencia crítica','Retroalimentación','Otro'];
+const cycleS=c=>{const o=['verde','amarillo','rojo'];return o[(o.indexOf(c)+1)%3];};
+
+// ═══ STORAGE ═══
+const LS_KEY='supervision-v2';
+function loadData(){try{const d=localStorage.getItem(LS_KEY);return d?JSON.parse(d):{records:[],pendingSync:[]};}catch{return{records:[],pendingSync:[]};}}
+function saveData(data){try{localStorage.setItem(LS_KEY,JSON.stringify(data));}catch(e){console.error(e);}}
+
+// ═══ SYNC TO DIRECTOR'S SHEET ═══
+async function sendToSheet(record){
+  if(!DOPOST_URL)return{ok:false,error:'URL no configurada'};
+  try{
+    // No enviar la foto (demasiado grande para Sheets)
+    const payload={...record};delete payload.photo;
+    const res=await fetch(DOPOST_URL,{method:'POST',body:JSON.stringify(payload),headers:{'Content-Type':'text/plain'}});
+    const json=await res.json();
+    return json;
+  }catch(e){
+    console.error('Sync error:',e);
+    return{ok:false,error:e.message};
+  }
+}
+// Guardar localmente + enviar al Sheet del Director
+async function saveAndSync(data,record,toast){
+  saveData(data);
+  if(DOPOST_URL){
+    const result=await sendToSheet(record);
+    if(!result.ok){
+      // Guardar en cola pendiente para reintentar
+      const pending=JSON.parse(localStorage.getItem('sv2-pending')||'[]');
+      pending.push(record);
+      localStorage.setItem('sv2-pending',JSON.stringify(pending));
+      toast?.('⚠️ Guardado local — sin conexión al Sheet');
+    }
+  }
+}
+// Reintentar pendientes
+async function retryPending(toast){
+  if(!DOPOST_URL)return;
+  const pending=JSON.parse(localStorage.getItem('sv2-pending')||'[]');
+  if(pending.length===0)return;
+  const still=[];
+  for(const rec of pending){
+    const r=await sendToSheet(rec);
+    if(!r.ok)still.push(rec);
+  }
+  localStorage.setItem('sv2-pending',JSON.stringify(still));
+  if(still.length===0&&pending.length>0)toast?.('✅ Registros pendientes sincronizados');
+}
+
+// ═══ GVIZ FETCH ═══
+function gvizUrl(gid,query){
+  let u=`https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&gid=${gid}`;
+  if(query)u+=`&tq=${encodeURIComponent(query)}`;
+  return u;
+}
+function parseGviz(text){
+  const m=text.match(/setResponse\((.+)\);?\s*$/s);
+  if(!m)throw new Error('Invalid gviz response');
+  const json=JSON.parse(m[1]);
+  if(json.status==='error')throw new Error(json.errors?.[0]?.message||'gviz error');
+  const cols=json.table.cols.map(c=>c.label||c.id);
+  return json.table.rows.map(r=>r.c.map(cell=>{
+    if(!cell)return'';
+    let v=cell.v;
+    if(typeof v==='string'&&v.match(/^Date\(/)){
+      const parts=v.match(/Date\((\d+),(\d+),(\d+)\)/);
+      if(parts)v=`${parts[3]}/${parseInt(parts[2])+1}/${parts[1]}`;
+    }
+    return v??'';
+  }));
+}
+
+async function fetchPlantilla(){
+  const res=await fetch(gvizUrl(PLANTILLA_GID));
+  const text=await res.text();
+  const rows=parseGviz(text);
+  // cols: 0=A(TGS),1=B(SF),2=C(ID),3=D(NumEmp),4=E(Nombre),5=F(Posicion),
+  // 6=G(FechaAlta),7=H(Distrito),8=I(NumLR),9=J(PosLR),
+  // 10=K(NombreLR),11=L(PuestoLR),12=M,13=N,...
+  // 25=Z(SegundaLR),26=AA(Activo),27=AB(PIN)
+  return rows.map(r=>({
+    numEmp:String(r[3]||'').trim(),
+    nombre:String(r[4]||'').trim(),
+    posicion:String(r[5]||'').trim(),
+    fechaAlta:String(r[6]||''),
+    distrito:String(r[7]||''),
+    reportaA:String(r[10]||'').trim(),
+    puestoLR:String(r[11]||'').trim(),
+    segundaLR:String(r[25]||'').trim(),
+    activo:String(r[26]||'').trim(),
+    pin:String(r[27]||'').trim(),
+  })).filter(e=>e.nombre&&e.nombre!=='VACANTE'&&e.nombre!=='NOMBRE DEL EMPLEADO');
+}
+
+// ═══ BUILD TEAM ═══
+function buildTeam(user,allEmployees){
+  const activos=allEmployees.filter(e=>e.activo==='ACTIVO');
+  const role=getRoleType(user.posicion);
+  let team=[];
+  let coaches=[];
+
+  if(role==='coach'){
+    team=activos.filter(e=>e.reportaA===user.nombre&&isVendedor(e.posicion));
+  }else if(role==='lider'){
+    coaches=activos.filter(e=>e.reportaA===user.nombre&&isCoach(e.posicion));
+    const coachNames=coaches.map(c=>c.nombre);
+    team=activos.filter(e=>coachNames.includes(e.reportaA)&&isVendedor(e.posicion));
+  }else if(role==='director'){
+    const lideres=activos.filter(e=>e.reportaA===user.nombre&&isLider(e.posicion));
+    coaches=lideres;
+    const liderNames=lideres.map(l=>l.nombre);
+    const allCoaches=activos.filter(e=>liderNames.includes(e.reportaA)&&isCoach(e.posicion));
+    team=allCoaches;
+  }
+
+  return{team,coaches,role};
+}
+
+// ═══ FETCH RANKING DATA ═══
+async function fetchRankingEntrenamiento(){
+  try{
+    const res=await fetch(gvizUrl(RANKING_ENT_GID));
+    const text=await res.text();
+    const rows=parseGviz(text);
+    // A=0(NumEmp),D=3(Nombre),E=4(Posición),L=11(Coach),O=14(SemIngreso),
+    // P=15(EvalMes1),Q=16(EvalMes2),AH=33(InsUlt4sem),AJ=35(IngresoUlt4),
+    // AR=43(Ranking),AS=44(Observaciones),
+    // AU=46(CertActitud),AV=47(CertSistI),AW=48(CertSistII),AX=49(CertSistIII),AY=50(TotalCert)
+    const map={};
+    rows.forEach(r=>{
+      const num=String(r[0]||'').trim();
+      if(!num||num==='Número de Empleado')return;
+      map[num]={
+        ranking:String(r[43]||'').trim(),
+        obs:String(r[44]||'').trim(),
+        insUlt4:r[33]||0,
+        ingUlt4:r[35]||0,
+        evalMes1:String(r[15]||'').trim(),
+        evalMes2:String(r[16]||'').trim(),
+        certActitud:String(r[46]||'').trim(),
+        certSist1:String(r[47]||'').trim(),
+        certSist2:String(r[48]||'').trim(),
+        certSist3:String(r[49]||'').trim(),
+        totalCert:r[50]||0,
+        semIngreso:r[14]||'',
+      };
+    });
+    return map;
+  }catch(e){console.error('Ranking fetch error:',e);return{};}
+}
+
+async function fetchRankingMensual(){
+  try{
+    const res=await fetch(gvizUrl(RANKING_GID));
+    const text=await res.text();
+    const rows=parseGviz(text);
+    // A=0(NumEmp),D=3(Nombre),E=4(Posicion)
+    // Monthly data starts at col 14 (O) with pairs: Instalaciones, NPPF (then Ingreso)
+    // Last columns are the most recent months
+    const map={};
+    rows.forEach(r=>{
+      const num=String(r[0]||'').trim();
+      const nombre=String(r[3]||'').trim();
+      if(!num||!nombre||nombre==='EMPLEADO')return;
+      // Get last 3 months of data (last 6 or 9 cols before end)
+      // Columns go in pairs/triplets. Find last non-empty install values
+      const monthData=[];
+      // From col 14 onwards, pairs of (Instalaciones, NPPF) until around col 32,
+      // then triplets (Instalaciones, Ingreso, NPPF) from ~col 33+
+      // Simpler: scan backwards for the last 3 numeric values in odd positions
+      const vals=r.slice(14);
+      const installs=[];
+      for(let i=0;i<vals.length;i+=2){
+        const v=Number(vals[i]);
+        if(!isNaN(v)&&v!==0)installs.push(v);
+        else if(installs.length>0)installs.push(v||0);
+      }
+      const last3=installs.slice(-3);
+      map[num]={
+        nombre,
+        ultimos3meses:last3,
+        promedioMensual:last3.length?Math.round(last3.reduce((a,b)=>a+b,0)/last3.length):0,
+      };
+    });
+    return map;
+  }catch(e){console.error('Ranking mensual fetch error:',e);return{};}
+}
+
+// Enrich team with ranking data
+function enrichTeam(team,rankEnt,rankMen){
+  return team.map(m=>{
+    const re=rankEnt[m.numEmp]||null;
+    const rm=rankMen[m.numEmp]||null;
+    return{...m,
+      rankingEnt:re,
+      rankingMen:rm,
+      // Determine overall status badge
+      badge:re?.ranking||null,
+    };
+  });
+}
+
+const RANK_COLORS={
+  'ENTRENAMIENTO':{bg:'#EDE9FE',color:'#7C3AED',icon:'🎓'},
+  'CONDICIONADO':{bg:'#FEF3C7',color:'#D97706',icon:'⚠️'},
+  'PLATA':{bg:'#F1F5F9',color:'#64748B',icon:'🥈'},
+  'ORO':{bg:'#FEF9C3',color:'#A16207',icon:'🥇'},
+  'DIAMANTE':{bg:'#DBEAFE',color:'#1D4ED8',icon:'💎'},
+};
+
+function getRoleType(pos){
+  const p=(pos||'').toUpperCase();
+  if(p.includes('DIRECTOR'))return'director';
+  if(p.includes('LIDER'))return'lider';
+  if(p.includes('COACH'))return'coach';
+  return'vendedor';
+}
+function isVendedor(p){return(p||'').toUpperCase().includes('VENDEDOR')||((p||'').toUpperCase().includes('PROMOVENDEDOR')&&!(p||'').toUpperCase().includes('COACH'));}
+function isCoach(p){return(p||'').toUpperCase().includes('COACH');}
+function isLider(p){return(p||'').toUpperCase().includes('LIDER');}
+
+// ═══ UI COMPONENTS ═══
+function StatusBadge({status,onClick,small}){
+  const s=STATUS[status]||STATUS.verde;
+  return <button onClick={onClick} style={{display:'inline-flex',alignItems:'center',gap:5,padding:small?'2px 8px':'4px 12px',borderRadius:16,border:`2px solid ${s.border}`,background:s.bg,cursor:onClick?'pointer':'default',fontSize:small?11:12,fontWeight:700,color:s.border}}><span style={{width:7,height:7,borderRadius:'50%',background:s.border}}/>{s.label}</button>;
+}
+function Field({label,children}){return <div style={{marginBottom:12}}><label style={{display:'block',fontSize:11,fontWeight:700,color:'var(--dim)',marginBottom:3,textTransform:'uppercase',letterSpacing:'.5px'}}>{label}</label>{children}</div>;}
+function Input(p){return <input {...p} style={{width:'100%',padding:'10px 12px',borderRadius:8,border:'1.5px solid var(--border)',background:'var(--input)',fontSize:14,color:'var(--text)',outline:'none',boxSizing:'border-box',...p.style}} onFocus={e=>{e.target.style.borderColor='var(--accent)';p.onFocus?.(e);}} onBlur={e=>{e.target.style.borderColor='var(--border)';p.onBlur?.(e);}}/>;}
+function Textarea(p){return <textarea {...p} style={{width:'100%',padding:'10px 12px',borderRadius:8,border:'1.5px solid var(--border)',background:'var(--input)',fontSize:14,color:'var(--text)',outline:'none',minHeight:80,fontFamily:'inherit',boxSizing:'border-box',...p.style}} onFocus={e=>{e.target.style.borderColor='var(--accent)';p.onFocus?.(e);}} onBlur={e=>{e.target.style.borderColor='var(--border)';p.onBlur?.(e);}}/>;}
+function Btn({children,onClick,variant='primary',style:s,disabled}){
+  const v={primary:{background:'var(--accent)',color:'#fff'},secondary:{background:'var(--card)',color:'var(--text)',border:'1.5px solid var(--border)'},danger:{background:'var(--red)',color:'#fff'},ghost:{background:'transparent',color:'var(--accent)',padding:'6px 10px'},success:{background:'var(--green)',color:'#fff'}};
+  return <button onClick={onClick} disabled={disabled} style={{padding:'10px 18px',borderRadius:8,border:'none',fontSize:14,fontWeight:600,cursor:disabled?'not-allowed':'pointer',opacity:disabled?.5:1,...v[variant],...s}}>{children}</button>;
+}
+function Card({children,title,actions,style:s}){return <div className="anim" style={{background:'var(--card)',borderRadius:12,border:'1px solid var(--border)',padding:18,marginBottom:14,...s}}>{(title||actions)&&<div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>{title&&<h3 style={{margin:0,fontSize:15,fontWeight:700}}>{title}</h3>}{actions}</div>}{children}</div>;}
+function Select({value,onChange,options,style:s}){return <select value={value} onChange={e=>onChange(e.target.value)} style={{padding:'10px 12px',borderRadius:8,border:'1.5px solid var(--border)',background:'var(--input)',fontSize:14,color:'var(--text)',outline:'none',width:'100%',boxSizing:'border-box',...s}}>{options.map(o=><option key={typeof o==='string'?o:o.value} value={typeof o==='string'?o:o.value}>{typeof o==='string'?o:o.label}</option>)}</select>;}
+function Toast({msg,onClose}){useEffect(()=>{const t=setTimeout(onClose,2500);return()=>clearTimeout(t);},[]);return <div style={{position:'fixed',bottom:80,left:'50%',transform:'translateX(-50%)',background:'#1a1d29',color:'#fff',padding:'10px 20px',borderRadius:10,fontSize:14,fontWeight:600,zIndex:9999,boxShadow:'0 4px 20px rgba(0,0,0,.25)',whiteSpace:'nowrap'}}>{msg}</div>;}
+function Spinner(){return <div style={{width:28,height:28,border:'3px solid var(--border)',borderTop:'3px solid var(--accent)',borderRadius:'50%',animation:'spin .8s linear infinite',margin:'0 auto'}}/>;}
+
+function RankBadge({badge}){
+  if(!badge)return null;
+  const rc=RANK_COLORS[badge]||{bg:'#F3F4F6',color:'#6B7280',icon:'📊'};
+  return <span style={{fontSize:10,fontWeight:700,padding:'1px 6px',borderRadius:8,background:rc.bg,color:rc.color,marginLeft:4}}>{rc.icon} {badge}</span>;
+}
+
+function MemberInfo({m,expanded,onToggle}){
+  const re=m.rankingEnt;
+  const rm=m.rankingMen;
+  const hasInfo=re||rm;
+  if(!hasInfo)return null;
+  return <div style={{marginTop:6}}>
+    {!expanded?
+      <button onClick={onToggle} style={{fontSize:11,color:'var(--accent)',background:'none',border:'none',cursor:'pointer',padding:0}}>📊 Ver datos →</button>
+    :
+      <div style={{background:'var(--bg)',borderRadius:8,padding:10,fontSize:12}}>
+        <button onClick={onToggle} style={{fontSize:11,color:'var(--dim)',background:'none',border:'none',cursor:'pointer',padding:0,marginBottom:4}}>▲ Cerrar</button>
+        {re&&<div style={{marginBottom:6}}>
+          <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:4}}>
+            {re.ranking&&<span style={{fontWeight:700}}>{RANK_COLORS[re.ranking]?.icon||'📊'} {re.ranking}</span>}
+            <span>Inst. últ. 4 sem: <b>{re.insUlt4}</b></span>
+          </div>
+          {(re.certActitud||re.certSist1||re.certSist2||re.certSist3)&&
+            <div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
+              {re.certActitud==='APROBADO'&&<span style={{background:'var(--gbg)',color:'var(--green)',padding:'1px 5px',borderRadius:6,fontSize:10}}>✓ Actitud</span>}
+              {re.certSist1==='APROBADO'&&<span style={{background:'var(--gbg)',color:'var(--green)',padding:'1px 5px',borderRadius:6,fontSize:10}}>✓ Sist I</span>}
+              {re.certSist2==='APROBADO'&&<span style={{background:'var(--gbg)',color:'var(--green)',padding:'1px 5px',borderRadius:6,fontSize:10}}>✓ Sist II</span>}
+              {re.certSist3==='APROBADO'&&<span style={{background:'var(--gbg)',color:'var(--green)',padding:'1px 5px',borderRadius:6,fontSize:10}}>✓ Sist III</span>}
+            </div>
+          }
+          {re.obs&&re.obs!=='-'&&<p style={{margin:'4px 0 0',color:'var(--dim)',fontStyle:'italic'}}>{re.obs}</p>}
+        </div>}
+        {rm&&<div>
+          <span>Prom. mensual: <b>{rm.promedioMensual} ins</b></span>
+          {rm.ultimos3meses.length>0&&<span style={{marginLeft:8,color:'var(--dim)'}}>({rm.ultimos3meses.join(', ')})</span>}
+        </div>}
+      </div>
+    }
+  </div>;
+}
+// ═══ PHOTO CAPTURE ═══
+function PhotoCapture({photo,onCapture}){
+  const ref=useRef();
+  const handle=e=>{const f=e.target.files?.[0];if(!f)return;const r=new FileReader();r.onload=ev=>{const img=new Image();img.onload=()=>{const c=document.createElement('canvas');const M=800;let w=img.width,h=img.height;if(w>M){h=h*(M/w);w=M;}c.width=w;c.height=h;c.getContext('2d').drawImage(img,0,0,w,h);onCapture(c.toDataURL('image/jpeg',.7));};img.src=ev.target.result;};r.readAsDataURL(f);};
+  return <div><input ref={ref} type="file" accept="image/*" capture="environment" onChange={handle} style={{display:'none'}}/>{photo?<div style={{position:'relative'}}><img src={photo} alt="" style={{width:'100%',maxHeight:220,objectFit:'cover',borderRadius:10,border:'1px solid var(--border)'}}/><Btn onClick={()=>ref.current.click()} variant="ghost" style={{position:'absolute',top:6,right:6,background:'rgba(0,0,0,.55)',color:'#fff',borderRadius:8,fontSize:12}}>📷</Btn></div>:<button onClick={()=>ref.current.click()} style={{width:'100%',padding:'28px 20px',borderRadius:12,border:'2px dashed var(--border)',background:'var(--input)',cursor:'pointer',textAlign:'center',color:'var(--dim)',fontSize:14}}>📷 Tomar foto de grupo</button>}</div>;
+}
+
+// ═══ AUDIO RECORDER ═══
+function AudioRecorder({onTranscript}){
+  const[rec,setRec]=useState(false);const[txt,setTxt]=useState('');const rr=useRef(null);
+  const toggle=()=>{
+    if(rec){rr.current?.stop();setRec(false);return;}
+    const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+    if(!SR){alert('Navegador sin soporte de voz. Usa Chrome.');return;}
+    const r=new SR();r.lang='es-MX';r.continuous=true;r.interimResults=true;let final=txt;
+    r.onresult=e=>{let interim='';for(let i=e.resultIndex;i<e.results.length;i++){if(e.results[i].isFinal)final+=e.results[i][0].transcript+' ';else interim+=e.results[i][0].transcript;}setTxt(final+interim);onTranscript(final+interim);};
+    r.onerror=()=>setRec(false);r.onend=()=>{if(rec)try{r.start();}catch{}};
+    rr.current=r;r.start();setRec(true);
+  };
+  return <div><div style={{display:'flex',gap:8,alignItems:'center',marginBottom:8}}><Btn onClick={toggle} variant={rec?'danger':'primary'} style={{display:'flex',alignItems:'center',gap:6}}>{rec?<><span style={{width:10,height:10,borderRadius:'50%',background:'#fff',animation:'pulse 1s infinite'}}/>Detener</>:<>🎙️ Grabar</>}</Btn>{rec&&<span style={{fontSize:12,color:'var(--red)',fontWeight:600}}>● Escuchando...</span>}</div>{txt&&<Textarea value={txt} onChange={e=>{setTxt(e.target.value);onTranscript(e.target.value);}} style={{minHeight:100}}/>}</div>;
+}
+
+// ═══════════════════════════════════════
+// LOGIN SCREEN
+// ═══════════════════════════════════════
+function LoginScreen({onLogin}){
+  const[numEmp,setNumEmp]=useState('');
+  const[pin,setPin]=useState('');
+  const[loading,setLoading]=useState(false);
+  const[error,setError]=useState('');
+
+  const handleLogin=async()=>{
+    if(!numEmp.trim()||!pin.trim()){setError('Ingresa número de empleado y PIN');return;}
+    setLoading(true);setError('');
+    try{
+      const[all,rankEnt,rankMen]=await Promise.all([fetchPlantilla(),fetchRankingEntrenamiento(),fetchRankingMensual()]);
+      const user=all.find(e=>e.numEmp===numEmp.trim());
+      if(!user){setError('Número de empleado no encontrado');setLoading(false);return;}
+      if(String(user.pin)!==pin.trim()){setError('PIN incorrecto');setLoading(false);return;}
+      const role=getRoleType(user.posicion);
+      if(role==='vendedor'){setError('Acceso solo para Coach, Líder o Director');setLoading(false);return;}
+      let{team,coaches}=buildTeam(user,all);
+      // Enrich with ranking data
+      team=enrichTeam(team,rankEnt,rankMen);
+      coaches=enrichTeam(coaches,rankEnt,rankMen);
+      const session={user,team,coaches,role,allEmployees:all,loginTime:new Date().toISOString()};
+      sessionStorage.setItem('sv2-session',JSON.stringify(session));
+      onLogin(session);
+    }catch(e){
+      console.error(e);
+      setError('Error al conectar con la base de datos. Verifica tu conexión.');
+    }
+    setLoading(false);
+  };
+
+  return(
+    <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',padding:20,background:'linear-gradient(135deg,#1e3a8a 0%,#1e40af 50%,#2563eb 100%)'}}>
+      <div style={{background:'var(--card)',borderRadius:20,padding:32,maxWidth:380,width:'100%',boxShadow:'0 20px 60px rgba(0,0,0,.3)'}}>
+        <div style={{textAlign:'center',marginBottom:28}}>
+          <div style={{fontSize:48,marginBottom:8}}>📋</div>
+          <h1 style={{fontSize:22,fontWeight:800,color:'var(--text)',marginBottom:4}}>Supervisión 2.0</h1>
+          <p style={{fontSize:13,color:'var(--dim)'}}>Plan de Trabajo y Seguimiento</p>
+        </div>
+        <Field label="Número de empleado">
+          <Input value={numEmp} onChange={e=>setNumEmp(e.target.value)} placeholder="Ej: 17091931"
+            onKeyDown={e=>e.key==='Enter'&&document.getElementById('pin-input')?.focus()}
+            style={{fontSize:16,textAlign:'center',letterSpacing:1}}/>
+        </Field>
+        <Field label="PIN">
+          <Input id="pin-input" type="password" inputMode="numeric" maxLength={4} value={pin}
+            onChange={e=>setPin(e.target.value.replace(/\D/g,''))}
+            placeholder="••••" onKeyDown={e=>e.key==='Enter'&&handleLogin()}
+            style={{fontSize:24,textAlign:'center',letterSpacing:8}}/>
+        </Field>
+        {error&&<p style={{color:'var(--red)',fontSize:13,textAlign:'center',marginBottom:12,fontWeight:600}}>{error}</p>}
+        <Btn onClick={handleLogin} disabled={loading} style={{width:'100%',padding:14,fontSize:16,marginTop:8,borderRadius:12}}>
+          {loading?<Spinner/>:'Iniciar sesión'}
+        </Btn>
+        <p style={{fontSize:11,color:'var(--dim)',textAlign:'center',marginTop:16}}>Distrito La Laguna · Totalplay</p>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════
+// TABS
+// ═══════════════════════════════════════
+
+// ─── Arranque ───
+function ArranqueTab({data,setData,team,toast,session}){
+  const[form,setForm]=useState({date:today(),time:now(),photo:null,presentes:[],ausentes:[],notas:''});
+  useEffect(()=>{setForm(f=>({...f,presentes:team.map(m=>m.nombre),ausentes:[]}));},[team]);
+  const toggle=name=>{setForm(f=>{const p=f.presentes.includes(name);return{...f,presentes:p?f.presentes.filter(n=>n!==name):[...f.presentes,name],ausentes:p?[...f.ausentes,{name,reason:'Falta justificada',detail:''}]:f.ausentes.filter(a=>a.name!==name)};});};
+  const updAus=(name,field,val)=>setForm(f=>({...f,ausentes:f.ausentes.map(a=>a.name===name?{...a,[field]:val}:a)}));
+  const guardar=async()=>{
+    const rec={id:uid(),type:'arranque',...form,registradoPor:session.user.nombre,rolRegistro:session.role,savedAt:new Date().toISOString()};
+    const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast);toast('✅ Arranque guardado');
+    setForm({date:today(),time:now(),photo:null,presentes:team.map(m=>m.nombre),ausentes:[],notas:''});
+  };
+  return <div>
+    <Card title="☀️ Arranque del día">
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:12}}>
+        <Field label="Fecha"><Input type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})}/></Field>
+        <Field label="Hora"><Input value={form.time} readOnly style={{background:'var(--bg)'}}/></Field>
+      </div>
+      <Field label="Foto de grupo"><PhotoCapture photo={form.photo} onCapture={p=>setForm({...form,photo:p})}/></Field>
+    </Card>
+    <Card title={`Asistencia (${team.length})`}>
+      {team.length===0?<p style={{color:'var(--dim)',fontSize:14}}>Sin integrantes asignados.</p>:
+      team.map(m=>{
+        const present=form.presentes.includes(m.nombre);
+        const aus=form.ausentes.find(a=>a.name===m.nombre);
+        return <div key={m.numEmp||m.nombre} style={{padding:'8px 10px',borderRadius:8,marginBottom:6,border:`1.5px solid ${present?'var(--green)':'var(--red)'}`,background:present?'var(--gbg)':'var(--rbg)'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <div><span style={{fontWeight:600,fontSize:13}}>{m.nombre}</span>
+              {isCoach(m.posicion)&&<span style={{marginLeft:6,fontSize:10,background:'var(--accent-light)',color:'var(--accent)',padding:'1px 6px',borderRadius:8,fontWeight:700}}>COACH</span>}
+              <RankBadge badge={m.badge}/>
+            </div>
+            <Btn onClick={()=>toggle(m.nombre)} variant={present?'success':'danger'} style={{padding:'3px 12px',fontSize:11}}>{present?'✓':'✗'}</Btn>
+          </div>
+          {aus&&<div style={{marginTop:6,display:'flex',gap:6,flexWrap:'wrap'}}>
+            <Select value={aus.reason} onChange={v=>updAus(m.nombre,'reason',v)} options={ABSENCE_REASONS} style={{flex:1,minWidth:130}}/>
+            <Input placeholder="Detalle..." value={aus.detail} onChange={e=>updAus(m.nombre,'detail',e.target.value)} style={{flex:2,minWidth:130}}/>
+          </div>}
+        </div>;
+      })}
+    </Card>
+    <Card title="Notas"><Textarea value={form.notas} onChange={e=>setForm({...form,notas:e.target.value})} placeholder="Prioridades, situaciones especiales..."/></Card>
+    <Btn onClick={guardar} style={{width:'100%'}}>💾 Guardar arranque</Btn>
+  </div>;
+}
+
+// ─── Permisos ───
+function PermisosTab({data,setData,team,toast,session}){
+  const[form,setForm]=useState({date:today(),vendedor:'',tipo:'Trabajo fuera de ruta',motivo:'',autorizado_por:session.user.nombre,notas:''});
+  const guardar=async()=>{if(!form.vendedor){alert('Selecciona un integrante');return;}const rec={id:uid(),type:'permiso',...form,registradoPor:session.user.nombre,savedAt:new Date().toISOString()};const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast);toast('✅ Permiso documentado');setForm({date:today(),vendedor:'',tipo:'Trabajo fuera de ruta',motivo:'',autorizado_por:session.user.nombre,notas:''});};
+  return <div>
+    <Card title="📋 Documentar permiso">
+      <Field label="Fecha"><Input type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})}/></Field>
+      <Field label="Integrante"><Select value={form.vendedor} onChange={v=>setForm({...form,vendedor:v})} options={[{value:'',label:'— Seleccionar —'},...team.map(m=>({value:m.nombre,label:m.nombre+(isCoach(m.posicion)?' (Coach)':'')}))]}/></Field>
+      <Field label="Tipo"><Select value={form.tipo} onChange={v=>setForm({...form,tipo:v})} options={PERMISO_TIPOS}/></Field>
+      <Field label="Motivo"><Textarea value={form.motivo} onChange={e=>setForm({...form,motivo:e.target.value})} placeholder="Motivo del permiso..."/></Field>
+      <Field label="Autorizado por"><Input value={form.autorizado_por} onChange={e=>setForm({...form,autorizado_por:e.target.value})}/></Field>
+      <Field label="Notas"><Textarea value={form.notas} onChange={e=>setForm({...form,notas:e.target.value})} placeholder="Observaciones..." style={{minHeight:50}}/></Field>
+    </Card>
+    <Btn onClick={guardar} style={{width:'100%'}}>💾 Guardar permiso</Btn>
+  </div>;
+}
+
+// ─── Cierre ───
+function CierreTab({data,setData,toast,session}){
+  const[form,setForm]=useState({date:today(),time:now(),resultado:'',pendientes:'',incidencias:'',vendedores_seguimiento:'',notas:''});
+  const guardar=async()=>{const rec={id:uid(),type:'cierre',...form,registradoPor:session.user.nombre,savedAt:new Date().toISOString()};const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast);toast('✅ Cierre guardado');setForm({date:today(),time:now(),resultado:'',pendientes:'',incidencias:'',vendedores_seguimiento:'',notas:''});};
+  return <div>
+    <Card title="🌙 Cierre del día">
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:12}}>
+        <Field label="Fecha"><Input type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})}/></Field>
+        <Field label="Hora"><Input value={form.time} readOnly style={{background:'var(--bg)'}}/></Field>
+      </div>
+      <Field label="Resultado del día"><Textarea value={form.resultado} onChange={e=>setForm({...form,resultado:e.target.value})} placeholder="Ventas, instalaciones, oportunidades..."/></Field>
+      <Field label="Pendientes"><Textarea value={form.pendientes} onChange={e=>setForm({...form,pendientes:e.target.value})} placeholder="Para mañana..."/></Field>
+      <Field label="Incidencias"><Textarea value={form.incidencias} onChange={e=>setForm({...form,incidencias:e.target.value})} placeholder="Rechazos, desviaciones..."/></Field>
+      <Field label="Seguimiento mañana"><Textarea value={form.vendedores_seguimiento} onChange={e=>setForm({...form,vendedores_seguimiento:e.target.value})} placeholder="Vendedores y motivo..." style={{minHeight:50}}/></Field>
+      <Field label="Notas"><Textarea value={form.notas} onChange={e=>setForm({...form,notas:e.target.value})} style={{minHeight:50}}/></Field>
+    </Card>
+    <Btn onClick={guardar} style={{width:'100%'}}>💾 Guardar cierre</Btn>
+  </div>;
+}
+
+// ─── Plan ───
+function PlanTab({data,setData,toast,session}){
+  const[form,setForm]=useState({date:today(),semana:'',objetivo:'',prioridades:'',vendedores_acompanar:'',zonas:'',resultado_esperado:'',notas:''});
+  const guardar=async()=>{const rec={id:uid(),type:'plan',...form,registradoPor:session.user.nombre,savedAt:new Date().toISOString()};const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast);toast('✅ Plan guardado');setForm({date:today(),semana:'',objetivo:'',prioridades:'',vendedores_acompanar:'',zonas:'',resultado_esperado:'',notas:''});};
+  return <div>
+    <Card title="📊 Plan de trabajo">
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:12}}>
+        <Field label="Fecha"><Input type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})}/></Field>
+        <Field label="Semana"><Input value={form.semana} onChange={e=>setForm({...form,semana:e.target.value})} placeholder="Sem 35"/></Field>
+      </div>
+      <Field label="Objetivo"><Textarea value={form.objetivo} onChange={e=>setForm({...form,objetivo:e.target.value})} placeholder="Objetivo comercial..."/></Field>
+      <Field label="Prioridades"><Textarea value={form.prioridades} onChange={e=>setForm({...form,prioridades:e.target.value})} placeholder="Amarillo/rojo, calidad, incidencias..."/></Field>
+      <Field label="Acompañamientos"><Textarea value={form.vendedores_acompanar} onChange={e=>setForm({...form,vendedores_acompanar:e.target.value})} placeholder="Quién y por qué..." style={{minHeight:50}}/></Field>
+      <Field label="Zonas"><Input value={form.zonas} onChange={e=>setForm({...form,zonas:e.target.value})}/></Field>
+      <Field label="Resultado esperado"><Textarea value={form.resultado_esperado} onChange={e=>setForm({...form,resultado_esperado:e.target.value})} style={{minHeight:50}}/></Field>
+    </Card>
+    <Btn onClick={guardar} style={{width:'100%'}}>💾 Guardar plan</Btn>
+  </div>;
+}
+
+// ─── Feedback ───
+function FeedbackTab({data,setData,team,toast,session}){
+  const[form,setForm]=useState({date:today(),vendedor:'',tipo:'Acompañamiento',hallazgos:'',fortalezas:'',areas_oportunidad:'',compromisos:'',fecha_revision:'',semaforo:'verde',grabado:false,transcript:'',notas:''});
+  const[consent,setConsent]=useState(false);
+  const guardar=async()=>{if(!form.vendedor){alert('Selecciona un integrante');return;}const rec={id:uid(),type:'feedback',...form,registradoPor:session.user.nombre,savedAt:new Date().toISOString()};const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast);toast('✅ Hallazgo guardado');setForm({date:today(),vendedor:'',tipo:'Acompañamiento',hallazgos:'',fortalezas:'',areas_oportunidad:'',compromisos:'',fecha_revision:'',semaforo:'verde',grabado:false,transcript:'',notas:''});setConsent(false);};
+  const selectedMember=form.vendedor?team.find(m=>m.nombre===form.vendedor):null;
+  return <div>
+    <Card title="💬 Hallazgos y feedback">
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:12}}>
+        <Field label="Fecha"><Input type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})}/></Field>
+        <Field label="Tipo"><Select value={form.tipo} onChange={v=>setForm({...form,tipo:v})} options={FEEDBACK_TIPOS}/></Field>
+      </div>
+      <Field label="Integrante"><Select value={form.vendedor} onChange={v=>setForm({...form,vendedor:v})} options={[{value:'',label:'— Seleccionar —'},...team.map(m=>({value:m.nombre,label:m.nombre+(isCoach(m.posicion)?' (Coach)':'')+(m.badge?' — '+m.badge:'')}))]}/></Field>
+      {selectedMember&&(selectedMember.rankingEnt||selectedMember.rankingMen)&&
+        <div style={{background:'var(--bg)',borderRadius:10,padding:12,marginBottom:12,border:'1px solid var(--border)'}}>
+          <div style={{fontSize:12,fontWeight:700,color:'var(--dim)',marginBottom:6}}>📊 CONTEXTO DEL INTEGRANTE</div>
+          <div style={{display:'flex',flexWrap:'wrap',gap:8,alignItems:'center',marginBottom:6}}>
+            <span style={{fontWeight:700,fontSize:14}}>{selectedMember.nombre}</span>
+            <RankBadge badge={selectedMember.badge}/>
+          </div>
+          {selectedMember.rankingEnt&&<div style={{fontSize:12,marginBottom:4}}>
+            <span>Inst. últimas 4 sem: <b>{selectedMember.rankingEnt.insUlt4}</b></span>
+            {selectedMember.rankingEnt.evalMes1&&selectedMember.rankingEnt.evalMes1!=='-'&&<span style={{marginLeft:10}}>Eval M1: <b>{selectedMember.rankingEnt.evalMes1}</b></span>}
+            {selectedMember.rankingEnt.evalMes2&&selectedMember.rankingEnt.evalMes2!=='-'&&<span style={{marginLeft:10}}>M2: <b>{selectedMember.rankingEnt.evalMes2}</b></span>}
+          </div>}
+          {selectedMember.rankingEnt&&<div style={{display:'flex',gap:4,flexWrap:'wrap',marginBottom:4}}>
+            {selectedMember.rankingEnt.certActitud==='APROBADO'&&<span style={{background:'var(--gbg)',color:'var(--green)',padding:'1px 5px',borderRadius:6,fontSize:10,fontWeight:600}}>✓ Actitud</span>}
+            {selectedMember.rankingEnt.certSist1==='APROBADO'&&<span style={{background:'var(--gbg)',color:'var(--green)',padding:'1px 5px',borderRadius:6,fontSize:10,fontWeight:600}}>✓ Sistémica I</span>}
+            {selectedMember.rankingEnt.certSist2==='APROBADO'&&<span style={{background:'var(--gbg)',color:'var(--green)',padding:'1px 5px',borderRadius:6,fontSize:10,fontWeight:600}}>✓ Sistémica II</span>}
+            {selectedMember.rankingEnt.certSist3==='APROBADO'&&<span style={{background:'var(--gbg)',color:'var(--green)',padding:'1px 5px',borderRadius:6,fontSize:10,fontWeight:600}}>✓ Sistémica III</span>}
+            {selectedMember.rankingEnt.totalCert>0&&<span style={{fontSize:10,color:'var(--dim)'}}>({selectedMember.rankingEnt.totalCert}/4 cert.)</span>}
+          </div>}
+          {selectedMember.rankingMen&&<div style={{fontSize:12}}>
+            Prom. mensual: <b>{selectedMember.rankingMen.promedioMensual} ins</b>
+            {selectedMember.rankingMen.ultimos3meses.length>0&&<span style={{color:'var(--dim)'}}> (últ. 3 meses: {selectedMember.rankingMen.ultimos3meses.join(', ')})</span>}
+          </div>}
+          {selectedMember.rankingEnt?.obs&&selectedMember.rankingEnt.obs!=='-'&&
+            <p style={{fontSize:11,color:'var(--yellow)',fontStyle:'italic',marginTop:4}}>⚠️ {selectedMember.rankingEnt.obs}</p>
+          }
+        </div>
+      }
+      <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:12}}><span style={{fontSize:11,fontWeight:700,color:'var(--dim)'}}>SEMÁFORO:</span><StatusBadge status={form.semaforo} onClick={()=>setForm({...form,semaforo:cycleS(form.semaforo)})}/></div>
+    </Card>
+    <Card title="Observaciones">
+      <Field label="Hallazgos"><Textarea value={form.hallazgos} onChange={e=>setForm({...form,hallazgos:e.target.value})} placeholder="Qué se observó..."/></Field>
+      <Field label="Fortalezas"><Textarea value={form.fortalezas} onChange={e=>setForm({...form,fortalezas:e.target.value})} style={{minHeight:50}}/></Field>
+      <Field label="Áreas de oportunidad"><Textarea value={form.areas_oportunidad} onChange={e=>setForm({...form,areas_oportunidad:e.target.value})} style={{minHeight:50}}/></Field>
+    </Card>
+    <Card title="Compromisos">
+      <Field label="Qué + Quién + Cuándo"><Textarea value={form.compromisos} onChange={e=>setForm({...form,compromisos:e.target.value})}/></Field>
+      <Field label="Fecha de revisión"><Input type="date" value={form.fecha_revision} onChange={e=>setForm({...form,fecha_revision:e.target.value})}/></Field>
+    </Card>
+    <Card title="🎙️ Grabación de voz">
+      <p style={{fontSize:12,color:'var(--dim)',margin:'0 0 10px'}}>Requiere autorización previa.</p>
+      {!consent?<div style={{textAlign:'center',padding:12}}><p style={{fontSize:13,marginBottom:10}}>¿Autoriza la grabación?</p><div style={{display:'flex',gap:8,justifyContent:'center'}}><Btn onClick={()=>{setConsent(true);setForm({...form,grabado:true});}}>Sí</Btn><Btn variant="secondary" onClick={()=>toast('Sin autorización')}>No</Btn></div></div>:
+      <AudioRecorder onTranscript={t=>setForm({...form,transcript:t})}/>}
+    </Card>
+    <Card title="Notas"><Textarea value={form.notas} onChange={e=>setForm({...form,notas:e.target.value})} style={{minHeight:50}}/></Card>
+    <Btn onClick={guardar} style={{width:'100%'}}>💾 Guardar hallazgo</Btn>
+  </div>;
+}
+
+// ─── Historial ───
+function HistorialTab({data,setData,toast}){
+  const[filter,setFilter]=useState('todos');const[dateF,setDateF]=useState('');
+  const typeL={arranque:'☀️ Arranque',cierre:'🌙 Cierre',permiso:'📋 Permiso',plan:'📊 Plan',feedback:'💬 Hallazgo'};
+  const recs=data.records.filter(r=>filter==='todos'||r.type===filter).filter(r=>!dateF||r.date===dateF).sort((a,b)=>b.savedAt.localeCompare(a.savedAt));
+  const del=id=>{if(!confirm('¿Eliminar?'))return;const upd={...data,records:data.records.filter(r=>r.id!==id)};setData(upd);saveData(upd);toast('Eliminado');};
+  const detail=r=>{
+    switch(r.type){
+      case'arranque':return <div style={{fontSize:13}}><p><b>Presentes:</b> {r.presentes?.length||0} · <b>Ausentes:</b> {r.ausentes?.length||0}</p>{r.ausentes?.map(a=><p key={a.name} style={{color:'var(--red)',margin:'2px 0'}}>✗ {a.name}: {a.reason}{a.detail?` — ${a.detail}`:''}</p>)}{r.notas&&<p style={{marginTop:6}}>{r.notas}</p>}{r.photo&&<img src={r.photo} alt="" style={{width:'100%',maxHeight:120,objectFit:'cover',borderRadius:8,marginTop:6}}/>}</div>;
+      case'permiso':return <div style={{fontSize:13}}><p><b>{r.vendedor}</b> — {r.tipo}</p><p>{r.motivo}</p>{r.autorizado_por&&<p style={{color:'var(--dim)'}}>Autorizado: {r.autorizado_por}</p>}</div>;
+      case'cierre':return <div style={{fontSize:13}}>{r.resultado&&<p><b>Resultado:</b> {r.resultado}</p>}{r.pendientes&&<p><b>Pendientes:</b> {r.pendientes}</p>}{r.incidencias&&<p><b>Incidencias:</b> {r.incidencias}</p>}</div>;
+      case'plan':return <div style={{fontSize:13}}>{r.objetivo&&<p><b>Objetivo:</b> {r.objetivo}</p>}{r.prioridades&&<p><b>Prioridades:</b> {r.prioridades}</p>}</div>;
+      case'feedback':return <div style={{fontSize:13}}><div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><b>{r.vendedor}</b> — {r.tipo}<StatusBadge status={r.semaforo} small/></div>{r.hallazgos&&<p>{r.hallazgos}</p>}{r.compromisos&&<p><b>Compromisos:</b> {r.compromisos}</p>}{r.transcript&&<p style={{fontStyle:'italic',background:'var(--bg)',padding:8,borderRadius:6,marginTop:4}}>🎙️ {r.transcript.slice(0,200)}{r.transcript.length>200?'...':''}</p>}</div>;
+      default:return null;
+    }
+  };
+  return <div>
+    <Card title="📁 Historial">
+      <div style={{display:'flex',gap:6,marginBottom:10,flexWrap:'wrap'}}>
+        <Select value={filter} onChange={v=>setFilter(v)} options={[{value:'todos',label:'Todos'},{value:'arranque',label:'☀️ Arranque'},{value:'cierre',label:'🌙 Cierre'},{value:'permiso',label:'📋 Permisos'},{value:'plan',label:'📊 Planes'},{value:'feedback',label:'💬 Hallazgos'}]} style={{flex:1,minWidth:120}}/>
+        <Input type="date" value={dateF} onChange={e=>setDateF(e.target.value)} style={{flex:1,minWidth:120}}/>
+        {dateF&&<Btn variant="ghost" onClick={()=>setDateF('')}>✕</Btn>}
+      </div>
+      <p style={{fontSize:12,color:'var(--dim)'}}>{recs.length} registro{recs.length!==1?'s':''}</p>
+    </Card>
+    {recs.length===0&&<div style={{textAlign:'center',padding:40,color:'var(--dim)'}}>Sin registros.</div>}
+    {recs.map(r=><Card key={r.id} style={{borderLeft:`4px solid ${r.type==='feedback'&&r.semaforo?STATUS[r.semaforo]?.border:'var(--accent)'}`}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+        <div><span style={{fontWeight:700,fontSize:13}}>{typeL[r.type]||r.type}</span><span style={{marginLeft:8,fontSize:11,color:'var(--dim)'}}>{fmt(r.date)} · {r.time||new Date(r.savedAt).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'})}</span></div>
+        <Btn variant="ghost" onClick={()=>del(r.id)} style={{color:'var(--red)',fontSize:11}}>Eliminar</Btn>
+      </div>
+      {detail(r)}
+      {r.registradoPor&&<p style={{fontSize:11,color:'var(--dim)',marginTop:6,borderTop:'1px solid var(--border)',paddingTop:4}}>Registrado por: {r.registradoPor}</p>}
+    </Card>)}
+  </div>;
+}
+
+// ═══════════════════════════════════════
+// MAIN APP
+// ═══════════════════════════════════════
+function MainApp({session,onLogout}){
+  const[data,setData]=useState(loadData());
+  const[tab,setTab]=useState('arranque');
+  const[toastMsg,setToastMsg]=useState('');
+  const toast=msg=>setToastMsg(msg);
+  useEffect(()=>{retryPending(toast);},[]);
+  const{user,team,coaches,role}=session;
+  const allTeam=[...(coaches||[]),...team];
+  const todayRecs=data.records.filter(r=>r.date===today());
+  const hasArr=todayRecs.some(r=>r.type==='arranque');
+  const hasCie=todayRecs.some(r=>r.type==='cierre');
+  const roleLabels={coach:'🏅 Coach',lider:'⭐ Líder',director:'👔 Director'};
+
+  const exportJSON=()=>{
+    const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
+    const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`supervision-${today()}.json`;a.click();toast('📥 Respaldo descargado');
+  };
+
+  return <div style={{maxWidth:600,margin:'0 auto',minHeight:'100vh',background:'var(--bg)'}}>
+    {/* Header */}
+    <div style={{padding:'12px 16px',background:'linear-gradient(135deg,#1e3a8a,#1e40af)',color:'#fff'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+        <div>
+          <h1 style={{margin:0,fontSize:16,fontWeight:800}}>Supervisión 2.0</h1>
+          <p style={{margin:0,fontSize:11,opacity:.85}}>{roleLabels[role]} · {user.nombre}</p>
+        </div>
+        <div style={{display:'flex',gap:6,alignItems:'center'}}>
+          {hasArr&&<span style={{fontSize:14}}>☀️</span>}
+          {hasCie&&<span style={{fontSize:14}}>🌙</span>}
+          <button onClick={exportJSON} style={{background:'rgba(255,255,255,.15)',border:'none',borderRadius:8,padding:'5px 8px',color:'#fff',cursor:'pointer',fontSize:14}} title="Descargar respaldo">📥</button>
+          <button onClick={onLogout} style={{background:'rgba(255,255,255,.15)',border:'none',borderRadius:8,padding:'5px 8px',color:'#fff',cursor:'pointer',fontSize:12,fontWeight:700}} title="Cerrar sesión">Salir</button>
+        </div>
+      </div>
+    </div>
+
+    {/* Stats */}
+    <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:6,padding:'10px 14px'}}>
+      {[{l:'Hoy',v:todayRecs.length,c:'var(--accent)'},{l:'Equipo',v:team.length,c:'var(--green)'},{l:role==='lider'?'Coaches':'Total',v:role==='lider'?(coaches||[]).length:data.records.length,c:'#7c3aed'},{l:'Registros',v:data.records.length,c:'#ca8a04'}].map(s=>
+        <div key={s.l} style={{background:'var(--card)',borderRadius:10,padding:'6px 8px',textAlign:'center',border:'1px solid var(--border)'}}>
+          <div style={{fontSize:18,fontWeight:800,color:s.c}}>{s.v}</div>
+          <div style={{fontSize:9,color:'var(--dim)',fontWeight:600,textTransform:'uppercase'}}>{s.l}</div>
+        </div>
+      )}
+    </div>
+
+    {/* Team info */}
+    {role==='lider'&&coaches&&coaches.length>0&&
+      <div style={{padding:'0 14px 8px',display:'flex',gap:4,flexWrap:'wrap'}}>
+        {coaches.map(c=><span key={c.nombre} style={{fontSize:11,background:'var(--accent-light)',color:'var(--accent)',padding:'2px 8px',borderRadius:10,fontWeight:600}}>{c.nombre.split(' ').slice(0,2).join(' ')}</span>)}
+      </div>
+    }
+
+    {/* Tabs */}
+    <div style={{display:'flex',overflowX:'auto',gap:0,padding:'0 10px',borderBottom:'1px solid var(--border)',background:'var(--card)',WebkitOverflowScrolling:'touch'}}>
+      {TABS.map(t=><button key={t.id} onClick={()=>setTab(t.id)} style={{flex:'0 0 auto',padding:'10px 12px',border:'none',background:'transparent',cursor:'pointer',fontSize:11,fontWeight:600,color:tab===t.id?'var(--accent)':'var(--dim)',borderBottom:tab===t.id?'3px solid var(--accent)':'3px solid transparent',whiteSpace:'nowrap'}}><span style={{fontSize:15,display:'block'}}>{t.icon}</span>{t.label}</button>)}
+    </div>
+
+    {/* Content */}
+    <div style={{padding:14,paddingBottom:30}}>
+      {tab==='arranque'&&<ArranqueTab data={data} setData={setData} team={allTeam} toast={toast} session={session}/>}
+      {tab==='permisos'&&<PermisosTab data={data} setData={setData} team={allTeam} toast={toast} session={session}/>}
+      {tab==='cierre'&&<CierreTab data={data} setData={setData} toast={toast} session={session}/>}
+      {tab==='plan'&&<PlanTab data={data} setData={setData} toast={toast} session={session}/>}
+      {tab==='feedback'&&<FeedbackTab data={data} setData={setData} team={allTeam} toast={toast} session={session}/>}
+      {tab==='historial'&&<HistorialTab data={data} setData={setData} toast={toast}/>}
+    </div>
+    {toastMsg&&<Toast msg={toastMsg} onClose={()=>setToastMsg('')}/>}
+  </div>;
+}
+
+// ═══ APP ROOT ═══
+function App(){
+  const[session,setSession]=useState(null);
+  useEffect(()=>{try{const s=sessionStorage.getItem('sv2-session');if(s)setSession(JSON.parse(s));}catch{}},[]);
+  const logout=()=>{sessionStorage.removeItem('sv2-session');setSession(null);};
+  if(!session)return <LoginScreen onLogin={setSession}/>;
+  return <MainApp session={session} onLogout={logout}/>;
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
