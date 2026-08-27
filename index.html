@@ -965,6 +965,7 @@ function DashboardTab({data,team,coaches,session,setTab}){
   let metaInstalTotal=0;
   const rechazosMotivos={};let rechazosTotalN=0; // motivo -> [{nombre,oportunidad,cuenta}]
   const planesTotalN={};
+  const sinPagarPorPlan={}; // plan -> {n, importe}
   const[expandedMotivo,setExpandedMotivo]=useState(null);
   vendedores.forEach(m=>{
     const f=funnelPeriodo(m.ventas,rangoIni,rangoFin);
@@ -980,9 +981,16 @@ function DashboardTab({data,team,coaches,session,setTab}){
     });
     const planes=instalacionesPorPlan(m.ventas,rangoIni,rangoFin);
     Object.entries(planes).forEach(([p,n])=>{planesTotalN[p]=(planesTotalN[p]||0)+n;});
+    cuentasSinPagar(m.cuentasCom,now).forEach(c=>{
+      const p=normalizarPlan(c.plan);
+      const b=sinPagarPorPlan[p]=sinPagarPorPlan[p]||{n:0,importe:0};
+      b.n++;b.importe+=c.importe;
+    });
   });
   const motivosOrdenados=Object.entries(rechazosMotivos).sort((a,b)=>b[1].length-a[1].length);
   const planesOrdenados=Object.entries(planesTotalN).sort((a,b)=>b[1]-a[1]);
+  const sinPagarPorPlanOrdenado=Object.entries(sinPagarPorPlan).sort((a,b)=>b[1].n-a[1].n);
+  const sinPagarPorPlanTotales=Object.values(sinPagarPorPlan).reduce((acc,b)=>({n:acc.n+b.n,importe:acc.importe+b.importe}),{n:0,importe:0});
 
   const semaforoMap={};
   recs.filter(r=>r.type==='feedback').sort((a,b)=>a.savedAt.localeCompare(b.savedAt)).forEach(r=>{
@@ -1183,6 +1191,17 @@ function DashboardTab({data,team,coaches,session,setTab}){
             <span key={p} style={{fontSize:12,fontWeight:600,padding:'4px 10px',borderRadius:16,background:'var(--accent-light)',color:'var(--accent)'}}>{p}: {n} ({ventasTotal.instaladas?Math.round(n/ventasTotal.instaladas*100):0}%)</span>
           )}
         </div>
+      </Card>
+    }
+
+    {sinPagarPorPlanOrdenado.length>0&&
+      <Card title={`💰 Cuentas sin pagar por plan (${sinPagarPorPlanTotales.n} · ${fmtMoney(sinPagarPorPlanTotales.importe)})`}>
+        {sinPagarPorPlanOrdenado.map(([p,b])=>
+          <div key={p} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:12,padding:'6px 0',borderBottom:'1px solid var(--border)'}}>
+            <span>{p}</span>
+            <span><b>{b.n}</b> cta{b.n!==1?'s':''} · <b style={{color:'var(--red)'}}>{fmtMoney(b.importe)}</b></span>
+          </div>
+        )}
       </Card>
     }
 
