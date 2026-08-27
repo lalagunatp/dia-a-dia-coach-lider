@@ -180,6 +180,14 @@ function textoCuentasSinPagar(m,cuentas){
   }).join('\n');
   return `📋 Cuentas sin pagar de ${m.nombre} (2 meses anteriores):\n\n${lineas}`;
 }
+function textoPendientesInstalar(m,pendientes,ref){
+  const lineas=pendientes.map(v=>{
+    const dias=Math.floor((ref-v.validacion)/86400000);
+    const asig=(m.asignacionesPorOS||{})[v.os]||0;
+    return `• ${v.cuenta} · ${v.os} · ${dias} día${dias!==1?'s':''} sin activar · ${asig} asignación${asig!==1?'es':''}`;
+  }).join('\n');
+  return `📋 Cuentas validadas sin instalar de ${m.nombre} (últ. 30 días):\n\n${lineas}`;
+}
 
 async function fetchPlantilla(){
   const res=await fetch(gvizUrl(PLANTILLA_GID));
@@ -627,6 +635,16 @@ function Btn({children,onClick,variant='primary',style:s,disabled}){
   return <button onClick={onClick} disabled={disabled} style={{padding:'10px 18px',borderRadius:8,border:'none',fontSize:14,fontWeight:600,cursor:disabled?'not-allowed':'pointer',opacity:disabled?.5:1,...v[variant],...s}}>{children}</button>;
 }
 function Card({children,title,actions,style:s}){return <div className="anim" style={{background:'var(--card)',borderRadius:12,border:'1px solid var(--border)',padding:18,marginBottom:14,...s}}>{(title||actions)&&<div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>{title&&<h3 style={{margin:0,fontSize:15,fontWeight:700}}>{title}</h3>}{actions}</div>}{children}</div>;}
+// Tarjeta que colapsa/expande todo su contenido al tocar el título.
+function PanelAcordeon({title,abierto,onToggle,children}){
+  return <Card>
+    <div onClick={onToggle} style={{display:'flex',justifyContent:'space-between',alignItems:'center',cursor:'pointer',marginBottom:abierto?12:0}}>
+      <h3 style={{margin:0,fontSize:15,fontWeight:700}}>{title}</h3>
+      <span style={{fontSize:12,color:'var(--dim)'}}>{abierto?'▲':'▼'}</span>
+    </div>
+    {abierto&&children}
+  </Card>;
+}
 function Select({value,onChange,options,style:s}){return <select value={value} onChange={e=>onChange(e.target.value)} style={{padding:'10px 12px',borderRadius:8,border:'1.5px solid var(--border)',background:'var(--input)',fontSize:14,color:'var(--text)',outline:'none',width:'100%',boxSizing:'border-box',...s}}>{options.map(o=><option key={typeof o==='string'?o:o.value} value={typeof o==='string'?o:o.value}>{typeof o==='string'?o:o.label}</option>)}</select>;}
 function Toast({msg,onClose}){useEffect(()=>{const t=setTimeout(onClose,2500);return()=>clearTimeout(t);},[]);return <div style={{position:'fixed',bottom:80,left:'50%',transform:'translateX(-50%)',background:'#1a1d29',color:'#fff',padding:'10px 20px',borderRadius:10,fontSize:14,fontWeight:600,zIndex:9999,boxShadow:'0 4px 20px rgba(0,0,0,.25)',whiteSpace:'nowrap'}}>{msg}</div>;}
 function Spinner(){return <div style={{width:28,height:28,border:'3px solid var(--border)',borderTop:'3px solid var(--accent)',borderRadius:'50%',animation:'spin .8s linear infinite',margin:'0 auto'}}/>;}
@@ -1001,7 +1019,13 @@ function DashboardTab({data,team,coaches,session,setTab}){
   const rechazosMotivos={};let rechazosTotalN=0; // motivo -> [{nombre,oportunidad,cuenta}]
   const planesTotalN={};
   const sinPagarPorPlan={}; // plan -> {n, importe}
+  const pendientesPorVendedor=[]; // [{m, pendientes}]
   const[expandedMotivo,setExpandedMotivo]=useState(null);
+  const[expandedPendienteVendedor,setExpandedPendienteVendedor]=useState(null);
+  const[abrirRechazos,setAbrirRechazos]=useState(false);
+  const[abrirPlanes,setAbrirPlanes]=useState(false);
+  const[abrirPendientesPanel,setAbrirPendientesPanel]=useState(false);
+  const[abrirSinPagarPlan,setAbrirSinPagarPlan]=useState(false);
   vendedores.forEach(m=>{
     const f=funnelPeriodo(m.ventas,rangoIni,rangoFin);
     ventasTotal.oportunidades+=f.oportunidades;
@@ -1021,11 +1045,14 @@ function DashboardTab({data,team,coaches,session,setTab}){
       const b=sinPagarPorPlan[p]=sinPagarPorPlan[p]||{n:0,importe:0};
       b.n++;b.importe+=c.importe;
     });
+    const pend=pendientesInstalar30d(m.ventas,now);
+    if(pend.length)pendientesPorVendedor.push({m,pendientes:pend});
   });
   const motivosOrdenados=Object.entries(rechazosMotivos).sort((a,b)=>b[1].length-a[1].length);
   const planesOrdenados=Object.entries(planesTotalN).sort((a,b)=>b[1]-a[1]);
   const sinPagarPorPlanOrdenado=Object.entries(sinPagarPorPlan).sort((a,b)=>b[1].n-a[1].n);
   const sinPagarPorPlanTotales=Object.values(sinPagarPorPlan).reduce((acc,b)=>({n:acc.n+b.n,importe:acc.importe+b.importe}),{n:0,importe:0});
+  const totalPendientesInstalar=pendientesPorVendedor.reduce((s,x)=>s+x.pendientes.length,0);
 
   const semaforoMap={};
   recs.filter(r=>r.type==='feedback').sort((a,b)=>a.savedAt.localeCompare(b.savedAt)).forEach(r=>{
@@ -1133,6 +1160,10 @@ function DashboardTab({data,team,coaches,session,setTab}){
               <span>{dias} día{dias!==1?'s':''} sin activar · {asig} asignación{asig!==1?'es':''}</span>
             </div>;
           })}
+          <a href={whatsappUrl(textoPendientesInstalar(m,pendientes,now))} target="_blank" rel="noopener noreferrer"
+            style={{display:'inline-flex',alignItems:'center',gap:6,marginTop:8,padding:'6px 12px',borderRadius:8,background:'#25D366',color:'#fff',fontSize:12,fontWeight:700,textDecoration:'none'}}>
+            📲 Enviar por WhatsApp
+          </a>
         </div>;
       })()}
       {/* Cuentas sin pagar de este vendedor (2 meses anteriores al actual) */}
@@ -1211,7 +1242,7 @@ function DashboardTab({data,team,coaches,session,setTab}){
     </Card>
 
     {rechazosTotalN>0&&
-      <Card title={`❌ Motivos de rechazo OPORTUNIDADES — ${periodoVentas} (${rechazosTotalN})`}>
+      <PanelAcordeon title={`❌ Motivos de rechazo OPORTUNIDADES — ${periodoVentas} (${rechazosTotalN})`} abierto={abrirRechazos} onToggle={()=>setAbrirRechazos(!abrirRechazos)}>
         {motivosOrdenados.map(([mo,items])=>{
           const isExp=expandedMotivo===mo;
           return <div key={mo}>
@@ -1232,28 +1263,65 @@ function DashboardTab({data,team,coaches,session,setTab}){
             </div>}
           </div>;
         })}
-      </Card>
+      </PanelAcordeon>
     }
 
     {planesOrdenados.length>0&&
-      <Card title={`📦 Instalaciones por plan — ${periodoVentas}`}>
+      <PanelAcordeon title={`📦 Instalaciones por plan — ${periodoVentas}`} abierto={abrirPlanes} onToggle={()=>setAbrirPlanes(!abrirPlanes)}>
         <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
           {planesOrdenados.map(([p,n])=>
             <span key={p} style={{fontSize:12,fontWeight:600,padding:'4px 10px',borderRadius:16,background:'var(--accent-light)',color:'var(--accent)'}}>{p}: {n} ({ventasTotal.instaladas?Math.round(n/ventasTotal.instaladas*100):0}%)</span>
           )}
         </div>
-      </Card>
+      </PanelAcordeon>
+    }
+
+    {totalPendientesInstalar>0&&
+      <PanelAcordeon title={`⏳ Cuentas por instalar, últ. 30 días (${totalPendientesInstalar})`} abierto={abrirPendientesPanel} onToggle={()=>setAbrirPendientesPanel(!abrirPendientesPanel)}>
+        {pendientesPorVendedor.map(({m,pendientes})=>{
+          const key=m.numEmp||m.nombre;
+          const isExp=expandedPendienteVendedor===key;
+          return <div key={key} style={{marginBottom:6}}>
+            <div onClick={()=>setExpandedPendienteVendedor(isExp?null:key)} style={{
+              display:'flex',justifyContent:'space-between',alignItems:'center',cursor:'pointer',
+              padding:'8px 10px',borderRadius:isExp?'8px 8px 0 0':8,
+              border:'1px solid var(--border)',borderBottom:isExp?'none':undefined,
+              background:'var(--bg)',
+            }}>
+              <span style={{fontWeight:700,fontSize:12}}>{m.nombre.split(' ').slice(0,3).join(' ')}</span>
+              <div style={{display:'flex',alignItems:'center',gap:6}}>
+                <span style={{fontSize:11,fontWeight:700,color:'var(--yellow)',background:'var(--ybg)',padding:'2px 8px',borderRadius:10}}>{pendientes.length}</span>
+                <span style={{fontSize:12,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
+              </div>
+            </div>
+            {isExp&&<div style={{border:'1px solid var(--border)',borderTop:'none',borderRadius:'0 0 8px 8px',padding:'8px 10px'}}>
+              {pendientes.map((v,i)=>{
+                const dias=Math.floor((now-v.validacion)/86400000);
+                const asig=(m.asignacionesPorOS||{})[v.os]||0;
+                return <div key={i} style={{fontSize:11,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:i<pendientes.length-1?'1px solid var(--border)':'none'}}>
+                  <span>{v.cuenta} · {v.os}</span>
+                  <span>{dias} día{dias!==1?'s':''} sin activar · {asig} asignación{asig!==1?'es':''}</span>
+                </div>;
+              })}
+              <a href={whatsappUrl(textoPendientesInstalar(m,pendientes,now))} target="_blank" rel="noopener noreferrer"
+                style={{display:'inline-flex',alignItems:'center',gap:6,marginTop:8,padding:'6px 12px',borderRadius:8,background:'#25D366',color:'#fff',fontSize:12,fontWeight:700,textDecoration:'none'}}>
+                📲 Enviar por WhatsApp
+              </a>
+            </div>}
+          </div>;
+        })}
+      </PanelAcordeon>
     }
 
     {sinPagarPorPlanOrdenado.length>0&&
-      <Card title={`💰 Cuentas sin pagar por plan (${sinPagarPorPlanTotales.n} · ${fmtMoney(sinPagarPorPlanTotales.importe)})`}>
+      <PanelAcordeon title={`💰 Cuentas sin pagar por plan (${sinPagarPorPlanTotales.n} · ${fmtMoney(sinPagarPorPlanTotales.importe)})`} abierto={abrirSinPagarPlan} onToggle={()=>setAbrirSinPagarPlan(!abrirSinPagarPlan)}>
         {sinPagarPorPlanOrdenado.map(([p,b])=>
           <div key={p} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:12,padding:'6px 0',borderBottom:'1px solid var(--border)'}}>
             <span>{p}</span>
             <span><b>{b.n}</b> cta{b.n!==1?'s':''} · <b style={{color:'var(--red)'}}>{fmtMoney(b.importe)}</b></span>
           </div>
         )}
-      </Card>
+      </PanelAcordeon>
     }
 
     <Card title="🚦 Semáforo del equipo">
