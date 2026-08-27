@@ -1062,6 +1062,8 @@ function DashboardTab({data,team,coaches,session,setTab}){
   const planesOrdenados=Object.entries(planesTotalN).sort((a,b)=>b[1]-a[1]);
   const sinPagarPorPlanOrdenado=Object.entries(sinPagarPorPlan).sort((a,b)=>b[1].n-a[1].n);
   const sinPagarPorPlanTotales=Object.values(sinPagarPorPlan).reduce((acc,b)=>({n:acc.n+b.n,importe:acc.importe+b.importe}),{n:0,importe:0});
+  const instaladoPorPlan2mTotal=Object.values(instaladoPorPlan2m).reduce((a,b)=>a+b,0);
+  const sinPagarPorPlanPctTotal=instaladoPorPlan2mTotal?Math.round(sinPagarPorPlanTotales.n/instaladoPorPlan2mTotal*100):0;
   const totalPendientesInstalar=pendientesPorVendedor.reduce((s,x)=>s+x.pendientes.length,0);
 
   const semaforoMap={};
@@ -1341,7 +1343,7 @@ function DashboardTab({data,team,coaches,session,setTab}){
     }
 
     {sinPagarPorPlanOrdenado.length>0&&
-      <PanelAcordeon title={`💰 Cuentas sin pagar por plan (${sinPagarPorPlanTotales.n} · ${fmtMoney(sinPagarPorPlanTotales.importe)})`} abierto={abrirSinPagarPlan} onToggle={()=>setAbrirSinPagarPlan(!abrirSinPagarPlan)}>
+      <PanelAcordeon title={`💰 Cuentas sin pagar por plan (${sinPagarPorPlanTotales.n} · ${sinPagarPorPlanPctTotal}% de ${instaladoPorPlan2mTotal} inst. · ${fmtMoney(sinPagarPorPlanTotales.importe)})`} abierto={abrirSinPagarPlan} onToggle={()=>setAbrirSinPagarPlan(!abrirSinPagarPlan)}>
         {sinPagarPorPlanOrdenado.map(([p,b])=>{
           const totalPlan=instaladoPorPlan2m[p]||b.n;
           const pct=Math.round(b.n/totalPlan*100);
