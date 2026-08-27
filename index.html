@@ -465,19 +465,24 @@ function asignacionesActuales(ventas){
   });
   return out;
 }
-// Cuentas sin pagar de los 2 meses anteriores al actual (sin incluir el actual).
-function cuentasSinPagar(cuentas,ref){
-  const out=[];
+// ¿La fecha cae en alguno de los 2 meses anteriores al de `ref` (sin incluir el mes actual)?
+function enVentanaMesesPrevios(fecha,ref){
+  if(!fecha)return false;
   for(let back=1;back<=2;back++){
     const d=new Date(ref.getFullYear(),ref.getMonth()-back,1);
-    (cuentas||[]).forEach(c=>{
-      if(!c.fechaInstalacion)return;
-      if(c.fechaInstalacion.getFullYear()===d.getFullYear()&&c.fechaInstalacion.getMonth()===d.getMonth()&&!/^YA COMISIONADA/i.test(c.estatusPago)){
-        out.push(c);
-      }
-    });
+    if(fecha.getFullYear()===d.getFullYear()&&fecha.getMonth()===d.getMonth())return true;
   }
-  return out.sort((a,b)=>(a.fechaInstalacion-b.fechaInstalacion));
+  return false;
+}
+// Todas las cuentas instaladas en los 2 meses anteriores al actual (pagadas o no) — el universo contra el que se saca el %.
+function cuentasDelPeriodo(cuentas,ref){
+  return(cuentas||[]).filter(c=>enVentanaMesesPrevios(c.fechaInstalacion,ref));
+}
+// De esas, las que aún no se han pagado.
+function cuentasSinPagar(cuentas,ref){
+  return cuentasDelPeriodo(cuentas,ref)
+    .filter(c=>!/^YA COMISIONADA/i.test(c.estatusPago))
+    .sort((a,b)=>a.fechaInstalacion-b.fechaInstalacion);
 }
 
 // Enrich team with ranking data
@@ -1058,8 +1063,10 @@ function DashboardTab({data,team,coaches,session,setTab}){
       {(()=>{
         const sinPagar=cuentasSinPagar(m.cuentasCom,now);
         if(!sinPagar.length)return null;
+        const totalPeriodo=cuentasDelPeriodo(m.cuentasCom,now).length;
+        const pct=totalPeriodo?Math.round(sinPagar.length/totalPeriodo*100):0;
         return <div style={{padding:'6px 8px',background:'var(--rbg)',borderRadius:6,marginBottom:6}}>
-          <div style={{fontSize:11,fontWeight:700,color:'var(--red)',marginBottom:3}}>💰 Cuentas sin pagar ({sinPagar.length})</div>
+          <div style={{fontSize:11,fontWeight:700,color:'var(--red)',marginBottom:3}}>💰 Cuentas sin pagar ({sinPagar.length} · {pct}% de {totalPeriodo} instaladas)</div>
           {sinPagar.map((c,i)=>
             <div key={i} style={{fontSize:11,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:i<sinPagar.length-1?'1px solid var(--border)':'none'}}>
               <span>{c.cuenta} · {c.cliente} · {fmtDateObj(c.fechaInstalacion)}</span>
@@ -1150,6 +1157,7 @@ function DashboardTab({data,team,coaches,session,setTab}){
         const isExp=expanded===m.nombre;
         const lastFb=recs.filter(r=>r.type==='feedback'&&r.vendedor===m.nombre).sort((a,b)=>b.savedAt.localeCompare(a.savedAt))[0];
         const sinPagarN=cuentasSinPagar(m.cuentasCom,now).length;
+        const sinPagarPct=sinPagarN?Math.round(sinPagarN/cuentasDelPeriodo(m.cuentasCom,now).length*100):0;
         return <div key={m.numEmp||m.nombre}>
           <div onClick={()=>setExpanded(isExp?null:m.nombre)} style={{
             display:'flex',alignItems:'center',justifyContent:'space-between',
@@ -1163,7 +1171,7 @@ function DashboardTab({data,team,coaches,session,setTab}){
                 <span style={{fontSize:13,fontWeight:600}}>{m.nombre.split(' ').slice(0,3).join(' ')}</span>
                 <RankBadge badge={m.badge}/>
                 {m.obs&&<span style={{fontSize:10,fontWeight:600,color:'var(--yellow)'}}>⚠️ {m.obs}</span>}
-                {sinPagarN>0&&<span style={{fontSize:10,fontWeight:700,color:'var(--red)'}}>💰 {sinPagarN} sin pagar</span>}
+                {sinPagarN>0&&<span style={{fontSize:10,fontWeight:700,color:'var(--red)'}}>💰 {sinPagarN} sin pagar ({sinPagarPct}%)</span>}
               </div>
               {m.rankingMen&&<div style={{fontSize:10,color:'var(--dim)',marginTop:1}}>
                 Prom: {m.rankingMen.promedioMensual} ins/mes
