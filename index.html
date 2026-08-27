@@ -33,8 +33,14 @@ const SHEET_ID='1Ph5T-m-Lkbdw1LBq-9wIIMW6C8bljOG1t5GfZQhNZ2o';
 const PLANTILLA_GID='913334386';
 const RANKING_ENT_GID='1643927631';
 const RANKING_GID='1495976066';
+const BASEDATOS_SHEET='Base de Datos y Comisiones'; // oportunidades: creación/validación/activación, rechazos, asignación
+const COMISIONES_SHEET='COMISIONES'; // cuentas: estatus de pago por cuenta
 const DOPOST_URL='https://script.google.com/macros/s/AKfycbx7DYc01sJV7QJsA9kVdtgW0JOZdyySjLqqHzszA9qsDE3xt8kpr7SfrdF2KqseVTr0/exec';
 const POSITIONS_ALLOWED=['DIRECTOR DISTRITAL','LIDER VENTAS','LIDER DE CANALES Y VENTA TECNICO','COACH VENTAS','COACH DE VENTAS TECNICO','COACH PROMOVENDEDOR PUNTO DE VENTA','VENDEDOR','PROMOVENDEDOR PUNTO DE VENTA'];
+// Meta semanal de instalaciones por ranking (misma convención que informeseguimiento/avancecomisiones).
+const META_SEMANAL_RANKING={ENTRENAMIENTO:3,CONDICIONADO:3,BRONCE:3,PLATA:4,ORO:5,PLATINO:6,DIAMANTE:6};
+const metaSemanal=badge=>META_SEMANAL_RANKING[badge]||0;
+const metaMensual=badge=>Math.round(metaSemanal(badge)*4.33);
 
 // ═══ HELPERS ═══
 const today=()=>new Date().toISOString().slice(0,10);
@@ -114,6 +120,11 @@ function gvizUrl(gid,query){
   if(query)u+=`&tq=${encodeURIComponent(query)}`;
   return u;
 }
+function gvizUrlSheet(sheetName,query){
+  let u=`https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(sheetName)}`;
+  if(query)u+=`&tq=${encodeURIComponent(query)}`;
+  return u;
+}
 function parseGviz(text){
   const m=text.match(/setResponse\((.+)\);?\s*$/s);
   if(!m)throw new Error('Invalid gviz response');
@@ -130,6 +141,32 @@ function parseGviz(text){
     return v??'';
   }));
 }
+
+// dd/mm/yyyy (formato que deja parseGviz para fechas, y el que ya trae COMISIONES como texto) → Date
+function parseFechaDMY(s){
+  if(!s)return null;
+  const p=String(s).trim().split('/');
+  if(p.length!==3)return null;
+  const d=Number(p[0]),mo=Number(p[1]),y=Number(p[2]);
+  if(!d||!mo||!y)return null;
+  const dt=new Date(y,mo-1,d);
+  return isNaN(dt)?null:dt;
+}
+function startOfWeek(date){ // lunes de la semana que contiene `date`
+  const d=new Date(date);d.setHours(0,0,0,0);
+  const diff=(d.getDay()+6)%7; // Mon=0..Sun=6
+  d.setDate(d.getDate()-diff);
+  return d;
+}
+function endOfWeek(date){
+  const d=startOfWeek(date);
+  d.setDate(d.getDate()+6);d.setHours(23,59,59,999);
+  return d;
+}
+function startOfMonth(date){const d=new Date(date.getFullYear(),date.getMonth(),1);d.setHours(0,0,0,0);return d;}
+function endOfMonth(date){const d=new Date(date.getFullYear(),date.getMonth()+1,0);d.setHours(23,59,59,999);return d;}
+function enRango(fecha,inicio,fin){return fecha&&fecha>=inicio&&fecha<=fin;}
+const fmtDateObj=d=>d?`${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`:'';
 
 async function fetchPlantilla(){
   const res=await fetch(gvizUrl(PLANTILLA_GID));
@@ -323,6 +360,121 @@ async function fetchRankingMensual(){
   }catch(e){console.error('Ranking mensual fetch error:',e);return{};}
 }
 
+// ═══ VENTAS (Base de Datos y Comisiones / COMISIONES) ═══
+// Oportunidades de venta por vendedor: creación, validación, activación, rechazo y etapa de asignación.
+// Se filtra por Num Vendedor (columna V = mismo numEmp de PLANTILLA/RANKING) para no bajar las ~35k filas completas,
+// y por fecha (columna D/E/F) para no traer historial viejo.
+// La query language de gviz no soporta "IN": hay que armar una cadena de "COL = valor OR COL = valor...".
+// Se trocea en lotes para no pasarnos de longitud de URL con equipos grandes (Director).
+function chunk(arr,size){const out=[];for(let i=0;i<arr.length;i+=size)out.push(arr.slice(i,i+size));return out;}
+
+async function fetchVentas(numEmps){
+  if(!numEmps||!numEmps.length)return{};
+  try{
+    const cutoff=startOfMonth(new Date());cutoff.setMonth(cutoff.getMonth()-1); // desde el mes pasado
+    const cutoffStr=`${cutoff.getFullYear()}-${String(cutoff.getMonth()+1).padStart(2,'0')}-${String(cutoff.getDate()).padStart(2,'0')}`;
+    const byVendedor={};
+    const lotes=chunk(numEmps,40);
+    await Promise.all(lotes.map(async lote=>{
+      const cond=lote.map(n=>`V = ${n}`).join(' or ');
+      const q=`select D,E,F,K,L,N,V where (${cond}) and (D >= date '${cutoffStr}' or E >= date '${cutoffStr}' or F >= date '${cutoffStr}')`;
+      const res=await fetch(gvizUrlSheet(BASEDATOS_SHEET,q));
+      const text=await res.text();
+      const rows=parseGviz(text);
+      rows.forEach(r=>{
+        const numVendedor=String(r[6]||'').trim();
+        if(!numVendedor)return;
+        const v={
+          creacion:parseFechaDMY(r[0]),
+          validacion:parseFechaDMY(r[1]),
+          activacion:parseFechaDMY(r[2]),
+          estatus:String(r[3]||'').trim(),
+          motivoRechazo:String(r[4]||'').trim(),
+          estatusII:String(r[5]||'').trim(),
+        };
+        (byVendedor[numVendedor]=byVendedor[numVendedor]||[]).push(v);
+      });
+    }));
+    return byVendedor;
+  }catch(e){console.error('Ventas fetch error:',e);return{};}
+}
+
+// Cuentas y su estatus de pago, por Número Homologado (= mismo numEmp de PLANTILLA/RANKING).
+async function fetchCuentasComisiones(numEmps){
+  if(!numEmps||!numEmps.length)return{};
+  try{
+    const byHomologado={};
+    const lotes=chunk(numEmps,40);
+    await Promise.all(lotes.map(async lote=>{
+      const cond=lote.map(n=>`C = '${n}'`).join(' or ');
+      const q=`select B,C,H,K,U where ${cond}`;
+      const res=await fetch(gvizUrlSheet(COMISIONES_SHEET,q));
+      const text=await res.text();
+      const rows=parseGviz(text);
+      rows.forEach(r=>{
+        const numHom=String(r[1]||'').trim();
+        if(!numHom)return;
+        const c={
+          cuenta:String(r[0]||'').trim(),
+          cliente:String(r[2]||'').trim(),
+          fechaInstalacion:parseFechaDMY(r[3]),
+          estatusPago:String(r[4]||'').trim(),
+        };
+        (byHomologado[numHom]=byHomologado[numHom]||[]).push(c);
+      });
+    }));
+    return byHomologado;
+  }catch(e){console.error('Comisiones fetch error:',e);return{};}
+}
+
+// Funnel de oportunidades de un vendedor en un periodo (semana o mes): creadas / validadas / instaladas.
+function funnelPeriodo(ventas,inicio,fin){
+  const f={oportunidades:0,validadas:0,instaladas:0};
+  (ventas||[]).forEach(v=>{
+    if(enRango(v.creacion,inicio,fin))f.oportunidades++;
+    if(v.validacion&&enRango(v.validacion,inicio,fin))f.validadas++;
+    if(v.activacion&&enRango(v.activacion,inicio,fin))f.instaladas++;
+  });
+  return f;
+}
+// Motivos de rechazo de un vendedor en un periodo (agrupados por fecha de oportunidad).
+function rechazosPeriodo(ventas,inicio,fin){
+  const motivos={};let total=0;
+  (ventas||[]).forEach(v=>{
+    if(v.estatus==='Rechazada'&&enRango(v.creacion,inicio,fin)){
+      total++;
+      const m=v.motivoRechazo||'Sin motivo';
+      motivos[m]=(motivos[m]||0)+1;
+    }
+  });
+  return{total,motivos};
+}
+// Foto actual (no ligada a periodo) de en qué etapa de asignación/instalación está cada oportunidad
+// validada que todavía no se instala.
+function asignacionesActuales(ventas){
+  const out={};
+  (ventas||[]).forEach(v=>{
+    if(v.validacion&&!v.activacion&&v.estatusII&&v.estatusII!=='-'&&v.estatusII!=='Completado'){
+      out[v.estatusII]=(out[v.estatusII]||0)+1;
+    }
+  });
+  return out;
+}
+// Cuentas sin pagar de los 2 meses anteriores al actual (sin incluir el actual).
+function cuentasSinPagar(cuentas,ref){
+  const out=[];
+  for(let back=1;back<=2;back++){
+    const d=new Date(ref.getFullYear(),ref.getMonth()-back,1);
+    (cuentas||[]).forEach(c=>{
+      if(!c.fechaInstalacion)return;
+      if(c.fechaInstalacion.getFullYear()===d.getFullYear()&&c.fechaInstalacion.getMonth()===d.getMonth()&&!/^YA COMISIONADA/i.test(c.estatusPago)){
+        out.push(c);
+      }
+    });
+  }
+  return out.sort((a,b)=>(a.fechaInstalacion-b.fechaInstalacion));
+}
+
 // Enrich team with ranking data
 function enrichTeam(team,rankEnt,rankMen){
   const reByName={};
@@ -513,9 +665,13 @@ function LoginScreen({onLogin}){
       const role=getRoleType(user.posicion);
       if(role==='vendedor'){setError('Acceso solo para Coach, Líder o Director');setLoading(false);return;}
       let{team,coaches}=buildTeam(user,all);
+      // Ventas y comisiones del equipo (semana/mes en curso, rechazos, asignaciones, cuentas sin pagar)
+      const allNums=[...new Set([...team,...coaches].map(m=>m.numEmp).filter(Boolean))];
+      const[ventasByVendedor,cuentasByHomologado]=await Promise.all([fetchVentas(allNums),fetchCuentasComisiones(allNums)]);
+      const attachVentas=m=>({...m,ventas:ventasByVendedor[m.numEmp]||[],cuentasCom:cuentasByHomologado[m.numEmp]||[]});
       // Enrich with ranking data
-      team=sortByRanking(enrichTeam(team,rankEnt,rankMen));
-      coaches=sortByRanking(enrichTeam(coaches,rankEnt,rankMen));
+      team=sortByRanking(enrichTeam(team,rankEnt,rankMen).map(attachVentas));
+      coaches=sortByRanking(enrichTeam(coaches,rankEnt,rankMen).map(attachVentas));
       const session={user,team,coaches,role,allEmployees:all,loginTime:new Date().toISOString()};
       sessionStorage.setItem('sv2-session',JSON.stringify(session));
       onLogin(session);
@@ -775,6 +931,35 @@ function DashboardTab({data,team,coaches,session,setTab}){
   const diasLabTransc=Math.round(diasTranscurridos*6/7);
 
   const vendedores=team.filter(m=>isVendedor(m.posicion));
+
+  // ── Ventas del equipo: semana/mes en curso, rechazos, asignaciones y cuentas sin pagar ──
+  const semanaIni=startOfWeek(now),semanaFin=endOfWeek(now);
+  const mesIni=startOfMonth(now),mesFin=endOfMonth(now);
+  const[periodoVentas,setPeriodoVentas]=useState('semana');
+  const[rangoIni,rangoFin]=periodoVentas==='semana'?[semanaIni,semanaFin]:[mesIni,mesFin];
+  const ventasTotal={oportunidades:0,validadas:0,instaladas:0};
+  let metaInstalTotal=0;
+  const rechazosMotivos={};let rechazosTotalN=0;
+  const asignacionesTotalN={};
+  const cuentasSinPagarLista=[];
+  vendedores.forEach(m=>{
+    const f=funnelPeriodo(m.ventas,rangoIni,rangoFin);
+    ventasTotal.oportunidades+=f.oportunidades;
+    ventasTotal.validadas+=f.validadas;
+    ventasTotal.instaladas+=f.instaladas;
+    metaInstalTotal+=periodoVentas==='semana'?metaSemanal(m.badge):metaMensual(m.badge);
+    const rz=rechazosPeriodo(m.ventas,rangoIni,rangoFin);
+    rechazosTotalN+=rz.total;
+    Object.entries(rz.motivos).forEach(([mo,n])=>{rechazosMotivos[mo]=(rechazosMotivos[mo]||0)+n;});
+    const asig=asignacionesActuales(m.ventas);
+    Object.entries(asig).forEach(([et,n])=>{asignacionesTotalN[et]=(asignacionesTotalN[et]||0)+n;});
+    const sinPagar=cuentasSinPagar(m.cuentasCom,now);
+    if(sinPagar.length)cuentasSinPagarLista.push({m,cuentas:sinPagar});
+  });
+  const motivosOrdenados=Object.entries(rechazosMotivos).sort((a,b)=>b[1]-a[1]);
+  const asignacionesOrdenadas=Object.entries(asignacionesTotalN).sort((a,b)=>b[1]-a[1]);
+  const totalCuentasSinPagar=cuentasSinPagarLista.reduce((s,x)=>s+x.cuentas.length,0);
+
   const semaforoMap={};
   recs.filter(r=>r.type==='feedback').sort((a,b)=>a.savedAt.localeCompare(b.savedAt)).forEach(r=>{
     if(r.vendedor&&r.semaforo)semaforoMap[r.vendedor]=r.semaforo;
@@ -854,6 +1039,21 @@ function DashboardTab({data,team,coaches,session,setTab}){
           📚 Cursos faltantes: {m.certFaltantes.join(', ')}
         </div>
       }
+      {/* Ventas: semana/mes en curso, meta y cuentas sin pagar */}
+      {(()=>{
+        const fSem=funnelPeriodo(m.ventas,semanaIni,semanaFin);
+        const fMes=funnelPeriodo(m.ventas,mesIni,mesFin);
+        const meta=metaMensual(m.badge);
+        const sinPagar=cuentasSinPagar(m.cuentasCom,now);
+        if(!m.ventas?.length&&!sinPagar.length)return null;
+        return <div style={{padding:'6px 8px',background:'var(--card)',borderRadius:6,marginBottom:6}}>
+          <div style={{fontSize:11,fontWeight:700,color:'var(--dim)',marginBottom:3}}>🛒 Ventas</div>
+          <div style={{display:'flex',justifyContent:'space-between'}}><span>Semana:</span><span>{fSem.oportunidades} op · {fSem.validadas} val · {fSem.instaladas} inst</span></div>
+          <div style={{display:'flex',justifyContent:'space-between'}}><span>Mes:</span><span>{fMes.oportunidades} op · {fMes.validadas} val · {fMes.instaladas} inst</span></div>
+          {meta>0&&<div style={{display:'flex',justifyContent:'space-between'}}><span>Meta del mes:</span><b>{fMes.instaladas}/{meta}</b></div>}
+          {sinPagar.length>0&&<p style={{color:'var(--red)',fontWeight:600,marginTop:4}}>💰 {sinPagar.length} cuenta(s) sin pagar (últ. 2 meses)</p>}
+        </div>;
+      })()}
     </div>;
   };
 
@@ -881,6 +1081,59 @@ function DashboardTab({data,team,coaches,session,setTab}){
         <div style={{fontSize:9,color:'var(--dim)',fontWeight:600}}>{s.l}</div>
       </div>)}
     </div>
+
+    <Card title="🛒 Ventas del equipo" actions={
+      <div style={{display:'flex',gap:4}}>
+        {['semana','mes'].map(p=><button key={p} onClick={()=>setPeriodoVentas(p)} style={{fontSize:11,fontWeight:700,padding:'4px 10px',borderRadius:20,border:'1px solid var(--border)',background:periodoVentas===p?'var(--accent)':'var(--card)',color:periodoVentas===p?'#fff':'var(--dim)',cursor:'pointer',textTransform:'capitalize'}}>{p}</button>)}
+      </div>
+    }>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:10}}>
+        {[{l:'Oportunidades',v:ventasTotal.oportunidades,icon:'🆕'},{l:'Validadas',v:ventasTotal.validadas,icon:'✅'},{l:'Instaladas',v:ventasTotal.instaladas,icon:'🔌'}].map(s=>
+          <div key={s.l} style={{background:'var(--bg)',borderRadius:10,padding:'10px 8px',textAlign:'center'}}>
+            <div style={{fontSize:16}}>{s.icon}</div>
+            <div style={{fontSize:20,fontWeight:800}}>{s.v}</div>
+            <div style={{fontSize:9,color:'var(--dim)',fontWeight:600}}>{s.l}</div>
+          </div>
+        )}
+      </div>
+      <Gauge value={ventasTotal.instaladas} goal={metaInstalTotal} label={`Instalaciones vs meta (${periodoVentas})`} icon="🎯"/>
+    </Card>
+
+    {rechazosTotalN>0&&
+      <Card title={`❌ Motivos de rechazo — ${periodoVentas} (${rechazosTotalN})`}>
+        {motivosOrdenados.map(([mo,n])=>
+          <div key={mo} style={{display:'flex',justifyContent:'space-between',fontSize:12,padding:'4px 0',borderBottom:'1px solid var(--border)'}}>
+            <span>{mo}</span><b>{n}</b>
+          </div>
+        )}
+      </Card>
+    }
+
+    {asignacionesOrdenadas.length>0&&
+      <Card title="🔧 Asignaciones en proceso">
+        <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+          {asignacionesOrdenadas.map(([et,n])=>
+            <span key={et} style={{fontSize:12,fontWeight:600,padding:'4px 10px',borderRadius:16,background:'var(--accent-light)',color:'var(--accent)'}}>{et}: {n}</span>
+          )}
+        </div>
+      </Card>
+    }
+
+    {totalCuentasSinPagar>0&&
+      <Card title={`💰 Cuentas sin pagar — 2 meses anteriores (${totalCuentasSinPagar})`}>
+        {cuentasSinPagarLista.map(({m,cuentas})=>
+          <div key={m.numEmp||m.nombre} style={{marginBottom:8}}>
+            <div style={{fontWeight:700,fontSize:12,marginBottom:2}}>{m.nombre.split(' ').slice(0,3).join(' ')}</div>
+            {cuentas.map((c,i)=>
+              <div key={i} style={{fontSize:11,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'2px 0'}}>
+                <span>{c.cuenta} · {c.cliente} · {fmtDateObj(c.fechaInstalacion)}</span>
+                <span style={{color:'var(--red)',fontWeight:600,textAlign:'right'}}>{c.estatusPago}</span>
+              </div>
+            )}
+          </div>
+        )}
+      </Card>
+    }
 
     <Card title="🚦 Semáforo del equipo">
       <SemBar/>
@@ -911,6 +1164,9 @@ function DashboardTab({data,team,coaches,session,setTab}){
               {m.rankingMen&&<div style={{fontSize:10,color:'var(--dim)',marginTop:1}}>
                 Prom: {m.rankingMen.promedioMensual} ins/mes
                 {m.mesesEnRanking>0&&<span> · {m.mesesEnRanking}m en nivel</span>}
+              </div>}
+              {metaMensual(m.badge)>0&&<div style={{fontSize:10,color:'var(--dim)',marginTop:1}}>
+                🎯 {funnelPeriodo(m.ventas,mesIni,mesFin).instaladas}/{metaMensual(m.badge)} inst. del mes
               </div>}
               {lastFb&&<div style={{fontSize:10,color:'var(--dim)',marginTop:1}}>Último: {fmt(lastFb.date)} · {lastFb.tipo}</div>}
               {!lastFb&&<div style={{fontSize:10,color:'var(--yellow)',marginTop:1}}>Sin evaluación</div>}
