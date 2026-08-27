@@ -77,8 +77,9 @@ function saveData(data){try{localStorage.setItem(LS_KEY,JSON.stringify(data));}c
 async function sendToSheet(record){
   if(!DOPOST_URL)return{ok:false,error:'URL no configurada'};
   try{
-    // No enviar la foto (demasiado grande para Sheets)
+    // No enviar fotos (demasiado grandes para Sheets): ni la de grupo ni las de evidencia por ausencia.
     const payload={...record};delete payload.photo;
+    if(payload.ausentes)payload.ausentes=payload.ausentes.map(a=>{const{photo,...rest}=a;return rest;});
     const res=await fetch(DOPOST_URL,{method:'POST',body:JSON.stringify(payload),headers:{'Content-Type':'text/plain'}});
     const json=await res.json();
     return json;
@@ -696,6 +697,72 @@ function PhotoCapture({photo,onCapture}){
   const handle=e=>{const f=e.target.files?.[0];if(!f)return;const r=new FileReader();r.onload=ev=>{const img=new Image();img.onload=()=>{const c=document.createElement('canvas');const M=800;let w=img.width,h=img.height;if(w>M){h=h*(M/w);w=M;}c.width=w;c.height=h;c.getContext('2d').drawImage(img,0,0,w,h);onCapture(c.toDataURL('image/jpeg',.7));};img.src=ev.target.result;};r.readAsDataURL(f);};
   return <div><input ref={ref} type="file" accept="image/*" capture="environment" onChange={handle} style={{display:'none'}}/>{photo?<div style={{position:'relative'}}><img src={photo} alt="" style={{width:'100%',maxHeight:220,objectFit:'cover',borderRadius:10,border:'1px solid var(--border)'}}/><Btn onClick={()=>ref.current.click()} variant="ghost" style={{position:'absolute',top:6,right:6,background:'rgba(0,0,0,.55)',color:'#fff',borderRadius:8,fontSize:12}}>📷</Btn></div>:<button onClick={()=>ref.current.click()} style={{width:'100%',padding:'28px 20px',borderRadius:12,border:'2px dashed var(--border)',background:'var(--input)',cursor:'pointer',textAlign:'center',color:'var(--dim)',fontSize:14}}>📷 Tomar foto de grupo</button>}</div>;
 }
+// Foto de evidencia con sello de coach, fecha/hora, dirección y coordenadas (geolocalización del dispositivo).
+function PhotoCaptureGeo({photo,onCapture,coachName}){
+  const ref=useRef();
+  const[loading,setLoading]=useState(false);
+  const handle=e=>{
+    const f=e.target.files?.[0];if(!f)return;
+    setLoading(true);
+    const r=new FileReader();
+    r.onload=ev=>{
+      const img=new Image();
+      img.onload=async()=>{
+        let coordsTxt='',direccion='';
+        try{
+          const pos=await new Promise((res,rej)=>navigator.geolocation.getCurrentPosition(res,rej,{enableHighAccuracy:true,timeout:8000}));
+          const lat=pos.coords.latitude,lng=pos.coords.longitude;
+          coordsTxt=`${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+          try{
+            const resGeo=await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`,{headers:{'Accept-Language':'es'}});
+            const j=await resGeo.json();
+            direccion=j?.display_name||'';
+          }catch{}
+        }catch{}
+        const c=document.createElement('canvas');
+        const M=900;let w=img.width,h=img.height;if(w>M){h=h*(M/w);w=M;}
+        c.width=w;c.height=h;
+        const ctx=c.getContext('2d');
+        ctx.drawImage(img,0,0,w,h);
+        const lineas=[
+          `👤 ${coachName||''}`,
+          `🕒 ${new Date().toLocaleString('es-MX')}`,
+          direccion?`📍 ${direccion}`:'',
+          coordsTxt?`🌐 ${coordsTxt}`:'',
+        ].filter(Boolean);
+        const lh=Math.max(14,Math.round(w*0.032));
+        const padY=8,boxH=lineas.length*lh+padY*2;
+        ctx.fillStyle='rgba(0,0,0,.6)';
+        ctx.fillRect(0,h-boxH,w,boxH);
+        ctx.fillStyle='#fff';
+        ctx.font=`${lh-3}px sans-serif`;
+        ctx.textBaseline='top';
+        lineas.forEach((linea,i)=>{
+          let txt=linea;
+          while(ctx.measureText(txt).width>w-16&&txt.length>10)txt=txt.slice(0,-4)+'…';
+          ctx.fillText(txt,8,h-boxH+padY+i*lh);
+        });
+        onCapture(c.toDataURL('image/jpeg',.75));
+        setLoading(false);
+      };
+      img.src=ev.target.result;
+    };
+    r.readAsDataURL(f);
+  };
+  return <div>
+    <input ref={ref} type="file" accept="image/*" capture="environment" onChange={handle} style={{display:'none'}}/>
+    {photo?
+      <div style={{position:'relative'}}>
+        <img src={photo} alt="" style={{width:'100%',maxHeight:200,objectFit:'cover',borderRadius:8,border:'1px solid var(--border)'}}/>
+        <Btn onClick={()=>ref.current.click()} variant="ghost" style={{position:'absolute',top:6,right:6,background:'rgba(0,0,0,.55)',color:'#fff',borderRadius:8,fontSize:11,padding:'4px 8px'}}>📷</Btn>
+      </div>
+    :
+      <button onClick={()=>ref.current.click()} disabled={loading} style={{width:'100%',padding:'10px 12px',borderRadius:8,border:'2px dashed var(--border)',background:'var(--input)',cursor:loading?'wait':'pointer',textAlign:'center',color:'var(--dim)',fontSize:12}}>
+        {loading?'📍 Obteniendo ubicación...':'📷 Agregar evidencia (foto/plática)'}
+      </button>
+    }
+  </div>;
+}
 
 // ═══ AUDIO RECORDER ═══
 function AudioRecorder({onTranscript}){
@@ -796,7 +863,7 @@ function LoginScreen({onLogin}){
 function ArranqueTab({data,setData,team,toast,session}){
   const[form,setForm]=useState({date:today(),time:now(),photo:null,presentes:[],ausentes:[],notas:''});
   useEffect(()=>{setForm(f=>({...f,presentes:team.map(m=>m.nombre),ausentes:[]}));},[team]);
-  const toggle=name=>{setForm(f=>{const p=f.presentes.includes(name);return{...f,presentes:p?f.presentes.filter(n=>n!==name):[...f.presentes,name],ausentes:p?[...f.ausentes,{name,reason:'Falta justificada',detail:''}]:f.ausentes.filter(a=>a.name!==name)};});};
+  const toggle=name=>{setForm(f=>{const p=f.presentes.includes(name);return{...f,presentes:p?f.presentes.filter(n=>n!==name):[...f.presentes,name],ausentes:p?[...f.ausentes,{name,reason:'Falta justificada',detail:'',photo:null}]:f.ausentes.filter(a=>a.name!==name)};});};
   const updAus=(name,field,val)=>setForm(f=>({...f,ausentes:f.ausentes.map(a=>a.name===name?{...a,[field]:val}:a)}));
   const guardar=async()=>{
     const rec={id:uid(),type:'arranque',...form,registradoPor:session.user.nombre,rolRegistro:session.role,savedAt:new Date().toISOString()};
@@ -824,9 +891,12 @@ function ArranqueTab({data,setData,team,toast,session}){
             </div>
             <Btn onClick={()=>toggle(m.nombre)} variant={present?'success':'danger'} style={{padding:'3px 12px',fontSize:11}}>{present?'✓':'✗'}</Btn>
           </div>
-          {aus&&<div style={{marginTop:6,display:'flex',gap:6,flexWrap:'wrap'}}>
-            <Select value={aus.reason} onChange={v=>updAus(m.nombre,'reason',v)} options={ABSENCE_REASONS} style={{flex:1,minWidth:130}}/>
-            <Input placeholder="Detalle..." value={aus.detail} onChange={e=>updAus(m.nombre,'detail',e.target.value)} style={{flex:2,minWidth:130}}/>
+          {aus&&<div style={{marginTop:6,display:'flex',flexDirection:'column',gap:6}}>
+            <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+              <Select value={aus.reason} onChange={v=>updAus(m.nombre,'reason',v)} options={ABSENCE_REASONS} style={{flex:1,minWidth:130}}/>
+              <Input placeholder="Detalle..." value={aus.detail} onChange={e=>updAus(m.nombre,'detail',e.target.value)} style={{flex:2,minWidth:130}}/>
+            </div>
+            <PhotoCaptureGeo photo={aus.photo} onCapture={p=>updAus(m.nombre,'photo',p)} coachName={session.user.nombre}/>
           </div>}
         </div>;
       })}
@@ -1440,7 +1510,7 @@ function HistorialTab({data,setData,toast}){
   const del=id=>{if(!confirm('¿Eliminar?'))return;const upd={...data,records:data.records.filter(r=>r.id!==id)};setData(upd);saveData(upd);toast('Eliminado');};
   const detail=r=>{
     switch(r.type){
-      case'arranque':return <div style={{fontSize:13}}><p><b>Presentes:</b> {r.presentes?.length||0} · <b>Ausentes:</b> {r.ausentes?.length||0}</p>{r.ausentes?.map(a=><p key={a.name} style={{color:'var(--red)',margin:'2px 0'}}>✗ {a.name}: {a.reason}{a.detail?` — ${a.detail}`:''}</p>)}{r.notas&&<p style={{marginTop:6}}>{r.notas}</p>}{r.photo&&<img src={r.photo} alt="" style={{width:'100%',maxHeight:120,objectFit:'cover',borderRadius:8,marginTop:6}}/>}</div>;
+      case'arranque':return <div style={{fontSize:13}}><p><b>Presentes:</b> {r.presentes?.length||0} · <b>Ausentes:</b> {r.ausentes?.length||0}</p>{r.ausentes?.map(a=><div key={a.name} style={{margin:'2px 0'}}><p style={{color:'var(--red)',margin:0}}>✗ {a.name}: {a.reason}{a.detail?` — ${a.detail}`:''}</p>{a.photo&&<img src={a.photo} alt="" style={{width:'100%',maxHeight:160,objectFit:'cover',borderRadius:8,marginTop:4}}/>}</div>)}{r.notas&&<p style={{marginTop:6}}>{r.notas}</p>}{r.photo&&<img src={r.photo} alt="" style={{width:'100%',maxHeight:120,objectFit:'cover',borderRadius:8,marginTop:6}}/>}</div>;
       case'permiso':return <div style={{fontSize:13}}><p><b>{r.vendedor}</b> — {r.tipo}</p><p>{r.motivo}</p>{r.autorizado_por&&<p style={{color:'var(--dim)'}}>Autorizado: {r.autorizado_por}</p>}</div>;
       case'cierre':return <div style={{fontSize:13}}>{r.resultado&&<p><b>Resultado:</b> {r.resultado}</p>}{r.pendientes&&<p><b>Pendientes:</b> {r.pendientes}</p>}{r.incidencias&&<p><b>Incidencias:</b> {r.incidencias}</p>}</div>;
       case'plan':return <div style={{fontSize:13}}>{r.objetivo&&<p><b>Objetivo:</b> {r.objetivo}</p>}{r.prioridades&&<p><b>Prioridades:</b> {r.prioridades}</p>}</div>;
