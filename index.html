@@ -218,14 +218,50 @@ async function fetchRankingMensual(){
     const res=await fetch(gvizUrl(RANKING_GID));
     const text=await res.text();
     const rows=parseGviz(text);
+    // Rows 0 and 1 are the sheet's own (merged) header rows — not stripped by gviz for this tab.
+    const h1=rows[0]||[]; // merged section titles (e.g. "CERTIFICACIÓN BRONCE")
+    const h2=rows[1]||[]; // individual column names
+
+    // Ranking columns are added monthly ("RANKING ENERO'22" ... "RANKING AGOSTO 26"),
+    // so find them dynamically instead of assuming a fixed index. The LAST one is the current month,
+    // immediately followed by OBSERVACIONES.
+    const rankingCols=[];
+    h2.forEach((v,i)=>{if(String(v||'').trim().toUpperCase().startsWith('RANKING '))rankingCols.push(i);});
+    const idxRankingActual=rankingCols.length?rankingCols[rankingCols.length-1]:null;
+    const idxObs=idxRankingActual!=null&&String(h2[idxRankingActual+1]||'').trim().toUpperCase()==='OBSERVACIONES'?idxRankingActual+1:null;
+    // Monthly install columns (pairs of Instalaciones/NPPF) run from col 14 up to the first ranking column.
+    const installsEnd=rankingCols.length?rankingCols[0]:undefined;
+
+    // Certification blocks (ENTRENAMIENTO / BRONCE / PLATA / ORO), each ending in a
+    // "TOTAL CERTIFICACIONES COMPLETAS" column. Located dynamically for the same reason.
+    const totalCols=[];
+    h2.forEach((v,i)=>{if(String(v||'').trim().toUpperCase()==='TOTAL CERTIFICACIONES COMPLETAS')totalCols.push(i);});
+    const blocks={};
+    totalCols.forEach(totalIdx=>{
+      let start=totalIdx;
+      while(start>0&&String(h2[start-1]||'').trim()!==''&&String(h2[start-1]||'').trim().toUpperCase()!=='TOTAL CERTIFICACIONES COMPLETAS')start--;
+      let tierTitle='';
+      for(let k=start;k<=totalIdx;k++)if(h1[k])tierTitle=String(h1[k]).toUpperCase();
+      let tier=null;
+      if(tierTitle.includes('ENTRENAMIENTO'))tier='ENTRENAMIENTO';
+      else if(tierTitle.includes('BRONCE'))tier='BRONCE';
+      else if(tierTitle.includes('PLATA'))tier='PLATA';
+      else if(tierTitle.includes('ORO'))tier='ORO';
+      if(!tier)return;
+      const courses=[];
+      for(let k=start;k<totalIdx;k++)courses.push({idx:k,label:String(h2[k]||'').trim()});
+      blocks[tier]={courses,totalIdx};
+    });
+
     const map={};
-    rows.forEach(r=>{
+    rows.forEach((r,ri)=>{
+      if(ri<2)return; // skip the two header rows
       const numA=String(r[0]||'').trim(); // Número de Empleado (old format)
       const numB=String(r[1]||'').trim(); // Número de Empleado TGS
       const numC=String(r[2]||'').trim(); // HOMOLOGADO
       const nombre=String(r[3]||'').trim();
-      if(!nombre||nombre==='EMPLEADO')return;
-      const vals=r.slice(14);
+      if(!nombre||nombre==='EMPLEADO'||nombre==='VACANTE')return;
+      const vals=r.slice(14,installsEnd);
       const installs=[];
       for(let i=0;i<vals.length;i+=2){
         const v=Number(vals[i]);
@@ -235,10 +271,39 @@ async function fetchRankingMensual(){
       while(lastNonZero>=0&&installs[lastNonZero]===0)lastNonZero--;
       const relevant=installs.slice(0,lastNonZero+1);
       const last3=relevant.slice(-3);
+
+      // Official ranking badge + observation, as set by the sheet itself (not recomputed here).
+      const badgeOficial=idxRankingActual!=null?String(r[idxRankingActual]||'').trim().toUpperCase():'';
+      const obsOficial=idxObs!=null?String(r[idxObs]||'').trim():'';
+
+      // Which certification block applies to this person: their current tier when it's
+      // BRONCE/PLATA/ORO/ENTRENAMIENTO, otherwise (e.g. CONDICIONADO) fall back to whichever
+      // block actually has progress recorded.
+      let certTier=['BRONCE','PLATA','ORO','ENTRENAMIENTO'].includes(badgeOficial)?badgeOficial:null;
+      if(!certTier){
+        let best=null,bestTotal=0;
+        Object.entries(blocks).forEach(([tier,b])=>{
+          const t=Number(r[b.totalIdx])||0;
+          if(t>bestTotal){bestTotal=t;best=tier;}
+        });
+        certTier=best;
+      }
+      let certFaltantes=[],certTotal=null;
+      if(certTier&&blocks[certTier]){
+        const b=blocks[certTier];
+        certTotal=Number(r[b.totalIdx])||0;
+        certFaltantes=b.courses.filter(c=>String(r[c.idx]||'').trim().toUpperCase()!=='APROBADO').map(c=>c.label);
+      }
+
       const entry={
         nombre,
         ultimos3meses:last3,
         promedioMensual:last3.length?Math.round(last3.reduce((a,b)=>a+b,0)/last3.length):0,
+        badgeOficial:badgeOficial||null,
+        obsOficial,
+        certTier,
+        certFaltantes,
+        certTotal,
       };
       // Store under ALL keys for cross-matching
       [numA,numB,numC].forEach(k=>{if(k&&k!=='INTERNO'&&k!=='EXTERNO'&&k!=='VACANTE')map[k]=entry;});
@@ -259,27 +324,29 @@ function enrichTeam(team,rankEnt,rankMen){
     const keys=[m.numEmp,m.numEmpB].filter(k=>k&&k!=='INTERNO'&&k!=='EXTERNO');
     const re=keys.reduce((found,k)=>found||rankEnt[k],null)||reByName[m.nombre]||null;
     const rm=keys.reduce((found,k)=>found||rankMen[k],null)||rmByName[m.nombre]||null;
-    // Calculate badge from ranking data
-    let badge=re?.ranking||null;
+    // Badge is whatever the sheet itself has already decided (never recomputed here):
+    // re.ranking for employees still on the ENTRENAMIENTO tab, otherwise the official
+    // "RANKING <mes>" column read from the main roster tab.
+    let badge=re?.ranking||rm?.badgeOficial||null;
     let mesesEnRanking=0;
-    if(!badge&&rm){
-      const sum3=rm.ultimos3meses.reduce((a,b)=>a+b,0);
-      const avg=rm.promedioMensual;
-      badge=sum3>=60?'PLATINO':avg>=12?'ORO':avg>=8?'PLATA':avg>0?'CONDICIONADO':null;
-      // Count consecutive months at similar level
+    if(rm){
+      // Count consecutive months at a similar install level (context only, not the badge itself).
       const u=rm.ultimos3meses;
       if(u.length>=2){
         const lvl=u[u.length-1]>=20?20:u[u.length-1]>=12?12:u[u.length-1]>=8?8:0;
         mesesEnRanking=u.filter(v=>(v>=20&&lvl>=20)||(v>=12&&v<20&&lvl>=12&&lvl<20)||(v>=8&&v<12&&lvl>=8&&lvl<12)||(v<8&&lvl<8)).length;
       }
     }
-    // Missing certifications
-    const certFaltantes=[];
+    // Missing certifications: entrenamiento tab for rookies, otherwise the BRONCE/PLATA/ORO
+    // block matching their current tier (read straight from the roster sheet).
+    let certFaltantes=[];
     if(re){
       if(re.certActitud!=='APROBADO')certFaltantes.push('Actitud e Imagen');
       if(re.certSist1!=='APROBADO')certFaltantes.push('Sistémica I');
       if(re.certSist2!=='APROBADO')certFaltantes.push('Sistémica II');
       if(re.certSist3!=='APROBADO')certFaltantes.push('Sistémica III');
+    }else if(rm?.certFaltantes?.length){
+      certFaltantes=rm.certFaltantes;
     }
     return{...m,
       rankingEnt:re,
@@ -294,6 +361,7 @@ function enrichTeam(team,rankEnt,rankMen){
 const RANK_COLORS={
   'ENTRENAMIENTO':{bg:'#EDE9FE',color:'#7C3AED',icon:'🎓'},
   'CONDICIONADO':{bg:'#FEF3C7',color:'#D97706',icon:'⚠️'},
+  'BRONCE':{bg:'#FDE9D9',color:'#B45309',icon:'🥉'},
   'PLATA':{bg:'#F1F5F9',color:'#64748B',icon:'🥈'},
   'ORO':{bg:'#FEF9C3',color:'#A16207',icon:'🥇'},
   'PLATINO':{bg:'#E0F2FE',color:'#0369A1',icon:'🏆'},
@@ -363,6 +431,7 @@ function MemberInfo({m,expanded,onToggle}){
         {rm&&<div>
           <span>Prom. mensual: <b>{rm.promedioMensual} ins</b></span>
           {rm.ultimos3meses.length>0&&<span style={{marginLeft:8,color:'var(--dim)'}}>({rm.ultimos3meses.join(', ')})</span>}
+          {rm.obsOficial&&rm.obsOficial!=='-'&&<p style={{margin:'4px 0 0',color:'var(--dim)',fontStyle:'italic'}}>{rm.obsOficial}</p>}
         </div>}
       </div>
     }
@@ -619,9 +688,9 @@ function FeedbackTab({data,setData,team,toast,session}){
           }
 
           {/* Observations */}
-          {selectedMember.rankingEnt?.obs&&selectedMember.rankingEnt.obs!=='-'&&
-            <p style={{fontSize:11,color:'var(--yellow)',fontStyle:'italic',marginTop:4}}>⚠️ {selectedMember.rankingEnt.obs}</p>
-          }
+          {(()=>{const obs=selectedMember.rankingEnt?.obs||selectedMember.rankingMen?.obsOficial;
+            return obs&&obs!=='-'&&<p style={{fontSize:11,color:'var(--yellow)',fontStyle:'italic',marginTop:4}}>⚠️ {obs}</p>;
+          })()}
         </div>
       }
       <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:12}}><span style={{fontSize:11,fontWeight:700,color:'var(--dim)'}}>SEMÁFORO:</span><StatusBadge status={form.semaforo} onClick={()=>setForm({...form,semaforo:cycleS(form.semaforo)})}/></div>
@@ -749,7 +818,9 @@ function DashboardTab({data,team,coaches,session,setTab}){
         </div>
       }
       {/* Observaciones */}
-      {re?.obs&&re.obs!=='-'&&<p style={{fontSize:11,color:'var(--yellow)',fontStyle:'italic'}}>⚠️ {re.obs}</p>}
+      {(()=>{const obs=re?.obs||rm2?.obsOficial;
+        return obs&&obs!=='-'&&<p style={{fontSize:11,color:'var(--yellow)',fontStyle:'italic'}}>⚠️ {obs}</p>;
+      })()}
     </div>;
   };
 
