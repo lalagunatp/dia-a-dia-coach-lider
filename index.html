@@ -167,9 +167,16 @@ function startOfMonth(date){const d=new Date(date.getFullYear(),date.getMonth(),
 function endOfMonth(date){const d=new Date(date.getFullYear(),date.getMonth()+1,0);d.setHours(23,59,59,999);return d;}
 function enRango(fecha,inicio,fin){return fecha&&fecha>=inicio&&fecha<=fin;}
 const fmtDateObj=d=>d?`${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`:'';
+const fmtMoney=n=>'$'+Number(n||0).toLocaleString('es-MX',{minimumFractionDigits:2,maximumFractionDigits:2});
 const whatsappUrl=text=>`https://wa.me/?text=${encodeURIComponent(text)}`;
+// Este estatus es la espera normal del primer pago del cliente, no algo accionable — no se muestra.
+const ESTATUS_PAGO_OCULTO='COMISION RETENIDA AL PAGO DE LA PRIMER FACTURA DE SERVICIO';
+const motivoNoPagado=c=>c.estatusPago&&c.estatusPago.toUpperCase()!==ESTATUS_PAGO_OCULTO?c.estatusPago:'';
 function textoCuentasSinPagar(m,cuentas){
-  const lineas=cuentas.map(c=>`• ${c.cuenta} · ${c.cliente} · ${fmtDateObj(c.fechaInstalacion)} · ${c.estatusPago}`).join('\n');
+  const lineas=cuentas.map(c=>{
+    const motivo=motivoNoPagado(c);
+    return `• ${c.cuenta} · ${c.cliente} · ${fmtDateObj(c.fechaInstalacion)} · ${c.plan} · ${fmtMoney(c.importe)}${motivo?' · '+motivo:''}`;
+  }).join('\n');
   return `📋 Cuentas sin pagar de ${m.nombre} (2 meses anteriores):\n\n${lineas}`;
 }
 
@@ -415,7 +422,7 @@ async function fetchCuentasComisiones(numEmps){
     const lotes=chunk(numEmps,40);
     await Promise.all(lotes.map(async lote=>{
       const cond=lote.map(n=>`C = '${n}'`).join(' or ');
-      const q=`select B,C,H,K,U where ${cond}`;
+      const q=`select B,C,H,K,L,T,U where ${cond}`;
       const res=await fetch(gvizUrlSheet(COMISIONES_SHEET,q));
       const text=await res.text();
       const rows=parseGviz(text);
@@ -426,7 +433,9 @@ async function fetchCuentasComisiones(numEmps){
           cuenta:String(r[0]||'').trim(),
           cliente:String(r[2]||'').trim(),
           fechaInstalacion:parseFechaDMY(r[3]),
-          estatusPago:String(r[4]||'').trim(),
+          plan:String(r[4]||'').trim(),
+          importe:Number(r[5])||0,
+          estatusPago:String(r[6]||'').trim(),
         };
         (byHomologado[numHom]=byHomologado[numHom]||[]).push(c);
       });
@@ -1076,9 +1085,14 @@ function DashboardTab({data,team,coaches,session,setTab}){
         return <div style={{padding:'6px 8px',background:'var(--rbg)',borderRadius:6,marginBottom:6}}>
           <div style={{fontSize:11,fontWeight:700,color:'var(--red)',marginBottom:3}}>💰 Cuentas sin pagar ({sinPagar.length} · {pct}% de {totalPeriodo} instaladas)</div>
           {sinPagar.map((c,i)=>
-            <div key={i} style={{fontSize:11,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:i<sinPagar.length-1?'1px solid var(--border)':'none'}}>
-              <span>{c.cuenta} · {c.cliente} · {fmtDateObj(c.fechaInstalacion)}</span>
-              <span style={{color:'var(--red)',fontWeight:600,textAlign:'right'}}>{c.estatusPago}</span>
+            <div key={i} style={{fontSize:11,color:'var(--dim)',padding:'4px 0',borderBottom:i<sinPagar.length-1?'1px solid var(--border)':'none'}}>
+              <div style={{display:'flex',justifyContent:'space-between',gap:6}}>
+                <span>{c.cuenta} · {c.cliente} · {fmtDateObj(c.fechaInstalacion)}</span>
+              </div>
+              <div style={{display:'flex',justifyContent:'space-between',gap:6,marginTop:1}}>
+                <span>{c.plan}</span>
+                <span style={{color:'var(--red)',fontWeight:600,textAlign:'right'}}>{fmtMoney(c.importe)}{motivoNoPagado(c)&&` · ${motivoNoPagado(c)}`}</span>
+              </div>
             </div>
           )}
           <a href={whatsappUrl(textoCuentasSinPagar(m,sinPagar))} target="_blank" rel="noopener noreferrer"
