@@ -922,7 +922,6 @@ function DashboardTab({data,team,coaches,session,setTab}){
   const recs=data.records;
   const rm=recs.filter(thisMonth);
   const[expanded,setExpanded]=useState(null);
-  const[expandedSinPagar,setExpandedSinPagar]=useState(null);
 
   const arranques=rm.filter(r=>r.type==='arranque').length;
   const cierres=rm.filter(r=>r.type==='cierre').length;
@@ -947,7 +946,6 @@ function DashboardTab({data,team,coaches,session,setTab}){
   let metaInstalTotal=0;
   const rechazosMotivos={};let rechazosTotalN=0;
   const asignacionesTotalN={};
-  const cuentasSinPagarLista=[];
   vendedores.forEach(m=>{
     const f=funnelPeriodo(m.ventas,rangoIni,rangoFin);
     ventasTotal.oportunidades+=f.oportunidades;
@@ -959,12 +957,9 @@ function DashboardTab({data,team,coaches,session,setTab}){
     Object.entries(rz.motivos).forEach(([mo,n])=>{rechazosMotivos[mo]=(rechazosMotivos[mo]||0)+n;});
     const asig=asignacionesActuales(m.ventas);
     Object.entries(asig).forEach(([et,n])=>{asignacionesTotalN[et]=(asignacionesTotalN[et]||0)+n;});
-    const sinPagar=cuentasSinPagar(m.cuentasCom,now);
-    if(sinPagar.length)cuentasSinPagarLista.push({m,cuentas:sinPagar});
   });
   const motivosOrdenados=Object.entries(rechazosMotivos).sort((a,b)=>b[1]-a[1]);
   const asignacionesOrdenadas=Object.entries(asignacionesTotalN).sort((a,b)=>b[1]-a[1]);
-  const totalCuentasSinPagar=cuentasSinPagarLista.reduce((s,x)=>s+x.cuentas.length,0);
 
   const semaforoMap={};
   recs.filter(r=>r.type==='feedback').sort((a,b)=>a.savedAt.localeCompare(b.savedAt)).forEach(r=>{
@@ -1057,7 +1052,24 @@ function DashboardTab({data,team,coaches,session,setTab}){
           <div style={{display:'flex',justifyContent:'space-between'}}><span>Semana:</span><span>{fSem.oportunidades} op · {fSem.validadas} val · {fSem.instaladas} inst</span></div>
           <div style={{display:'flex',justifyContent:'space-between'}}><span>Mes:</span><span>{fMes.oportunidades} op · {fMes.validadas} val · {fMes.instaladas} inst</span></div>
           {meta>0&&<div style={{display:'flex',justifyContent:'space-between'}}><span>Meta del mes:</span><b>{fMes.instaladas}/{meta}</b></div>}
-          {sinPagar.length>0&&<p style={{color:'var(--red)',fontWeight:600,marginTop:4}}>💰 {sinPagar.length} cuenta(s) sin pagar (últ. 2 meses)</p>}
+        </div>;
+      })()}
+      {/* Cuentas sin pagar de este vendedor (2 meses anteriores al actual) */}
+      {(()=>{
+        const sinPagar=cuentasSinPagar(m.cuentasCom,now);
+        if(!sinPagar.length)return null;
+        return <div style={{padding:'6px 8px',background:'var(--rbg)',borderRadius:6,marginBottom:6}}>
+          <div style={{fontSize:11,fontWeight:700,color:'var(--red)',marginBottom:3}}>💰 Cuentas sin pagar ({sinPagar.length})</div>
+          {sinPagar.map((c,i)=>
+            <div key={i} style={{fontSize:11,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:i<sinPagar.length-1?'1px solid var(--border)':'none'}}>
+              <span>{c.cuenta} · {c.cliente} · {fmtDateObj(c.fechaInstalacion)}</span>
+              <span style={{color:'var(--red)',fontWeight:600,textAlign:'right'}}>{c.estatusPago}</span>
+            </div>
+          )}
+          <a href={whatsappUrl(textoCuentasSinPagar(m,sinPagar))} target="_blank" rel="noopener noreferrer"
+            style={{display:'inline-flex',alignItems:'center',gap:6,marginTop:8,padding:'6px 12px',borderRadius:8,background:'#25D366',color:'#fff',fontSize:12,fontWeight:700,textDecoration:'none'}}>
+            📲 Enviar por WhatsApp
+          </a>
         </div>;
       })()}
     </div>;
@@ -1125,40 +1137,6 @@ function DashboardTab({data,team,coaches,session,setTab}){
       </Card>
     }
 
-    {totalCuentasSinPagar>0&&
-      <Card title={`💰 Cuentas sin pagar — 2 meses anteriores (${totalCuentasSinPagar})`}>
-        {cuentasSinPagarLista.map(({m,cuentas})=>{
-          const isExp=expandedSinPagar===(m.numEmp||m.nombre);
-          return <div key={m.numEmp||m.nombre} style={{marginBottom:6}}>
-            <div onClick={()=>setExpandedSinPagar(isExp?null:(m.numEmp||m.nombre))} style={{
-              display:'flex',justifyContent:'space-between',alignItems:'center',cursor:'pointer',
-              padding:'8px 10px',borderRadius:isExp?'8px 8px 0 0':8,
-              border:'1px solid var(--border)',borderBottom:isExp?'none':undefined,
-              background:'var(--bg)',
-            }}>
-              <span style={{fontWeight:700,fontSize:12}}>{m.nombre.split(' ').slice(0,3).join(' ')}</span>
-              <div style={{display:'flex',alignItems:'center',gap:6}}>
-                <span style={{fontSize:11,fontWeight:700,color:'var(--red)',background:'var(--rbg)',padding:'2px 8px',borderRadius:10}}>{cuentas.length}</span>
-                <span style={{fontSize:12,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
-              </div>
-            </div>
-            {isExp&&<div style={{border:'1px solid var(--border)',borderTop:'none',borderRadius:'0 0 8px 8px',padding:'8px 10px'}}>
-              {cuentas.map((c,i)=>
-                <div key={i} style={{fontSize:11,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:i<cuentas.length-1?'1px solid var(--border)':'none'}}>
-                  <span>{c.cuenta} · {c.cliente} · {fmtDateObj(c.fechaInstalacion)}</span>
-                  <span style={{color:'var(--red)',fontWeight:600,textAlign:'right'}}>{c.estatusPago}</span>
-                </div>
-              )}
-              <a href={whatsappUrl(textoCuentasSinPagar(m,cuentas))} target="_blank" rel="noopener noreferrer"
-                style={{display:'inline-flex',alignItems:'center',gap:6,marginTop:8,padding:'6px 12px',borderRadius:8,background:'#25D366',color:'#fff',fontSize:12,fontWeight:700,textDecoration:'none'}}>
-                📲 Enviar por WhatsApp
-              </a>
-            </div>}
-          </div>;
-        })}
-      </Card>
-    }
-
     <Card title="🚦 Semáforo del equipo">
       <SemBar/>
       <div style={{display:'flex',justifyContent:'space-around',marginTop:8,fontSize:11,color:'var(--dim)'}}>
@@ -1171,6 +1149,7 @@ function DashboardTab({data,team,coaches,session,setTab}){
         const sem=semaforoMap[m.nombre];
         const isExp=expanded===m.nombre;
         const lastFb=recs.filter(r=>r.type==='feedback'&&r.vendedor===m.nombre).sort((a,b)=>b.savedAt.localeCompare(a.savedAt))[0];
+        const sinPagarN=cuentasSinPagar(m.cuentasCom,now).length;
         return <div key={m.numEmp||m.nombre}>
           <div onClick={()=>setExpanded(isExp?null:m.nombre)} style={{
             display:'flex',alignItems:'center',justifyContent:'space-between',
@@ -1184,6 +1163,7 @@ function DashboardTab({data,team,coaches,session,setTab}){
                 <span style={{fontSize:13,fontWeight:600}}>{m.nombre.split(' ').slice(0,3).join(' ')}</span>
                 <RankBadge badge={m.badge}/>
                 {m.obs&&<span style={{fontSize:10,fontWeight:600,color:'var(--yellow)'}}>⚠️ {m.obs}</span>}
+                {sinPagarN>0&&<span style={{fontSize:10,fontWeight:700,color:'var(--red)'}}>💰 {sinPagarN} sin pagar</span>}
               </div>
               {m.rankingMen&&<div style={{fontSize:10,color:'var(--dim)',marginTop:1}}>
                 Prom: {m.rankingMen.promedioMensual} ins/mes
