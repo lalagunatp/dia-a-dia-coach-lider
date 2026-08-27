@@ -449,12 +449,17 @@ function funnelPeriodo(ventas,inicio,fin){
 function rechazosPeriodo(ventas,inicio,fin){
   return(ventas||[]).filter(v=>v.estatus==='Rechazada'&&enRango(v.creacion,inicio,fin));
 }
+// Quita el sufijo de versión (V1, v9, V12...) del nombre del plan para agrupar todas las
+// versiones como un solo plan. "TV" no es versión (no lleva dígito) y se conserva tal cual.
+function normalizarPlan(nombre){
+  return String(nombre||'').replace(/\s*\bV\d+\b\s*/gi,' ').trim().replace(/\s+/g,' ')||'Sin plan';
+}
 // Instalaciones de un vendedor en un periodo (semana o mes), agrupadas por plan.
 function instalacionesPorPlan(ventas,inicio,fin){
   const out={};
   (ventas||[]).forEach(v=>{
     if(v.activacion&&enRango(v.activacion,inicio,fin)){
-      const p=v.plan||'Sin plan';
+      const p=normalizarPlan(v.plan);
       out[p]=(out[p]||0)+1;
     }
   });
@@ -1161,7 +1166,7 @@ function DashboardTab({data,team,coaches,session,setTab}){
       <Card title={`📦 Instalaciones por plan — ${periodoVentas}`}>
         <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
           {planesOrdenados.map(([p,n])=>
-            <span key={p} style={{fontSize:12,fontWeight:600,padding:'4px 10px',borderRadius:16,background:'var(--accent-light)',color:'var(--accent)'}}>{p}: {n}</span>
+            <span key={p} style={{fontSize:12,fontWeight:600,padding:'4px 10px',borderRadius:16,background:'var(--accent-light)',color:'var(--accent)'}}>{p}: {n} ({ventasTotal.instaladas?Math.round(n/ventasTotal.instaladas*100):0}%)</span>
           )}
         </div>
       </Card>
