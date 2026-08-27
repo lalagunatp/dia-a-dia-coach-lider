@@ -35,6 +35,7 @@ const RANKING_ENT_GID='1643927631';
 const RANKING_GID='1495976066';
 const BASEDATOS_SHEET='Base de Datos y Comisiones'; // oportunidades: creación/validación/activación, rechazos, asignación
 const COMISIONES_SHEET='COMISIONES'; // cuentas: estatus de pago por cuenta
+const OSPORINSTALAR_SHEET='OS POR INSTALAR'; // un renglón por intento de asignación de técnico a una OS
 const DOPOST_URL='https://script.google.com/macros/s/AKfycbx7DYc01sJV7QJsA9kVdtgW0JOZdyySjLqqHzszA9qsDE3xt8kpr7SfrdF2KqseVTr0/exec';
 const POSITIONS_ALLOWED=['DIRECTOR DISTRITAL','LIDER VENTAS','LIDER DE CANALES Y VENTA TECNICO','COACH VENTAS','COACH DE VENTAS TECNICO','COACH PROMOVENDEDOR PUNTO DE VENTA','VENDEDOR','PROMOVENDEDOR PUNTO DE VENTA'];
 // Meta semanal de instalaciones por ranking (misma convención que informeseguimiento/avancecomisiones).
@@ -389,23 +390,24 @@ async function fetchVentas(numEmps){
     const lotes=chunk(numEmps,40);
     await Promise.all(lotes.map(async lote=>{
       const cond=lote.map(n=>`V = ${n}`).join(' or ');
-      const q=`select D,E,F,K,L,N,O,P,Q,V where (${cond}) and (D >= date '${cutoffStr}' or E >= date '${cutoffStr}' or F >= date '${cutoffStr}')`;
+      const q=`select A,D,E,F,K,L,N,O,P,Q,V where (${cond}) and (D >= date '${cutoffStr}' or E >= date '${cutoffStr}' or F >= date '${cutoffStr}')`;
       const res=await fetch(gvizUrlSheet(BASEDATOS_SHEET,q));
       const text=await res.text();
       const rows=parseGviz(text);
       rows.forEach(r=>{
-        const numVendedor=String(r[9]||'').trim();
+        const numVendedor=String(r[10]||'').trim();
         if(!numVendedor)return;
         const v={
-          creacion:parseFechaDMY(r[0]),
-          validacion:parseFechaDMY(r[1]),
-          activacion:parseFechaDMY(r[2]),
-          estatus:String(r[3]||'').trim(),
-          motivoRechazo:String(r[4]||'').trim(),
-          estatusII:String(r[5]||'').trim(),
-          cuenta:String(r[6]||'').trim(),
-          plan:String(r[7]||'').trim(),
-          oportunidad:String(r[8]||'').trim(),
+          os:String(r[0]||'').trim(),
+          creacion:parseFechaDMY(r[1]),
+          validacion:parseFechaDMY(r[2]),
+          activacion:parseFechaDMY(r[3]),
+          estatus:String(r[4]||'').trim(),
+          motivoRechazo:String(r[5]||'').trim(),
+          estatusII:String(r[6]||'').trim(),
+          cuenta:String(r[7]||'').trim(),
+          plan:String(r[8]||'').trim(),
+          oportunidad:String(r[9]||'').trim(),
         };
         (byVendedor[numVendedor]=byVendedor[numVendedor]||[]).push(v);
       });
@@ -442,6 +444,34 @@ async function fetchCuentasComisiones(numEmps){
     }));
     return byHomologado;
   }catch(e){console.error('Comisiones fetch error:',e);return{};}
+}
+
+// Cuántas veces se ha asignado un técnico a cada OS (un renglón por intento en OS POR INSTALAR).
+async function fetchAsignacionesPorOS(osList){
+  if(!osList||!osList.length)return{};
+  try{
+    const conteo={};
+    const lotes=chunk(osList,40);
+    await Promise.all(lotes.map(async lote=>{
+      const cond=lote.map(os=>`B = '${os}'`).join(' or ');
+      const q=`select B where ${cond}`;
+      const res=await fetch(gvizUrlSheet(OSPORINSTALAR_SHEET,q));
+      const text=await res.text();
+      const rows=parseGviz(text);
+      rows.forEach(r=>{
+        const os=String(r[0]||'').trim();
+        if(!os)return;
+        conteo[os]=(conteo[os]||0)+1;
+      });
+    }));
+    return conteo;
+  }catch(e){console.error('OS por instalar fetch error:',e);return{};}
+}
+
+// Oportunidades validadas en los últimos 30 días que todavía no se instalan.
+function pendientesInstalar30d(ventas,ref){
+  const desde=new Date(ref);desde.setDate(desde.getDate()-30);desde.setHours(0,0,0,0);
+  return(ventas||[]).filter(v=>v.estatus!=='Rechazada'&&v.validacion&&!v.activacion&&enRango(v.validacion,desde,ref));
 }
 
 // Funnel de oportunidades de un vendedor en un periodo (semana o mes): creadas / validadas / instaladas.
@@ -689,9 +719,14 @@ function LoginScreen({onLogin}){
       // (a veces D/numEmp, a veces B/numEmpB según la persona) — se consultan ambas y se cruzan las dos al final.
       const allIds=[...new Set([...team,...coaches].flatMap(m=>[m.numEmp,m.numEmpB]).filter(Boolean))];
       const[ventasByVendedor,cuentasByHomologado]=await Promise.all([fetchVentas(allIds),fetchCuentasComisiones(allIds)]);
+      // Cuántas veces se ha reasignado cada OS que sigue validada sin instalar (OS POR INSTALAR).
+      const todasLasVentas=Object.values(ventasByVendedor).flat();
+      const osCandidatos=[...new Set(pendientesInstalar30d(todasLasVentas,new Date()).map(v=>v.os).filter(Boolean))];
+      const asignacionesPorOS=await fetchAsignacionesPorOS(osCandidatos);
       const attachVentas=m=>({...m,
         ventas:ventasByVendedor[m.numEmp]||ventasByVendedor[m.numEmpB]||[],
         cuentasCom:cuentasByHomologado[m.numEmp]||cuentasByHomologado[m.numEmpB]||[],
+        asignacionesPorOS,
       });
       // Enrich with ranking data
       team=sortByRanking(enrichTeam(team,rankEnt,rankMen).map(attachVentas));
@@ -1082,6 +1117,22 @@ function DashboardTab({data,team,coaches,session,setTab}){
           <div style={{display:'flex',justifyContent:'space-between'}}><span>Semana:</span><span>{fSem.oportunidades} op · {fSem.validadas} val · {fSem.instaladas} inst</span></div>
           <div style={{display:'flex',justifyContent:'space-between'}}><span>Mes:</span><span>{fMes.oportunidades} op · {fMes.validadas} val · {fMes.instaladas} inst</span></div>
           {meta>0&&<div style={{display:'flex',justifyContent:'space-between'}}><span>Meta del mes:</span><b>{fMes.instaladas}/{meta}</b></div>}
+        </div>;
+      })()}
+      {/* Validadas en los últimos 30 días que todavía no se instalan */}
+      {(()=>{
+        const pendientes=pendientesInstalar30d(m.ventas,now);
+        if(!pendientes.length)return null;
+        return <div style={{padding:'6px 8px',background:'var(--ybg)',borderRadius:6,marginBottom:6}}>
+          <div style={{fontSize:11,fontWeight:700,color:'var(--yellow)',marginBottom:3}}>⏳ Validadas sin instalar, últ. 30 días ({pendientes.length})</div>
+          {pendientes.map((v,i)=>{
+            const dias=Math.floor((now-v.validacion)/86400000);
+            const asig=(m.asignacionesPorOS||{})[v.os]||0;
+            return <div key={i} style={{fontSize:11,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:i<pendientes.length-1?'1px solid var(--border)':'none'}}>
+              <span>{v.cuenta} · {v.os}</span>
+              <span>{dias} día{dias!==1?'s':''} sin activar · {asig} asignación{asig!==1?'es':''}</span>
+            </div>;
+          })}
         </div>;
       })()}
       {/* Cuentas sin pagar de este vendedor (2 meses anteriores al actual) */}
