@@ -167,6 +167,11 @@ function startOfMonth(date){const d=new Date(date.getFullYear(),date.getMonth(),
 function endOfMonth(date){const d=new Date(date.getFullYear(),date.getMonth()+1,0);d.setHours(23,59,59,999);return d;}
 function enRango(fecha,inicio,fin){return fecha&&fecha>=inicio&&fecha<=fin;}
 const fmtDateObj=d=>d?`${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`:'';
+const whatsappUrl=text=>`https://wa.me/?text=${encodeURIComponent(text)}`;
+function textoCuentasSinPagar(m,cuentas){
+  const lineas=cuentas.map(c=>`• ${c.cuenta} · ${c.cliente} · ${fmtDateObj(c.fechaInstalacion)} · ${c.estatusPago}`).join('\n');
+  return `📋 Cuentas sin pagar de ${m.nombre} (2 meses anteriores):\n\n${lineas}`;
+}
 
 async function fetchPlantilla(){
   const res=await fetch(gvizUrl(PLANTILLA_GID));
@@ -917,6 +922,7 @@ function DashboardTab({data,team,coaches,session,setTab}){
   const recs=data.records;
   const rm=recs.filter(thisMonth);
   const[expanded,setExpanded]=useState(null);
+  const[expandedSinPagar,setExpandedSinPagar]=useState(null);
 
   const arranques=rm.filter(r=>r.type==='arranque').length;
   const cierres=rm.filter(r=>r.type==='cierre').length;
@@ -1121,17 +1127,35 @@ function DashboardTab({data,team,coaches,session,setTab}){
 
     {totalCuentasSinPagar>0&&
       <Card title={`💰 Cuentas sin pagar — 2 meses anteriores (${totalCuentasSinPagar})`}>
-        {cuentasSinPagarLista.map(({m,cuentas})=>
-          <div key={m.numEmp||m.nombre} style={{marginBottom:8}}>
-            <div style={{fontWeight:700,fontSize:12,marginBottom:2}}>{m.nombre.split(' ').slice(0,3).join(' ')}</div>
-            {cuentas.map((c,i)=>
-              <div key={i} style={{fontSize:11,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'2px 0'}}>
-                <span>{c.cuenta} · {c.cliente} · {fmtDateObj(c.fechaInstalacion)}</span>
-                <span style={{color:'var(--red)',fontWeight:600,textAlign:'right'}}>{c.estatusPago}</span>
+        {cuentasSinPagarLista.map(({m,cuentas})=>{
+          const isExp=expandedSinPagar===(m.numEmp||m.nombre);
+          return <div key={m.numEmp||m.nombre} style={{marginBottom:6}}>
+            <div onClick={()=>setExpandedSinPagar(isExp?null:(m.numEmp||m.nombre))} style={{
+              display:'flex',justifyContent:'space-between',alignItems:'center',cursor:'pointer',
+              padding:'8px 10px',borderRadius:isExp?'8px 8px 0 0':8,
+              border:'1px solid var(--border)',borderBottom:isExp?'none':undefined,
+              background:'var(--bg)',
+            }}>
+              <span style={{fontWeight:700,fontSize:12}}>{m.nombre.split(' ').slice(0,3).join(' ')}</span>
+              <div style={{display:'flex',alignItems:'center',gap:6}}>
+                <span style={{fontSize:11,fontWeight:700,color:'var(--red)',background:'var(--rbg)',padding:'2px 8px',borderRadius:10}}>{cuentas.length}</span>
+                <span style={{fontSize:12,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
               </div>
-            )}
-          </div>
-        )}
+            </div>
+            {isExp&&<div style={{border:'1px solid var(--border)',borderTop:'none',borderRadius:'0 0 8px 8px',padding:'8px 10px'}}>
+              {cuentas.map((c,i)=>
+                <div key={i} style={{fontSize:11,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:i<cuentas.length-1?'1px solid var(--border)':'none'}}>
+                  <span>{c.cuenta} · {c.cliente} · {fmtDateObj(c.fechaInstalacion)}</span>
+                  <span style={{color:'var(--red)',fontWeight:600,textAlign:'right'}}>{c.estatusPago}</span>
+                </div>
+              )}
+              <a href={whatsappUrl(textoCuentasSinPagar(m,cuentas))} target="_blank" rel="noopener noreferrer"
+                style={{display:'inline-flex',alignItems:'center',gap:6,marginTop:8,padding:'6px 12px',borderRadius:8,background:'#25D366',color:'#fff',fontSize:12,fontWeight:700,textDecoration:'none'}}>
+                📲 Enviar por WhatsApp
+              </a>
+            </div>}
+          </div>;
+        })}
       </Card>
     }
 
