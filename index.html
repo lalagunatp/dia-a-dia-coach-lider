@@ -1208,6 +1208,9 @@ function DashboardTab({data,team,coaches,session,setTab}){
               {metaMensual(m.badge)>0&&<div style={{fontSize:10,color:'var(--dim)',marginTop:1}}>
                 🎯 {funnelPeriodo(m.ventas,mesIni,mesFin).instaladas}/{metaMensual(m.badge)} inst. del mes
               </div>}
+              {metaSemanal(m.badge)>0&&<div style={{fontSize:10,color:'var(--dim)',marginTop:1}}>
+                🎯 {funnelPeriodo(m.ventas,semanaIni,semanaFin).instaladas}/{metaSemanal(m.badge)} inst. de la semana
+              </div>}
               {m.rankingMen?.ventaSana&&<div style={{fontSize:10,color:'var(--dim)',marginTop:1}}>
                 % Venta sana ({m.rankingMen.ventaSana.mes}): <b>{m.rankingMen.ventaSana.valor}</b>
               </div>}
