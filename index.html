@@ -382,12 +382,12 @@ async function fetchVentas(numEmps){
     const lotes=chunk(numEmps,40);
     await Promise.all(lotes.map(async lote=>{
       const cond=lote.map(n=>`V = ${n}`).join(' or ');
-      const q=`select D,E,F,K,L,N,V where (${cond}) and (D >= date '${cutoffStr}' or E >= date '${cutoffStr}' or F >= date '${cutoffStr}')`;
+      const q=`select D,E,F,K,L,N,O,Q,V where (${cond}) and (D >= date '${cutoffStr}' or E >= date '${cutoffStr}' or F >= date '${cutoffStr}')`;
       const res=await fetch(gvizUrlSheet(BASEDATOS_SHEET,q));
       const text=await res.text();
       const rows=parseGviz(text);
       rows.forEach(r=>{
-        const numVendedor=String(r[6]||'').trim();
+        const numVendedor=String(r[8]||'').trim();
         if(!numVendedor)return;
         const v={
           creacion:parseFechaDMY(r[0]),
@@ -396,6 +396,8 @@ async function fetchVentas(numEmps){
           estatus:String(r[3]||'').trim(),
           motivoRechazo:String(r[4]||'').trim(),
           estatusII:String(r[5]||'').trim(),
+          cuenta:String(r[6]||'').trim(),
+          oportunidad:String(r[7]||'').trim(),
         };
         (byVendedor[numVendedor]=byVendedor[numVendedor]||[]).push(v);
       });
@@ -442,17 +444,9 @@ function funnelPeriodo(ventas,inicio,fin){
   });
   return f;
 }
-// Motivos de rechazo de un vendedor en un periodo (agrupados por fecha de oportunidad).
+// Oportunidades rechazadas de un vendedor en un periodo (agrupadas por fecha de oportunidad).
 function rechazosPeriodo(ventas,inicio,fin){
-  const motivos={};let total=0;
-  (ventas||[]).forEach(v=>{
-    if(v.estatus==='Rechazada'&&enRango(v.creacion,inicio,fin)){
-      total++;
-      const m=v.motivoRechazo||'Sin motivo';
-      motivos[m]=(motivos[m]||0)+1;
-    }
-  });
-  return{total,motivos};
+  return(ventas||[]).filter(v=>v.estatus==='Rechazada'&&enRango(v.creacion,inicio,fin));
 }
 // Foto actual (no ligada a periodo) de en qué etapa de asignación/instalación está cada oportunidad
 // validada que todavía no se instala.
@@ -954,8 +948,9 @@ function DashboardTab({data,team,coaches,session,setTab}){
   const[rangoIni,rangoFin]=periodoVentas==='semana'?[semanaIni,semanaFin]:[mesIni,mesFin];
   const ventasTotal={oportunidades:0,validadas:0,instaladas:0};
   let metaInstalTotal=0;
-  const rechazosMotivos={};let rechazosTotalN=0;
+  const rechazosMotivos={};let rechazosTotalN=0; // motivo -> [{nombre,oportunidad,cuenta}]
   const asignacionesTotalN={};
+  const[expandedMotivo,setExpandedMotivo]=useState(null);
   vendedores.forEach(m=>{
     const f=funnelPeriodo(m.ventas,rangoIni,rangoFin);
     ventasTotal.oportunidades+=f.oportunidades;
@@ -963,12 +958,15 @@ function DashboardTab({data,team,coaches,session,setTab}){
     ventasTotal.instaladas+=f.instaladas;
     metaInstalTotal+=periodoVentas==='semana'?metaSemanal(m.badge):metaMensual(m.badge);
     const rz=rechazosPeriodo(m.ventas,rangoIni,rangoFin);
-    rechazosTotalN+=rz.total;
-    Object.entries(rz.motivos).forEach(([mo,n])=>{rechazosMotivos[mo]=(rechazosMotivos[mo]||0)+n;});
+    rechazosTotalN+=rz.length;
+    rz.forEach(v=>{
+      const mo=v.motivoRechazo||'Sin motivo';
+      (rechazosMotivos[mo]=rechazosMotivos[mo]||[]).push({nombre:m.nombre,oportunidad:v.oportunidad,cuenta:v.cuenta});
+    });
     const asig=asignacionesActuales(m.ventas);
     Object.entries(asig).forEach(([et,n])=>{asignacionesTotalN[et]=(asignacionesTotalN[et]||0)+n;});
   });
-  const motivosOrdenados=Object.entries(rechazosMotivos).sort((a,b)=>b[1]-a[1]);
+  const motivosOrdenados=Object.entries(rechazosMotivos).sort((a,b)=>b[1].length-a[1].length);
   const asignacionesOrdenadas=Object.entries(asignacionesTotalN).sort((a,b)=>b[1]-a[1]);
 
   const semaforoMap={};
@@ -1129,12 +1127,27 @@ function DashboardTab({data,team,coaches,session,setTab}){
     </Card>
 
     {rechazosTotalN>0&&
-      <Card title={`❌ Motivos de rechazo — ${periodoVentas} (${rechazosTotalN})`}>
-        {motivosOrdenados.map(([mo,n])=>
-          <div key={mo} style={{display:'flex',justifyContent:'space-between',fontSize:12,padding:'4px 0',borderBottom:'1px solid var(--border)'}}>
-            <span>{mo}</span><b>{n}</b>
-          </div>
-        )}
+      <Card title={`❌ Motivos de rechazo OPORTUNIDADES — ${periodoVentas} (${rechazosTotalN})`}>
+        {motivosOrdenados.map(([mo,items])=>{
+          const isExp=expandedMotivo===mo;
+          return <div key={mo}>
+            <div onClick={()=>setExpandedMotivo(isExp?null:mo)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:12,padding:'6px 2px',borderBottom:isExp?'none':'1px solid var(--border)',cursor:'pointer'}}>
+              <span>{mo}</span>
+              <span style={{display:'flex',alignItems:'center',gap:6}}>
+                <b>{items.length}</b>
+                <span style={{fontSize:11,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
+              </span>
+            </div>
+            {isExp&&<div style={{background:'var(--bg)',borderRadius:6,padding:'6px 8px',marginBottom:6}}>
+              {items.map((it,i)=>
+                <div key={i} style={{fontSize:11,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:i<items.length-1?'1px solid var(--border)':'none'}}>
+                  <span>{it.nombre}</span>
+                  <span>Op. {it.oportunidad||'—'} · Cta. {it.cuenta||'—'}</span>
+                </div>
+              )}
+            </div>}
+          </div>;
+        })}
       </Card>
     }
 
