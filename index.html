@@ -359,12 +359,16 @@ function enrichTeam(team,rankEnt,rankMen){
     }else if(rm?.certFaltantes?.length){
       certFaltantes=rm.certFaltantes;
     }
+    // Observación oficial de la hoja de ranking (misma prioridad que el badge: entrenamiento primero).
+    const obsRaw=re?.obs||rm?.obsOficial||'';
+    const obs=obsRaw&&obsRaw!=='-'?obsRaw:null;
     return{...m,
       rankingEnt:re,
       rankingMen:rm,
       badge,
       mesesEnRanking,
       certFaltantes,
+      obs,
     };
   });
 }
@@ -820,6 +824,7 @@ function DashboardTab({data,team,coaches,session,setTab}){
         <RankBadge badge={m.badge}/>
         {m.mesesEnRanking>0&&<span style={{fontSize:10,color:'var(--dim)'}}>({m.mesesEnRanking} meses en este nivel)</span>}
       </div>
+      {m.obs&&<p style={{fontSize:11,color:'var(--yellow)',fontStyle:'italic',marginBottom:6}}>⚠️ {m.obs}</p>}
       {/* Performance */}
       {rm2&&<div style={{padding:'6px 8px',background:'var(--card)',borderRadius:6,marginBottom:6}}>
         <div style={{fontSize:11,fontWeight:700,color:'var(--dim)',marginBottom:3}}>📊 Rendimiento (últ. mes evaluado: {mesEvaluado})</div>
@@ -849,10 +854,6 @@ function DashboardTab({data,team,coaches,session,setTab}){
           📚 Cursos faltantes: {m.certFaltantes.join(', ')}
         </div>
       }
-      {/* Observaciones */}
-      {(()=>{const obs=re?.obs||rm2?.obsOficial;
-        return obs&&obs!=='-'&&<p style={{fontSize:11,color:'var(--yellow)',fontStyle:'italic'}}>⚠️ {obs}</p>;
-      })()}
     </div>;
   };
 
@@ -905,6 +906,7 @@ function DashboardTab({data,team,coaches,session,setTab}){
               <div style={{display:'flex',alignItems:'center',gap:4,flexWrap:'wrap'}}>
                 <span style={{fontSize:13,fontWeight:600}}>{m.nombre.split(' ').slice(0,3).join(' ')}</span>
                 <RankBadge badge={m.badge}/>
+                {m.obs&&<span style={{fontSize:10,fontWeight:600,color:'var(--yellow)'}}>⚠️ {m.obs}</span>}
               </div>
               {m.rankingMen&&<div style={{fontSize:10,color:'var(--dim)',marginTop:1}}>
                 Prom: {m.rankingMen.promedioMensual} ins/mes
