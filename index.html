@@ -232,6 +232,12 @@ async function fetchRankingMensual(){
     // Monthly install columns (pairs of Instalaciones/NPPF) run from col 14 up to the first ranking column.
     const installsEnd=rankingCols.length?rankingCols[0]:undefined;
 
+    // "VENTA SANA <MES> (Instalaciones ...)" columns are also appended monthly; take the latest one.
+    const ventaSanaCols=[];
+    h2.forEach((v,i)=>{if(String(v||'').trim().toUpperCase().startsWith('VENTA SANA '))ventaSanaCols.push(i);});
+    const idxVentaSana=ventaSanaCols.length?ventaSanaCols[ventaSanaCols.length-1]:null;
+    const ventaSanaMes=idxVentaSana!=null?(String(h2[idxVentaSana]).match(/^VENTA SANA\s+(\S+)/i)?.[1]||''):'';
+
     // Certification blocks (ENTRENAMIENTO / BRONCE / PLATA / ORO), each ending in a
     // "TOTAL CERTIFICACIONES COMPLETAS" column. Located dynamically for the same reason.
     const totalCols=[];
@@ -295,6 +301,10 @@ async function fetchRankingMensual(){
         certFaltantes=b.courses.filter(c=>String(r[c.idx]||'').trim().toUpperCase()!=='APROBADO').map(c=>c.label);
       }
 
+      const ventaSanaVal=idxVentaSana!=null?String(r[idxVentaSana]||'').trim():'';
+      const mesCap=ventaSanaMes?ventaSanaMes.charAt(0)+ventaSanaMes.slice(1).toLowerCase():'';
+      const ventaSana=ventaSanaVal&&ventaSanaVal!=='-'?{mes:mesCap,valor:ventaSanaVal}:null;
+
       const entry={
         nombre,
         ultimos3meses:last3,
@@ -304,6 +314,7 @@ async function fetchRankingMensual(){
         certTier,
         certFaltantes,
         certTotal,
+        ventaSana,
       };
       // Store under ALL keys for cross-matching
       [numA,numB,numC].forEach(k=>{if(k&&k!=='INTERNO'&&k!=='EXTERNO'&&k!=='VACANTE')map[k]=entry;});
@@ -675,9 +686,11 @@ function FeedbackTab({data,setData,team,toast,session}){
             <div style={{display:'flex',justifyContent:'space-between',color:'var(--dim)'}}>
               <span>Últimos 3 meses:</span><span>{selectedMember.rankingMen.ultimos3meses.join(' → ')||'—'}</span>
             </div>
-            <div style={{display:'flex',justifyContent:'space-between',color:'var(--dim)'}}>
-              <span>Suma 3 meses:</span><b>{selectedMember.rankingMen.ultimos3meses.reduce((a,b)=>a+b,0)}</b>
-            </div>
+            {selectedMember.rankingMen.ventaSana&&
+              <div style={{display:'flex',justifyContent:'space-between'}}>
+                <span>% Venta sana ({selectedMember.rankingMen.ventaSana.mes}):</span><b>{selectedMember.rankingMen.ventaSana.valor}</b>
+              </div>
+            }
           </div>}
 
           {/* Entrenamiento data */}
@@ -812,7 +825,7 @@ function DashboardTab({data,team,coaches,session,setTab}){
         <div style={{fontSize:11,fontWeight:700,color:'var(--dim)',marginBottom:3}}>📊 Rendimiento (últ. mes evaluado: {mesEvaluado})</div>
         <div style={{display:'flex',justifyContent:'space-between'}}><span>Promedio mensual:</span><b>{rm2.promedioMensual} ins</b></div>
         <div style={{display:'flex',justifyContent:'space-between',color:'var(--dim)'}}><span>Últimos 3 meses:</span><span>{rm2.ultimos3meses.join(' → ')||'—'}</span></div>
-        <div style={{display:'flex',justifyContent:'space-between',color:'var(--dim)'}}><span>Suma 3 meses:</span><b>{rm2.ultimos3meses.reduce((a,b)=>a+b,0)}</b></div>
+        {rm2.ventaSana&&<div style={{display:'flex',justifyContent:'space-between'}}><span>% Venta sana ({rm2.ventaSana.mes}):</span><b>{rm2.ventaSana.valor}</b></div>}
       </div>}
       {/* Entrenamiento */}
       {re&&<div style={{padding:'6px 8px',background:'var(--card)',borderRadius:6,marginBottom:6}}>
