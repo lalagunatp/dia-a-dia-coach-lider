@@ -1026,7 +1026,6 @@ function DashboardTab({data,team,coaches,session,setTab}){
         <div style={{fontSize:11,fontWeight:700,color:'var(--dim)',marginBottom:3}}>📊 Rendimiento (últ. mes evaluado: {mesEvaluado})</div>
         <div style={{display:'flex',justifyContent:'space-between'}}><span>Promedio mensual:</span><b>{rm2.promedioMensual} ins</b></div>
         <div style={{display:'flex',justifyContent:'space-between',color:'var(--dim)'}}><span>Últimos 3 meses:</span><span>{rm2.ultimos3meses.join(' → ')||'—'}</span></div>
-        {rm2.ventaSana&&<div style={{display:'flex',justifyContent:'space-between'}}><span>% Venta sana ({rm2.ventaSana.mes}):</span><b>{rm2.ventaSana.valor}</b></div>}
       </div>}
       {/* Entrenamiento */}
       {re&&<div style={{padding:'6px 8px',background:'var(--card)',borderRadius:6,marginBottom:6}}>
@@ -1184,6 +1183,9 @@ function DashboardTab({data,team,coaches,session,setTab}){
               </div>}
               {metaMensual(m.badge)>0&&<div style={{fontSize:10,color:'var(--dim)',marginTop:1}}>
                 🎯 {funnelPeriodo(m.ventas,mesIni,mesFin).instaladas}/{metaMensual(m.badge)} inst. del mes
+              </div>}
+              {m.rankingMen?.ventaSana&&<div style={{fontSize:10,color:'var(--dim)',marginTop:1}}>
+                % Venta sana ({m.rankingMen.ventaSana.mes}): <b>{m.rankingMen.ventaSana.valor}</b>
               </div>}
               {lastFb&&<div style={{fontSize:10,color:'var(--dim)',marginTop:1}}>Último: {fmt(lastFb.date)} · {lastFb.tipo}</div>}
               {!lastFb&&<div style={{fontSize:10,color:'var(--yellow)',marginTop:1}}>Sin evaluación</div>}
