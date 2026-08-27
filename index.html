@@ -365,13 +365,13 @@ function getInstalls(m){
   if(m.rankingEnt)return Number(m.rankingEnt.insUlt4)||0;
   return 0;
 }
-// Ranking tier ascending (Entrenamiento → Platino); ties broken by fewer installs first.
+// Sin ranking primero, luego Entrenamiento → Platino ascendente; empates por menos instalaciones primero.
 function sortByRanking(members){
   return[...members].sort((a,b)=>{
     const ia=RANK_ORDER.indexOf(a.badge);
     const ib=RANK_ORDER.indexOf(b.badge);
-    const oa=ia===-1?RANK_ORDER.length:ia;
-    const ob=ib===-1?RANK_ORDER.length:ib;
+    const oa=ia===-1?-1:ia;
+    const ob=ib===-1?-1:ib;
     if(oa!==ob)return oa-ob;
     return getInstalls(a)-getInstalls(b);
   });
