@@ -382,12 +382,12 @@ async function fetchVentas(numEmps){
     const lotes=chunk(numEmps,40);
     await Promise.all(lotes.map(async lote=>{
       const cond=lote.map(n=>`V = ${n}`).join(' or ');
-      const q=`select D,E,F,K,L,N,O,Q,V where (${cond}) and (D >= date '${cutoffStr}' or E >= date '${cutoffStr}' or F >= date '${cutoffStr}')`;
+      const q=`select D,E,F,K,L,N,O,P,Q,V where (${cond}) and (D >= date '${cutoffStr}' or E >= date '${cutoffStr}' or F >= date '${cutoffStr}')`;
       const res=await fetch(gvizUrlSheet(BASEDATOS_SHEET,q));
       const text=await res.text();
       const rows=parseGviz(text);
       rows.forEach(r=>{
-        const numVendedor=String(r[8]||'').trim();
+        const numVendedor=String(r[9]||'').trim();
         if(!numVendedor)return;
         const v={
           creacion:parseFechaDMY(r[0]),
@@ -397,7 +397,8 @@ async function fetchVentas(numEmps){
           motivoRechazo:String(r[4]||'').trim(),
           estatusII:String(r[5]||'').trim(),
           cuenta:String(r[6]||'').trim(),
-          oportunidad:String(r[7]||'').trim(),
+          plan:String(r[7]||'').trim(),
+          oportunidad:String(r[8]||'').trim(),
         };
         (byVendedor[numVendedor]=byVendedor[numVendedor]||[]).push(v);
       });
@@ -448,13 +449,13 @@ function funnelPeriodo(ventas,inicio,fin){
 function rechazosPeriodo(ventas,inicio,fin){
   return(ventas||[]).filter(v=>v.estatus==='Rechazada'&&enRango(v.creacion,inicio,fin));
 }
-// Foto actual (no ligada a periodo) de en qué etapa de asignación/instalación está cada oportunidad
-// validada que todavía no se instala.
-function asignacionesActuales(ventas){
+// Instalaciones de un vendedor en un periodo (semana o mes), agrupadas por plan.
+function instalacionesPorPlan(ventas,inicio,fin){
   const out={};
   (ventas||[]).forEach(v=>{
-    if(v.validacion&&!v.activacion&&v.estatusII&&v.estatusII!=='-'&&v.estatusII!=='Completado'){
-      out[v.estatusII]=(out[v.estatusII]||0)+1;
+    if(v.activacion&&enRango(v.activacion,inicio,fin)){
+      const p=v.plan||'Sin plan';
+      out[p]=(out[p]||0)+1;
     }
   });
   return out;
@@ -949,7 +950,7 @@ function DashboardTab({data,team,coaches,session,setTab}){
   const ventasTotal={oportunidades:0,validadas:0,instaladas:0};
   let metaInstalTotal=0;
   const rechazosMotivos={};let rechazosTotalN=0; // motivo -> [{nombre,oportunidad,cuenta}]
-  const asignacionesTotalN={};
+  const planesTotalN={};
   const[expandedMotivo,setExpandedMotivo]=useState(null);
   vendedores.forEach(m=>{
     const f=funnelPeriodo(m.ventas,rangoIni,rangoFin);
@@ -963,11 +964,11 @@ function DashboardTab({data,team,coaches,session,setTab}){
       const mo=v.motivoRechazo||'Sin motivo';
       (rechazosMotivos[mo]=rechazosMotivos[mo]||[]).push({nombre:m.nombre,oportunidad:v.oportunidad,cuenta:v.cuenta,fecha:v.creacion});
     });
-    const asig=asignacionesActuales(m.ventas);
-    Object.entries(asig).forEach(([et,n])=>{asignacionesTotalN[et]=(asignacionesTotalN[et]||0)+n;});
+    const planes=instalacionesPorPlan(m.ventas,rangoIni,rangoFin);
+    Object.entries(planes).forEach(([p,n])=>{planesTotalN[p]=(planesTotalN[p]||0)+n;});
   });
   const motivosOrdenados=Object.entries(rechazosMotivos).sort((a,b)=>b[1].length-a[1].length);
-  const asignacionesOrdenadas=Object.entries(asignacionesTotalN).sort((a,b)=>b[1]-a[1]);
+  const planesOrdenados=Object.entries(planesTotalN).sort((a,b)=>b[1]-a[1]);
 
   const semaforoMap={};
   recs.filter(r=>r.type==='feedback').sort((a,b)=>a.savedAt.localeCompare(b.savedAt)).forEach(r=>{
@@ -1156,11 +1157,11 @@ function DashboardTab({data,team,coaches,session,setTab}){
       </Card>
     }
 
-    {asignacionesOrdenadas.length>0&&
-      <Card title="🔧 Asignaciones en proceso">
+    {planesOrdenados.length>0&&
+      <Card title={`📦 Instalaciones por plan — ${periodoVentas}`}>
         <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
-          {asignacionesOrdenadas.map(([et,n])=>
-            <span key={et} style={{fontSize:12,fontWeight:600,padding:'4px 10px',borderRadius:16,background:'var(--accent-light)',color:'var(--accent)'}}>{et}: {n}</span>
+          {planesOrdenados.map(([p,n])=>
+            <span key={p} style={{fontSize:12,fontWeight:600,padding:'4px 10px',borderRadius:16,background:'var(--accent-light)',color:'var(--accent)'}}>{p}: {n}</span>
           )}
         </div>
       </Card>
