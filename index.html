@@ -961,7 +961,7 @@ function DashboardTab({data,team,coaches,session,setTab}){
     rechazosTotalN+=rz.length;
     rz.forEach(v=>{
       const mo=v.motivoRechazo||'Sin motivo';
-      (rechazosMotivos[mo]=rechazosMotivos[mo]||[]).push({nombre:m.nombre,oportunidad:v.oportunidad,cuenta:v.cuenta});
+      (rechazosMotivos[mo]=rechazosMotivos[mo]||[]).push({nombre:m.nombre,oportunidad:v.oportunidad,cuenta:v.cuenta,fecha:v.creacion});
     });
     const asig=asignacionesActuales(m.ventas);
     Object.entries(asig).forEach(([et,n])=>{asignacionesTotalN[et]=(asignacionesTotalN[et]||0)+n;});
@@ -1115,11 +1115,16 @@ function DashboardTab({data,team,coaches,session,setTab}){
       </div>
     }>
       <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:10}}>
-        {[{l:'Oportunidades',v:ventasTotal.oportunidades,icon:'🆕'},{l:'Validadas',v:ventasTotal.validadas,icon:'✅'},{l:'Instaladas',v:ventasTotal.instaladas,icon:'🔌'}].map(s=>
+        {[
+          {l:'Oportunidades',v:ventasTotal.oportunidades,icon:'🆕',sub:null},
+          {l:'Validadas',v:ventasTotal.validadas,icon:'✅',sub:ventasTotal.oportunidades?`${Math.round(ventasTotal.validadas/ventasTotal.oportunidades*100)}% de op.`:null},
+          {l:'Instaladas',v:ventasTotal.instaladas,icon:'🔌',sub:ventasTotal.validadas?`${Math.round(ventasTotal.instaladas/ventasTotal.validadas*100)}% de val.`:null},
+        ].map(s=>
           <div key={s.l} style={{background:'var(--bg)',borderRadius:10,padding:'10px 8px',textAlign:'center'}}>
             <div style={{fontSize:16}}>{s.icon}</div>
             <div style={{fontSize:20,fontWeight:800}}>{s.v}</div>
             <div style={{fontSize:9,color:'var(--dim)',fontWeight:600}}>{s.l}</div>
+            {s.sub&&<div style={{fontSize:10,color:'var(--accent)',fontWeight:700,marginTop:2}}>{s.sub}</div>}
           </div>
         )}
       </div>
@@ -1142,7 +1147,7 @@ function DashboardTab({data,team,coaches,session,setTab}){
               {items.map((it,i)=>
                 <div key={i} style={{fontSize:11,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:i<items.length-1?'1px solid var(--border)':'none'}}>
                   <span>{it.nombre}</span>
-                  <span>Op. {it.oportunidad||'—'} · Cta. {it.cuenta||'—'}</span>
+                  <span>Op. {it.oportunidad||'—'} · Cta. {it.cuenta||'—'} · {fmtDateObj(it.fecha)}</span>
                 </div>
               )}
             </div>}
