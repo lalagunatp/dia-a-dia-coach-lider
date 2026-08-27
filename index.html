@@ -358,6 +358,25 @@ function enrichTeam(team,rankEnt,rankMen){
   });
 }
 
+// Order used for ranking-based sorting across dashboard/lists: lowest tier first.
+const RANK_ORDER=['ENTRENAMIENTO','CONDICIONADO','BRONCE','PLATA','ORO','PLATINO','DIAMANTE'];
+function getInstalls(m){
+  if(m.rankingMen)return m.rankingMen.promedioMensual||0;
+  if(m.rankingEnt)return Number(m.rankingEnt.insUlt4)||0;
+  return 0;
+}
+// Ranking tier ascending (Entrenamiento → Platino); ties broken by fewer installs first.
+function sortByRanking(members){
+  return[...members].sort((a,b)=>{
+    const ia=RANK_ORDER.indexOf(a.badge);
+    const ib=RANK_ORDER.indexOf(b.badge);
+    const oa=ia===-1?RANK_ORDER.length:ia;
+    const ob=ib===-1?RANK_ORDER.length:ib;
+    if(oa!==ob)return oa-ob;
+    return getInstalls(a)-getInstalls(b);
+  });
+}
+
 const RANK_COLORS={
   'ENTRENAMIENTO':{bg:'#EDE9FE',color:'#7C3AED',icon:'🎓'},
   'CONDICIONADO':{bg:'#FEF3C7',color:'#D97706',icon:'⚠️'},
@@ -480,8 +499,8 @@ function LoginScreen({onLogin}){
       if(role==='vendedor'){setError('Acceso solo para Coach, Líder o Director');setLoading(false);return;}
       let{team,coaches}=buildTeam(user,all);
       // Enrich with ranking data
-      team=enrichTeam(team,rankEnt,rankMen);
-      coaches=enrichTeam(coaches,rankEnt,rankMen);
+      team=sortByRanking(enrichTeam(team,rankEnt,rankMen));
+      coaches=sortByRanking(enrichTeam(coaches,rankEnt,rankMen));
       const session={user,team,coaches,role,allEmployees:all,loginTime:new Date().toISOString()};
       sessionStorage.setItem('sv2-session',JSON.stringify(session));
       onLogin(session);
