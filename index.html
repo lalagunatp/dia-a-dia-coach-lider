@@ -77,9 +77,8 @@ function saveData(data){try{localStorage.setItem(LS_KEY,JSON.stringify(data));}c
 async function sendToSheet(record){
   if(!DOPOST_URL)return{ok:false,error:'URL no configurada'};
   try{
-    // No enviar fotos (demasiado grandes para Sheets): ni la de grupo ni las de evidencia por ausencia.
-    const payload={...record};delete payload.photo;
-    if(payload.ausentes)payload.ausentes=payload.ausentes.map(a=>{const{photo,...rest}=a;return rest;});
+    // Las fotos SÍ se envían: el Apps Script las sube a Drive y guarda la liga en el Sheet.
+    const payload={...record};
     const res=await fetch(DOPOST_URL,{method:'POST',body:JSON.stringify(payload),headers:{'Content-Type':'text/plain'}});
     const json=await res.json();
     return json;
@@ -698,7 +697,7 @@ function PhotoCapture({photo,onCapture}){
   return <div><input ref={ref} type="file" accept="image/*" capture="environment" onChange={handle} style={{display:'none'}}/>{photo?<div style={{position:'relative'}}><img src={photo} alt="" style={{width:'100%',maxHeight:220,objectFit:'cover',borderRadius:10,border:'1px solid var(--border)'}}/><Btn onClick={()=>ref.current.click()} variant="ghost" style={{position:'absolute',top:6,right:6,background:'rgba(0,0,0,.55)',color:'#fff',borderRadius:8,fontSize:12}}>📷</Btn></div>:<button onClick={()=>ref.current.click()} style={{width:'100%',padding:'28px 20px',borderRadius:12,border:'2px dashed var(--border)',background:'var(--input)',cursor:'pointer',textAlign:'center',color:'var(--dim)',fontSize:14}}>📷 Tomar foto de grupo</button>}</div>;
 }
 // Foto de evidencia con sello de coach, fecha/hora, dirección y coordenadas (geolocalización del dispositivo).
-function PhotoCaptureGeo({photo,onCapture,coachName}){
+function PhotoCaptureGeo({photo,onCapture,coachName,toast}){
   const ref=useRef();
   const[loading,setLoading]=useState(false);
   const handle=e=>{
@@ -708,41 +707,55 @@ function PhotoCaptureGeo({photo,onCapture,coachName}){
     r.onload=ev=>{
       const img=new Image();
       img.onload=async()=>{
-        let coordsTxt='',direccion='';
-        try{
-          const pos=await new Promise((res,rej)=>navigator.geolocation.getCurrentPosition(res,rej,{enableHighAccuracy:true,timeout:8000}));
-          const lat=pos.coords.latitude,lng=pos.coords.longitude;
-          coordsTxt=`${lat.toFixed(5)}, ${lng.toFixed(5)}`;
-          try{
-            const resGeo=await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`,{headers:{'Accept-Language':'es'}});
-            const j=await resGeo.json();
-            direccion=j?.display_name||'';
-          }catch{}
-        }catch{}
-        const c=document.createElement('canvas');
         const M=900;let w=img.width,h=img.height;if(w>M){h=h*(M/w);w=M;}
-        c.width=w;c.height=h;
-        const ctx=c.getContext('2d');
-        ctx.drawImage(img,0,0,w,h);
-        const lineas=[
-          `👤 ${coachName||''}`,
-          `🕒 ${new Date().toLocaleString('es-MX')}`,
-          direccion?`📍 ${direccion}`:'',
-          coordsTxt?`🌐 ${coordsTxt}`:'',
-        ].filter(Boolean);
-        const lh=Math.max(14,Math.round(w*0.032));
-        const padY=8,boxH=lineas.length*lh+padY*2;
-        ctx.fillStyle='rgba(0,0,0,.6)';
-        ctx.fillRect(0,h-boxH,w,boxH);
-        ctx.fillStyle='#fff';
-        ctx.font=`${lh-3}px sans-serif`;
-        ctx.textBaseline='top';
-        lineas.forEach((linea,i)=>{
-          let txt=linea;
-          while(ctx.measureText(txt).width>w-16&&txt.length>10)txt=txt.slice(0,-4)+'…';
-          ctx.fillText(txt,8,h-boxH+padY+i*lh);
-        });
-        onCapture(c.toDataURL('image/jpeg',.75));
+        try{
+          let coordsTxt='',direccion='';
+          try{
+            if(!navigator.geolocation)throw new Error('sin geolocalización');
+            const pos=await new Promise((res,rej)=>navigator.geolocation.getCurrentPosition(res,rej,{enableHighAccuracy:true,timeout:8000}));
+            const lat=pos.coords.latitude,lng=pos.coords.longitude;
+            coordsTxt=`${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+            try{
+              const resGeo=await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`,{headers:{'Accept-Language':'es'}});
+              const j=await resGeo.json();
+              direccion=j?.display_name||'';
+            }catch(eGeo){console.error('Reverse geocoding falló:',eGeo);}
+          }catch(eLoc){console.error('Geolocalización falló:',eLoc);toast?.('⚠️ No se pudo obtener ubicación (revisa permisos)');}
+          const c=document.createElement('canvas');
+          c.width=w;c.height=h;
+          const ctx=c.getContext('2d');
+          ctx.drawImage(img,0,0,w,h);
+          const ahora=new Date();
+          const diaFecha=ahora.toLocaleDateString('es-MX',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+          const hora=ahora.toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'});
+          const lineas=[
+            `👤 ${coachName||''}`,
+            `📅 ${diaFecha.charAt(0).toUpperCase()+diaFecha.slice(1)}`,
+            `🕒 ${hora}`,
+            direccion?`📍 ${direccion}`:'',
+            coordsTxt?`🌐 ${coordsTxt}`:'',
+          ].filter(Boolean);
+          const lh=Math.max(14,Math.round(w*0.032));
+          const padY=8,boxH=lineas.length*lh+padY*2;
+          ctx.fillStyle='rgba(0,0,0,.6)';
+          ctx.fillRect(0,h-boxH,w,boxH);
+          ctx.fillStyle='#fff';
+          ctx.font=`${lh-3}px sans-serif`;
+          ctx.textBaseline='top';
+          lineas.forEach((linea,i)=>{
+            let txt=linea;
+            while(ctx.measureText(txt).width>w-16&&txt.length>10)txt=txt.slice(0,-4)+'…';
+            ctx.fillText(txt,8,h-boxH+padY+i*lh);
+          });
+          onCapture(c.toDataURL('image/jpeg',.75));
+        }catch(eStamp){
+          console.error('No se pudo sellar la foto:',eStamp);
+          toast?.('⚠️ No se pudo sellar la foto, se guardó sin datos');
+          const c=document.createElement('canvas');
+          c.width=w;c.height=h;
+          c.getContext('2d').drawImage(img,0,0,w,h);
+          onCapture(c.toDataURL('image/jpeg',.75));
+        }
         setLoading(false);
       };
       img.src=ev.target.result;
@@ -896,7 +909,7 @@ function ArranqueTab({data,setData,team,toast,session}){
               <Select value={aus.reason} onChange={v=>updAus(m.nombre,'reason',v)} options={ABSENCE_REASONS} style={{flex:1,minWidth:130}}/>
               <Input placeholder="Detalle..." value={aus.detail} onChange={e=>updAus(m.nombre,'detail',e.target.value)} style={{flex:2,minWidth:130}}/>
             </div>
-            <PhotoCaptureGeo photo={aus.photo} onCapture={p=>updAus(m.nombre,'photo',p)} coachName={session.user.nombre}/>
+            <PhotoCaptureGeo photo={aus.photo} onCapture={p=>updAus(m.nombre,'photo',p)} coachName={session.user.nombre} toast={toast}/>
           </div>}
         </div>;
       })}
@@ -1505,12 +1518,14 @@ function DashboardTab({data,team,coaches,session,setTab}){
 // ─── Historial ───
 function HistorialTab({data,setData,toast}){
   const[filter,setFilter]=useState('todos');const[dateF,setDateF]=useState('');
+  const[verFoto,setVerFoto]=useState(null);
   const typeL={arranque:'☀️ Arranque',cierre:'🌙 Cierre',permiso:'📋 Permiso',plan:'📊 Plan',feedback:'💬 Hallazgo'};
   const recs=data.records.filter(r=>filter==='todos'||r.type===filter).filter(r=>!dateF||r.date===dateF).sort((a,b)=>b.savedAt.localeCompare(a.savedAt));
   const del=id=>{if(!confirm('¿Eliminar?'))return;const upd={...data,records:data.records.filter(r=>r.id!==id)};setData(upd);saveData(upd);toast('Eliminado');};
+  const FotoMini=({src,style:s})=><img src={src} alt="" onClick={()=>setVerFoto(src)} style={{width:'100%',objectFit:'cover',borderRadius:8,cursor:'pointer',...s}}/>;
   const detail=r=>{
     switch(r.type){
-      case'arranque':return <div style={{fontSize:13}}><p><b>Presentes:</b> {r.presentes?.length||0} · <b>Ausentes:</b> {r.ausentes?.length||0}</p>{r.ausentes?.map(a=><div key={a.name} style={{margin:'2px 0'}}><p style={{color:'var(--red)',margin:0}}>✗ {a.name}: {a.reason}{a.detail?` — ${a.detail}`:''}</p>{a.photo&&<img src={a.photo} alt="" style={{width:'100%',maxHeight:160,objectFit:'cover',borderRadius:8,marginTop:4}}/>}</div>)}{r.notas&&<p style={{marginTop:6}}>{r.notas}</p>}{r.photo&&<img src={r.photo} alt="" style={{width:'100%',maxHeight:120,objectFit:'cover',borderRadius:8,marginTop:6}}/>}</div>;
+      case'arranque':return <div style={{fontSize:13}}><p><b>Presentes:</b> {r.presentes?.length||0} · <b>Ausentes:</b> {r.ausentes?.length||0}</p>{r.ausentes?.map(a=><div key={a.name} style={{margin:'2px 0'}}><p style={{color:'var(--red)',margin:0}}>✗ {a.name}: {a.reason}{a.detail?` — ${a.detail}`:''}</p>{a.photo&&<FotoMini src={a.photo} style={{maxHeight:160,marginTop:4}}/>}</div>)}{r.notas&&<p style={{marginTop:6}}>{r.notas}</p>}{r.photo&&<FotoMini src={r.photo} style={{maxHeight:120,marginTop:6}}/>}</div>;
       case'permiso':return <div style={{fontSize:13}}><p><b>{r.vendedor}</b> — {r.tipo}</p><p>{r.motivo}</p>{r.autorizado_por&&<p style={{color:'var(--dim)'}}>Autorizado: {r.autorizado_por}</p>}</div>;
       case'cierre':return <div style={{fontSize:13}}>{r.resultado&&<p><b>Resultado:</b> {r.resultado}</p>}{r.pendientes&&<p><b>Pendientes:</b> {r.pendientes}</p>}{r.incidencias&&<p><b>Incidencias:</b> {r.incidencias}</p>}</div>;
       case'plan':return <div style={{fontSize:13}}>{r.objetivo&&<p><b>Objetivo:</b> {r.objetivo}</p>}{r.prioridades&&<p><b>Prioridades:</b> {r.prioridades}</p>}</div>;
@@ -1536,6 +1551,10 @@ function HistorialTab({data,setData,toast}){
       {detail(r)}
       {r.registradoPor&&<p style={{fontSize:11,color:'var(--dim)',marginTop:6,borderTop:'1px solid var(--border)',paddingTop:4}}>Registrado por: {r.registradoPor}</p>}
     </Card>)}
+    {verFoto&&<div onClick={()=>setVerFoto(null)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,.9)',zIndex:9999,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}>
+      <img src={verFoto} alt="" style={{maxWidth:'100%',maxHeight:'100%',objectFit:'contain',borderRadius:8}}/>
+      <button onClick={()=>setVerFoto(null)} style={{position:'absolute',top:16,right:16,background:'rgba(255,255,255,.15)',border:'none',borderRadius:8,color:'#fff',fontSize:20,width:36,height:36,cursor:'pointer'}}>✕</button>
+    </div>}
   </div>;
 }
 
