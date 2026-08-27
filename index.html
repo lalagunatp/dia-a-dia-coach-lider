@@ -501,16 +501,16 @@ function rechazosPeriodo(ventas,inicio,fin){
 function normalizarPlan(nombre){
   return String(nombre||'').replace(/\s*\bV\d+\b\s*/gi,' ').trim().replace(/\s+/g,' ')||'Sin plan';
 }
-// Instalaciones de un vendedor en un periodo (semana o mes), agrupadas por plan.
+// Instalaciones de un vendedor en un periodo (semana o mes), agrupadas por plan (con el detalle de cada una).
 function instalacionesPorPlan(ventas,inicio,fin){
   const out={};
   (ventas||[]).forEach(v=>{
     if(v.activacion&&enRango(v.activacion,inicio,fin)){
       const p=normalizarPlan(v.plan);
-      out[p]=(out[p]||0)+1;
+      (out[p]=out[p]||[]).push(v);
     }
   });
-  return out;
+  return out; // plan -> [venta,...]
 }
 // ¿La fecha cae en alguno de los 2 meses anteriores al de `ref` (sin incluir el mes actual)?
 function enVentanaMesesPrevios(fecha,ref){
@@ -1018,9 +1018,12 @@ function DashboardTab({data,team,coaches,session,setTab}){
   let metaInstalTotal=0;
   const rechazosMotivos={};let rechazosTotalN=0; // motivo -> [{nombre,oportunidad,cuenta}]
   const planesTotalN={};
+  const planesDetalle={}; // plan -> [{nombre,cuenta,fecha}]
   const sinPagarPorPlan={}; // plan -> {n, importe}
+  const instaladoPorPlan2m={}; // plan -> instalaciones (pagadas o no) en los 2 meses previos, para el % de sin pagar
   const pendientesPorVendedor=[]; // [{m, pendientes}]
   const[expandedMotivo,setExpandedMotivo]=useState(null);
+  const[expandedPlan,setExpandedPlan]=useState(null);
   const[expandedPendienteVendedor,setExpandedPendienteVendedor]=useState(null);
   const[abrirRechazos,setAbrirRechazos]=useState(false);
   const[abrirPlanes,setAbrirPlanes]=useState(false);
@@ -1039,11 +1042,18 @@ function DashboardTab({data,team,coaches,session,setTab}){
       (rechazosMotivos[mo]=rechazosMotivos[mo]||[]).push({nombre:m.nombre,oportunidad:v.oportunidad,cuenta:v.cuenta,fecha:v.creacion});
     });
     const planes=instalacionesPorPlan(m.ventas,rangoIni,rangoFin);
-    Object.entries(planes).forEach(([p,n])=>{planesTotalN[p]=(planesTotalN[p]||0)+n;});
+    Object.entries(planes).forEach(([p,items])=>{
+      planesTotalN[p]=(planesTotalN[p]||0)+items.length;
+      (planesDetalle[p]=planesDetalle[p]||[]).push(...items.map(v=>({nombre:m.nombre,cuenta:v.cuenta,fecha:v.activacion})));
+    });
     cuentasSinPagar(m.cuentasCom,now).forEach(c=>{
       const p=normalizarPlan(c.plan);
       const b=sinPagarPorPlan[p]=sinPagarPorPlan[p]||{n:0,importe:0};
       b.n++;b.importe+=c.importe;
+    });
+    cuentasDelPeriodo(m.cuentasCom,now).forEach(c=>{
+      const p=normalizarPlan(c.plan);
+      instaladoPorPlan2m[p]=(instaladoPorPlan2m[p]||0)+1;
     });
     const pend=pendientesInstalar30d(m.ventas,now);
     if(pend.length)pendientesPorVendedor.push({m,pendientes:pend});
@@ -1268,11 +1278,28 @@ function DashboardTab({data,team,coaches,session,setTab}){
 
     {planesOrdenados.length>0&&
       <PanelAcordeon title={`📦 Instalaciones por plan — ${periodoVentas}`} abierto={abrirPlanes} onToggle={()=>setAbrirPlanes(!abrirPlanes)}>
-        <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
-          {planesOrdenados.map(([p,n])=>
-            <span key={p} style={{fontSize:12,fontWeight:600,padding:'4px 10px',borderRadius:16,background:'var(--accent-light)',color:'var(--accent)'}}>{p}: {n} ({ventasTotal.instaladas?Math.round(n/ventasTotal.instaladas*100):0}%)</span>
-          )}
-        </div>
+        {planesOrdenados.map(([p,n])=>{
+          const isExp=expandedPlan===p;
+          const items=planesDetalle[p]||[];
+          return <div key={p}>
+            <div onClick={()=>setExpandedPlan(isExp?null:p)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:12,padding:'6px 2px',borderBottom:isExp?'none':'1px solid var(--border)',cursor:'pointer'}}>
+              <span>{p}</span>
+              <span style={{display:'flex',alignItems:'center',gap:6}}>
+                <b>{n}</b>
+                <span style={{color:'var(--dim)'}}>({ventasTotal.instaladas?Math.round(n/ventasTotal.instaladas*100):0}%)</span>
+                <span style={{fontSize:11,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
+              </span>
+            </div>
+            {isExp&&<div style={{background:'var(--bg)',borderRadius:6,padding:'6px 8px',marginBottom:6}}>
+              {items.map((it,i)=>
+                <div key={i} style={{fontSize:11,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:i<items.length-1?'1px solid var(--border)':'none'}}>
+                  <span>{it.nombre}</span>
+                  <span>Cta. {it.cuenta||'—'} · {fmtDateObj(it.fecha)}</span>
+                </div>
+              )}
+            </div>}
+          </div>;
+        })}
       </PanelAcordeon>
     }
 
@@ -1315,12 +1342,14 @@ function DashboardTab({data,team,coaches,session,setTab}){
 
     {sinPagarPorPlanOrdenado.length>0&&
       <PanelAcordeon title={`💰 Cuentas sin pagar por plan (${sinPagarPorPlanTotales.n} · ${fmtMoney(sinPagarPorPlanTotales.importe)})`} abierto={abrirSinPagarPlan} onToggle={()=>setAbrirSinPagarPlan(!abrirSinPagarPlan)}>
-        {sinPagarPorPlanOrdenado.map(([p,b])=>
-          <div key={p} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:12,padding:'6px 0',borderBottom:'1px solid var(--border)'}}>
+        {sinPagarPorPlanOrdenado.map(([p,b])=>{
+          const totalPlan=instaladoPorPlan2m[p]||b.n;
+          const pct=Math.round(b.n/totalPlan*100);
+          return <div key={p} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:12,padding:'6px 0',borderBottom:'1px solid var(--border)'}}>
             <span>{p}</span>
-            <span><b>{b.n}</b> cta{b.n!==1?'s':''} · <b style={{color:'var(--red)'}}>{fmtMoney(b.importe)}</b></span>
-          </div>
-        )}
+            <span><b>{b.n}</b> cta{b.n!==1?'s':''} · {pct}% de {totalPlan} inst. · <b style={{color:'var(--red)'}}>{fmtMoney(b.importe)}</b></span>
+          </div>;
+        })}
       </PanelAcordeon>
     }
 
