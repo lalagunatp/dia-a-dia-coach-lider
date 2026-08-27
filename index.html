@@ -676,9 +676,14 @@ function LoginScreen({onLogin}){
       if(role==='vendedor'){setError('Acceso solo para Coach, Líder o Director');setLoading(false);return;}
       let{team,coaches}=buildTeam(user,all);
       // Ventas y comisiones del equipo (semana/mes en curso, rechazos, asignaciones, cuentas sin pagar)
-      const allNums=[...new Set([...team,...coaches].map(m=>m.numEmp).filter(Boolean))];
-      const[ventasByVendedor,cuentasByHomologado]=await Promise.all([fetchVentas(allNums),fetchCuentasComisiones(allNums)]);
-      const attachVentas=m=>({...m,ventas:ventasByVendedor[m.numEmp]||[],cuentasCom:cuentasByHomologado[m.numEmp]||[]});
+      // Base de Datos y Comisiones no siempre etiqueta "Num Vendedor" con la misma columna de ID
+      // (a veces D/numEmp, a veces B/numEmpB según la persona) — se consultan ambas y se cruzan las dos al final.
+      const allIds=[...new Set([...team,...coaches].flatMap(m=>[m.numEmp,m.numEmpB]).filter(Boolean))];
+      const[ventasByVendedor,cuentasByHomologado]=await Promise.all([fetchVentas(allIds),fetchCuentasComisiones(allIds)]);
+      const attachVentas=m=>({...m,
+        ventas:ventasByVendedor[m.numEmp]||ventasByVendedor[m.numEmpB]||[],
+        cuentasCom:cuentasByHomologado[m.numEmp]||cuentasByHomologado[m.numEmpB]||[],
+      });
       // Enrich with ranking data
       team=sortByRanking(enrichTeam(team,rankEnt,rankMen).map(attachVentas));
       coaches=sortByRanking(enrichTeam(coaches,rankEnt,rankMen).map(attachVentas));
