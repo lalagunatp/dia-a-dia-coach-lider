@@ -32,6 +32,11 @@
 // se quedaban solo en el teléfono reintentando para siempre. La clave
 // ahora es "PERMISO"; el nombre de la pestaña se conserva "PERMISOS".
 //
+// NUEVO (foto en Hallazgos): los tipos "Acompañamiento" y "Evidencia de
+// asignación externa" ahora mandan foto sellada (obligatoria en la app).
+// FEEDBACK sube esa foto a Drive igual que Arranque/Permisos y guarda su
+// liga en las columnas nuevas "Con foto" / "Foto evidencia".
+//
 // ══════════════════════════════════════════════════════════════
 
 const SPREADSHEET_ID = '1jMrhZMQRqXQRD6VrEUJ0JcWT5dK599BwLYzAOBnmPv4';
@@ -183,7 +188,8 @@ const SHEET_CONFIG = {
       'ID', 'Fecha', 'Integrante', 'Tipo', 'Semáforo',
       'Hallazgos', 'Fortalezas', 'Áreas de oportunidad',
       'Compromisos', 'Fecha revisión', 'Grabado',
-      'Transcripción', 'Notas', 'Registrado por', 'Timestamp'
+      'Transcripción', 'Notas', 'Con foto', 'Foto evidencia',
+      'Registrado por', 'Timestamp'
     ]
   }
 };
@@ -343,14 +349,21 @@ function buildRow(type, d) {
       ] };
     }
 
-    case 'feedback':
-      return { row: [
+    case 'feedback': {
+      const fotoUrl = d.photo
+        ? subirFotoADrive(d.photo, `Hallazgo_${d.date}_${nombreSeguro(d.vendedor)}.jpg`)
+        : '';
+      const row = [
         d.id, d.date, d.vendedor || '', d.tipo || '', d.semaforo || '',
         d.hallazgos || '', d.fortalezas || '', d.areas_oportunidad || '',
         d.compromisos || '', d.fecha_revision || '',
         d.grabado ? 'SÍ' : 'NO',
-        d.transcript || '', d.notas || '', d.registradoPor || '', ts
-      ] };
+        d.transcript || '', d.notas || '',
+        fotoUrl ? 'SÍ' : 'NO', fotoUrl,
+        d.registradoPor || '', ts
+      ];
+      return { row: row, extra: { fotoUrl: fotoUrl } };
+    }
 
     default:
       return { row: [d.id, type, JSON.stringify(d), ts] };
