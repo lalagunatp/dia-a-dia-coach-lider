@@ -61,17 +61,21 @@ const STATUS={
 };
 const TABS=[
   {id:'dashboard',icon:'📈',label:'Dashboard'},
+  {id:'plan',icon:'📊',label:'Plan'},
   {id:'arranque',icon:'☀️',label:'Arranque'},
   {id:'permisos',icon:'📋',label:'Permisos'},
   {id:'cierre',icon:'🌙',label:'Cierre'},
-  {id:'plan',icon:'📊',label:'Plan'},
   {id:'feedback',icon:'💬',label:'Hallazgos'},
   {id:'historial',icon:'📁',label:'Historial'},
 ];
 const ABSENCE_REASONS=['Falta justificada','Falta injustificada','Incapacidad','Permiso autorizado','Vacaciones','Retardo','Otro'];
 const PERMISO_TIPOS=['Trabajo fuera de ruta','Trabajo por su cuenta','Salida anticipada','Llegada tardía','Cambio de zona','Actividad especial','Otro'];
 const FEEDBACK_TIPOS=['Acompañamiento','Feedback 1 a 1','Revisión semanal','Incidencia operativa','Incidencia crítica','Retroalimentación','Otro'];
+const DIAS_SEMANA=['lunes','martes','miercoles','jueves','viernes','sabado','domingo'];
+const DIAS_SEMANA_LABEL={lunes:'Lunes',martes:'Martes',miercoles:'Miércoles',jueves:'Jueves',viernes:'Viernes',sabado:'Sábado',domingo:'Domingo'};
 const cycleS=c=>{const o=['verde','amarillo','rojo'];return o[(o.indexOf(c)+1)%3];};
+// Compromiso vs. meta oficial: rojo si se comprometen por debajo, negro si es igual, verde si es mayor.
+const colorVsMeta=(val,meta)=>{const v=Number(val)||0;if(!meta)return'var(--text)';if(v<meta)return'var(--red)';if(v>meta)return'var(--green)';return'#000';};
 
 // ═══ STORAGE ═══
 const LS_KEY='supervision-v2';
@@ -232,6 +236,8 @@ function startOfMonth(date){const d=new Date(date.getFullYear(),date.getMonth(),
 function endOfMonth(date){const d=new Date(date.getFullYear(),date.getMonth()+1,0);d.setHours(23,59,59,999);return d;}
 function enRango(fecha,inicio,fin){return fecha&&fecha>=inicio&&fecha<=fin;}
 const fmtDateObj=d=>d?`${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`:'';
+// yyyy-mm-dd en hora LOCAL (a diferencia de toISOString, que es UTC y puede recorrer la fecha un día).
+const ymdLocal=d=>d?`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`:'';
 const fmtMoney=n=>'$'+Number(n||0).toLocaleString('es-MX',{minimumFractionDigits:2,maximumFractionDigits:2});
 const whatsappUrl=text=>`https://wa.me/?text=${encodeURIComponent(text)}`;
 // Este estatus es la espera normal del primer pago del cliente, no algo accionable — no se muestra.
@@ -538,6 +544,34 @@ async function fetchAsignacionesPorOS(osList){
     }));
     return conteo;
   }catch(e){console.error('OS por instalar fetch error:',e);return{};}
+}
+
+// Catálogo de zonas para el Plan: hoja "Clusters Colonias" del mismo archivo base (Distrito La Laguna),
+// columna A = cluster, columna B = colonia.
+const CLUSTERS_SHEET='Clusters Colonias';
+async function fetchClustersColonias(){
+  try{
+    const res=await fetch(gvizUrlSheet(CLUSTERS_SHEET));
+    const text=await res.text();
+    const rows=parseGviz(text);
+    const list=[];
+    rows.forEach(r=>{
+      const cluster=String(r[0]||'').trim();
+      const colonia=String(r[1]||'').trim();
+      if(!cluster||!colonia)return;
+      if(cluster.toUpperCase()==='CLUSTER'||colonia.toUpperCase()==='COLONIA')return;
+      list.push({cluster,colonia});
+    });
+    return list;
+  }catch(e){console.error('Clusters/Colonias fetch error:',e);return[];}
+}
+function buildClusterMap(list){
+  const clusterToColonias={},coloniaToCluster={};
+  list.forEach(({cluster,colonia})=>{
+    (clusterToColonias[cluster]=clusterToColonias[cluster]||[]).push(colonia);
+    coloniaToCluster[colonia]=cluster;
+  });
+  return{clusterToColonias,coloniaToCluster,clusters:Object.keys(clusterToColonias).sort()};
 }
 
 // Oportunidades validadas en los últimos 30 días que todavía no se instalan.
@@ -1108,23 +1142,204 @@ function CierreTab({data,setData,team,toast,session}){
   </div>;
 }
 
+// ─── Plan: selector de zonas de un día (cluster y/o colonia, con cruce colonia↔cluster) ───
+function ZonaDia({label,entradas,zonasData,onChange}){
+  const[modo,setModo]=useState('cluster');
+  const[clusterSel,setClusterSel]=useState('');
+  const[coloniasSel,setColoniasSel]=useState([]);
+  const[coloniaSel,setColoniaSel]=useState('');
+  const coloniasDelCluster=zonasData.clusterToColonias[clusterSel]||[];
+  const todasColonias=Object.keys(zonasData.coloniaToCluster).sort();
+
+  const agregar=()=>{
+    if(modo==='cluster'){
+      if(!clusterSel)return;
+      if(coloniasSel.length===0){
+        if(entradas.some(e=>e.cluster===clusterSel&&!e.colonia))return;
+        onChange([...entradas,{cluster:clusterSel,colonia:null}]);
+      }else{
+        const nuevas=coloniasSel.filter(c=>!entradas.some(e=>e.cluster===clusterSel&&e.colonia===c)).map(c=>({cluster:clusterSel,colonia:c}));
+        onChange([...entradas,...nuevas]);
+      }
+      setColoniasSel([]);
+    }else{
+      if(!coloniaSel||entradas.some(e=>e.colonia===coloniaSel))return;
+      onChange([...entradas,{cluster:zonasData.coloniaToCluster[coloniaSel]||'',colonia:coloniaSel}]);
+      setColoniaSel('');
+    }
+  };
+  const quitar=i=>onChange(entradas.filter((_,idx)=>idx!==i));
+  const toggleColonia=c=>setColoniasSel(s=>s.includes(c)?s.filter(x=>x!==c):[...s,c]);
+
+  return <div style={{marginBottom:10,padding:8,border:'1px solid var(--border)',borderRadius:8}}>
+    <div style={{fontWeight:700,fontSize:12,marginBottom:6}}>{label}</div>
+    {entradas.length>0&&<div style={{display:'flex',flexWrap:'wrap',gap:4,marginBottom:6}}>
+      {entradas.map((e,i)=><span key={i} style={{display:'inline-flex',alignItems:'center',gap:4,background:'var(--accent-light)',color:'var(--accent)',padding:'2px 8px',borderRadius:10,fontSize:11,fontWeight:600}}>
+        {e.colonia?`${e.colonia} (${e.cluster})`:`${e.cluster} · todo`}
+        <span onClick={()=>quitar(i)} style={{cursor:'pointer',fontWeight:800}}>✕</span>
+      </span>)}
+    </div>}
+    <div style={{display:'flex',gap:4,marginBottom:6}}>
+      <button onClick={()=>setModo('cluster')} style={{flex:1,padding:'5px 6px',fontSize:11,fontWeight:700,borderRadius:6,border:'1.5px solid var(--border)',background:modo==='cluster'?'var(--accent)':'var(--card)',color:modo==='cluster'?'#fff':'var(--dim)',cursor:'pointer'}}>Por Cluster</button>
+      <button onClick={()=>setModo('colonia')} style={{flex:1,padding:'5px 6px',fontSize:11,fontWeight:700,borderRadius:6,border:'1.5px solid var(--border)',background:modo==='colonia'?'var(--accent)':'var(--card)',color:modo==='colonia'?'#fff':'var(--dim)',cursor:'pointer'}}>Por Colonia</button>
+    </div>
+    {modo==='cluster'?<>
+      <Select value={clusterSel} onChange={v=>{setClusterSel(v);setColoniasSel([]);}} options={[{value:'',label:'— Cluster —'},...zonasData.clusters.map(c=>({value:c,label:c}))]} style={{marginBottom:6}}/>
+      {clusterSel&&coloniasDelCluster.length>0&&<div style={{maxHeight:120,overflowY:'auto',border:'1px solid var(--border)',borderRadius:6,padding:6,marginBottom:6}}>
+        <p style={{fontSize:10,color:'var(--dim)',margin:'0 0 4px'}}>Opcional: marca colonias específicas (si no marcas ninguna, aplica a todo el cluster)</p>
+        {coloniasDelCluster.map(c=><label key={c} style={{display:'flex',alignItems:'center',gap:6,fontSize:12,padding:'2px 0',cursor:'pointer'}}>
+          <input type="checkbox" checked={coloniasSel.includes(c)} onChange={()=>toggleColonia(c)}/>{c}
+        </label>)}
+      </div>}
+    </>:
+      <Select value={coloniaSel} onChange={setColoniaSel} options={[{value:'',label:'— Colonia —'},...todasColonias.map(c=>({value:c,label:`${c} (${zonasData.coloniaToCluster[c]})`}))]} style={{marginBottom:6}}/>
+    }
+    <Btn variant="secondary" onClick={agregar} style={{width:'100%',fontSize:12,padding:'6px 10px'}}>+ Agregar</Btn>
+  </div>;
+}
+
 // ─── Plan ───
-function PlanTab({data,setData,toast,session}){
-  const[form,setForm]=useState({date:today(),semana:'',objetivo:'',prioridades:'',vendedores_acompanar:'',zonas:'',resultado_esperado:'',notas:''});
-  const guardar=async()=>{const rec={id:uid(),type:'plan',...form,registradoPor:session.user.nombre,savedAt:new Date().toISOString()};const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast);toast('✅ Plan guardado');setForm({date:today(),semana:'',objetivo:'',prioridades:'',vendedores_acompanar:'',zonas:'',resultado_esperado:'',notas:''});};
+// Objetivo semanal (KPIs comprometidos vs. meta oficial calculada de las metas por ranking del
+// equipo) + resultado real de la semana pasada (precargado del sistema, editable) con % de cumplimiento.
+function PlanTab({data,setData,team,toast,session}){
+  const vendedoresPlan=(team||[]).filter(m=>isVendedor(m.posicion));
+  // Meta oficial del equipo: instalaciones = suma de meta semanal por ranking; ventas/validaciones
+  // 15% mayor que instalaciones; oportunidades 15% mayor que ventas/validaciones.
+  const metaInstalOficial=vendedoresPlan.reduce((s,m)=>s+metaSemanal(m.badge),0);
+  const metaVentasOficial=Math.round(metaInstalOficial*1.15);
+  const metaOportOficial=Math.round(metaVentasOficial*1.15);
+  const KPIS=[
+    {k:'oportunidades',label:'Oportunidades',meta:metaOportOficial},
+    {k:'ventas',label:'Ventas (validaciones)',meta:metaVentasOficial},
+    {k:'instalaciones',label:'Instalaciones',meta:metaInstalOficial},
+  ];
+
+  const nowDate=new Date();
+  const semanaIni=startOfWeek(nowDate),semanaFin=endOfWeek(nowDate);
+  const semanaIniStr=ymdLocal(semanaIni),semanaFinStr=ymdLocal(semanaFin);
+  const semanaLabel=`${fmtDateObj(semanaIni)} al ${fmtDateObj(semanaFin)}`;
+  const hoyStr=ymdLocal(nowDate);
+  const esLunes=nowDate.getDay()===1;
+
+  const planActual=data.records.find(r=>r.type==='plan'&&r.semanaInicio===semanaIniStr);
+  const retraso=!planActual&&hoyStr>semanaIniStr;
+
+  // Semana(s) anteriores con plan pero sin resultado real capturado todavía — se resuelve la más antigua primero.
+  const planesConResultado=new Set(data.records.filter(r=>r.type==='plan_resultado').map(r=>r.planId));
+  const planPendiente=data.records.filter(r=>r.type==='plan'&&!planesConResultado.has(r.id)&&r.semanaInicio<semanaIniStr).sort((a,b)=>a.semanaInicio.localeCompare(b.semanaInicio))[0]||null;
+
+  const[zonasData,setZonasData]=useState({clusterToColonias:{},coloniaToCluster:{},clusters:[]});
+  useEffect(()=>{fetchClustersColonias().then(list=>setZonasData(buildClusterMap(list)));},[]);
+
+  const emptyZonas=()=>Object.fromEntries(DIAS_SEMANA.map(d=>[d,[]]));
+  const[form,setForm]=useState({objetivos:{oportunidades:'',ventas:'',instalaciones:'',cuentasRecuperadas:'',arpu:''},prioridades:'',vendedores_acompanar:'',zonas:emptyZonas(),resultado_esperado:'',notas:''});
+  const updObjetivo=(k,v)=>setForm(f=>({...f,objetivos:{...f.objetivos,[k]:v}}));
+
+  const guardarPlan=async()=>{
+    const rec={id:uid(),type:'plan',date:today(),
+      semanaInicio:semanaIniStr,semanaFin:semanaFinStr,semanaLabel,
+      objetivos:form.objetivos,
+      metaOficial:{oportunidades:metaOportOficial,ventas:metaVentasOficial,instalaciones:metaInstalOficial},
+      prioridades:form.prioridades,vendedores_acompanar:form.vendedores_acompanar,
+      zonas:form.zonas,resultado_esperado:form.resultado_esperado,notas:form.notas,
+      registradoPor:session.user.nombre,savedAt:new Date().toISOString()};
+    const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast);toast('✅ Plan guardado');
+    setForm({objetivos:{oportunidades:'',ventas:'',instalaciones:'',cuentasRecuperadas:'',arpu:''},prioridades:'',vendedores_acompanar:'',zonas:emptyZonas(),resultado_esperado:'',notas:''});
+  };
+
+  // Resultado real de la semana pendiente: se precarga del sistema (embudo de esa semana) y es editable.
+  const[resForm,setResForm]=useState(null);
+  useEffect(()=>{
+    if(!planPendiente){setResForm(null);return;}
+    const ini=new Date(planPendiente.semanaInicio+'T00:00:00');
+    const fin=new Date(planPendiente.semanaFin+'T23:59:59');
+    const tot={oportunidades:0,ventas:0,instalaciones:0};
+    vendedoresPlan.forEach(m=>{
+      const f=funnelPeriodo(m.ventas,ini,fin);
+      tot.oportunidades+=f.oportunidades;tot.ventas+=f.validadas;tot.instalaciones+=f.instaladas;
+    });
+    setResForm({...tot,cuentasRecuperadas:'',arpu:''});
+  },[planPendiente?.id]);
+
+  const guardarResultado=async()=>{
+    if(!planPendiente||!resForm)return;
+    const rec={id:uid(),type:'plan_resultado',planId:planPendiente.id,date:today(),
+      semanaInicio:planPendiente.semanaInicio,semanaFin:planPendiente.semanaFin,semanaLabel:planPendiente.semanaLabel,
+      objetivos:planPendiente.objetivos,resultados:resForm,
+      registradoPor:session.user.nombre,savedAt:new Date().toISOString()};
+    const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast);toast('✅ Resultado guardado');
+  };
+
   return <div>
-    <Card title="📊 Plan de trabajo">
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:12}}>
-        <Field label="Fecha"><Input type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})}/></Field>
-        <Field label="Semana"><Input value={form.semana} onChange={e=>setForm({...form,semana:e.target.value})} placeholder="Sem 35"/></Field>
-      </div>
-      <Field label="Objetivo"><Textarea value={form.objetivo} onChange={e=>setForm({...form,objetivo:e.target.value})} placeholder="Objetivo comercial..."/></Field>
-      <Field label="Prioridades"><Textarea value={form.prioridades} onChange={e=>setForm({...form,prioridades:e.target.value})} placeholder="Amarillo/rojo, calidad, incidencias..."/></Field>
-      <Field label="Acompañamientos"><Textarea value={form.vendedores_acompanar} onChange={e=>setForm({...form,vendedores_acompanar:e.target.value})} placeholder="Quién y por qué..." style={{minHeight:50}}/></Field>
-      <Field label="Zonas"><Input value={form.zonas} onChange={e=>setForm({...form,zonas:e.target.value})}/></Field>
-      <Field label="Resultado esperado"><Textarea value={form.resultado_esperado} onChange={e=>setForm({...form,resultado_esperado:e.target.value})} style={{minHeight:50}}/></Field>
-    </Card>
-    <Btn onClick={guardar} style={{width:'100%'}}>💾 Guardar plan</Btn>
+    {retraso&&<Card style={{borderLeft:'4px solid var(--red)'}}>
+      <p style={{fontSize:13,fontWeight:700,color:'var(--red)',margin:0}}>⚠️ Aún no se ha capturado el plan de esta semana — debía quedar listo el lunes.</p>
+    </Card>}
+    {!planActual&&!retraso&&<Card style={{borderLeft:`4px solid ${esLunes?'var(--yellow)':'var(--border)'}`}}>
+      <p style={{fontSize:12,color:'var(--dim)',margin:0}}>{esLunes?'📌 Hoy es lunes — captura el objetivo comprometido para esta semana.':'Plan de la semana aún no capturado.'}</p>
+    </Card>}
+
+    {planPendiente&&resForm&&
+      <Card title={`📌 Resultado pendiente — Semana ${planPendiente.semanaLabel}`} style={{borderLeft:'4px solid var(--yellow)'}}>
+        <p style={{fontSize:11,color:'var(--dim)',marginBottom:8}}>Se precargó de lo que hay en sistema para esa semana — ajústalo si hace falta y guarda el resultado real.</p>
+        {KPIS.map(kpi=>{
+          const obj=Number(planPendiente.objetivos?.[kpi.k])||0;
+          const real=Number(resForm[kpi.k])||0;
+          const p=obj?Math.round(real/obj*100):null;
+          return <Field key={kpi.k} label={`${kpi.label} (objetivo: ${obj})`}>
+            <Input type="number" value={resForm[kpi.k]} onChange={e=>setResForm(f=>({...f,[kpi.k]:e.target.value}))}/>
+            {p!=null&&<p style={{fontSize:11,fontWeight:700,margin:'2px 0 0',color:p>=95?'var(--green)':p>=60?'var(--yellow)':'var(--red)'}}>{p}% del objetivo</p>}
+          </Field>;
+        })}
+        <Field label={`Cuentas recuperadas NPPF (objetivo: ${planPendiente.objetivos?.cuentasRecuperadas||0})`}>
+          <Input type="number" value={resForm.cuentasRecuperadas} onChange={e=>setResForm(f=>({...f,cuentasRecuperadas:e.target.value}))}/>
+        </Field>
+        <Field label={`ARPU (objetivo: ${planPendiente.objetivos?.arpu||0})`}>
+          <Input type="number" value={resForm.arpu} onChange={e=>setResForm(f=>({...f,arpu:e.target.value}))}/>
+        </Field>
+        <Btn onClick={guardarResultado} style={{width:'100%'}}>💾 Guardar resultado real</Btn>
+      </Card>
+    }
+
+    {planActual?
+      <Card title={`✅ Plan de la semana — ${planActual.semanaLabel}`} style={{borderLeft:'4px solid var(--green)'}}>
+        <p style={{fontSize:12,color:'var(--dim)',marginBottom:6}}>Ya se capturó el objetivo de esta semana.</p>
+        {KPIS.map(kpi=><div key={kpi.k} style={{display:'flex',justifyContent:'space-between',fontSize:13,padding:'3px 0'}}>
+          <span>{kpi.label}</span>
+          <b style={{color:colorVsMeta(planActual.objetivos?.[kpi.k],planActual.metaOficial?.[kpi.k])}}>{planActual.objetivos?.[kpi.k]||0} <span style={{color:'var(--dim)',fontWeight:400}}>/ meta {planActual.metaOficial?.[kpi.k]??'-'}</span></b>
+        </div>)}
+        <div style={{display:'flex',justifyContent:'space-between',fontSize:13,padding:'3px 0'}}><span>Cuentas recuperadas NPPF</span><b>{planActual.objetivos?.cuentasRecuperadas||0}</b></div>
+        <div style={{display:'flex',justifyContent:'space-between',fontSize:13,padding:'3px 0'}}><span>ARPU</span><b>{planActual.objetivos?.arpu||0}</b></div>
+      </Card>
+    :<>
+      <Card title="🎯 Objetivo de la semana">
+        <p style={{fontSize:11,color:'var(--dim)',marginBottom:8}}>Semana {semanaLabel} (lunes a domingo). Compromiso del equipo al cierre de la semana (domingo).</p>
+        {KPIS.map(kpi=>{
+          const val=form.objetivos[kpi.k];
+          const color=colorVsMeta(val,kpi.meta);
+          return <Field key={kpi.k} label={kpi.label}>
+            <Input type="number" value={val} onChange={e=>updObjetivo(kpi.k,e.target.value)} style={{color,fontWeight:700}}/>
+            <p style={{fontSize:10,color:'var(--dim)',margin:'2px 0 0'}}>Meta oficial del equipo: <b>{kpi.meta}</b> — <span style={{color}}>{color==='var(--red)'?'por debajo de la meta':color==='var(--green)'?'por arriba de la meta':'igual a la meta'}</span></p>
+          </Field>;
+        })}
+        <Field label="Cuentas recuperadas (NPPF)"><Input type="number" value={form.objetivos.cuentasRecuperadas} onChange={e=>updObjetivo('cuentasRecuperadas',e.target.value)}/></Field>
+        <Field label="ARPU"><Input type="number" value={form.objetivos.arpu} onChange={e=>updObjetivo('arpu',e.target.value)}/></Field>
+      </Card>
+      <Card title="Prioridades">
+        <Textarea value={form.prioridades} onChange={e=>setForm({...form,prioridades:e.target.value})} placeholder="Amarillo/rojo, calidad, incidencias..."/>
+      </Card>
+      <Card title="Acompañamientos">
+        <Textarea value={form.vendedores_acompanar} onChange={e=>setForm({...form,vendedores_acompanar:e.target.value})} placeholder="Quién y por qué..." style={{minHeight:50}}/>
+      </Card>
+      <Card title="🗺️ Zonas a trabajar (lunes a domingo)">
+        {zonasData.clusters.length===0?<p style={{color:'var(--dim)',fontSize:12}}>Cargando clusters/colonias…</p>:
+        DIAS_SEMANA.map(d=><ZonaDia key={d} label={DIAS_SEMANA_LABEL[d]} entradas={form.zonas[d]} zonasData={zonasData} onChange={nuevas=>setForm(f=>({...f,zonas:{...f.zonas,[d]:nuevas}}))}/>)}
+      </Card>
+      <Card title="Resultado esperado">
+        <Textarea value={form.resultado_esperado} onChange={e=>setForm({...form,resultado_esperado:e.target.value})} style={{minHeight:50}}/>
+      </Card>
+      <Card title="Notas"><Textarea value={form.notas} onChange={e=>setForm({...form,notas:e.target.value})} style={{minHeight:50}}/></Card>
+      <Btn onClick={guardarPlan} style={{width:'100%'}}>💾 Guardar plan</Btn>
+    </>}
   </div>;
 }
 
@@ -1684,7 +1899,7 @@ function HistorialTab({data,setData,toast,session}){
       setCargandoEquipo(false);
     });
   },[vista]);
-  const typeL={arranque:'☀️ Arranque',cierre:'🌙 Cierre',permiso:'📋 Permiso',plan:'📊 Plan',feedback:'💬 Hallazgo'};
+  const typeL={arranque:'☀️ Arranque',cierre:'🌙 Cierre',permiso:'📋 Permiso',plan:'📊 Plan',plan_resultado:'📊 Resultado Plan',feedback:'💬 Hallazgo'};
   const recs=data.records.filter(r=>filter==='todos'||r.type===filter).filter(r=>!dateF||r.date===dateF).sort((a,b)=>b.savedAt.localeCompare(a.savedAt));
   const del=id=>{if(!confirm('¿Eliminar?'))return;const upd={...data,records:data.records.filter(r=>r.id!==id)};setData(upd);saveData(upd);toast('Eliminado');};
   // Si ya se subió a Drive, `src` es una liga (no una foto embebida) — no carga como <img>,
@@ -1714,7 +1929,33 @@ function HistorialTab({data,setData,toast,session}){
         {r.pendientes&&<p><b>Pendientes:</b> {r.pendientes}</p>}
         {r.vendedores_seguimiento&&<p><b>Seguimiento:</b> {r.vendedores_seguimiento}</p>}
       </div>;
-      case'plan':return <div style={{fontSize:13}}>{r.objetivo&&<p><b>Objetivo:</b> {r.objetivo}</p>}{r.prioridades&&<p><b>Prioridades:</b> {r.prioridades}</p>}</div>;
+      case'plan':return <div style={{fontSize:13}}>
+        <p><b>Semana:</b> {r.semanaLabel||''}</p>
+        {r.objetivos&&<p>🎯 Oport: {r.objetivos.oportunidades||0} (meta {r.metaOficial?.oportunidades??'-'}) · Ventas: {r.objetivos.ventas||0} (meta {r.metaOficial?.ventas??'-'}) · Instal: {r.objetivos.instalaciones||0} (meta {r.metaOficial?.instalaciones??'-'})</p>}
+        {r.objetivos&&<p>NPPF: {r.objetivos.cuentasRecuperadas||0} · ARPU: {r.objetivos.arpu||0}</p>}
+        {r.prioridades&&<p><b>Prioridades:</b> {r.prioridades}</p>}
+        {r.vendedores_acompanar&&<p><b>Acompañamientos:</b> {r.vendedores_acompanar}</p>}
+        {r.zonas&&Object.entries(r.zonas).some(([,v])=>v?.length)&&<div style={{marginTop:4}}>
+          <b>Zonas:</b>
+          {Object.entries(r.zonas).filter(([,v])=>v?.length).map(([dia,entradas])=>
+            <p key={dia} style={{margin:'2px 0'}}>• {DIAS_SEMANA_LABEL[dia]||dia}: {entradas.map(e=>e.colonia?`${e.colonia} (${e.cluster})`:`${e.cluster} (todo)`).join(', ')}</p>
+          )}
+        </div>}
+        {r.resultado_esperado&&<p><b>Resultado esperado:</b> {r.resultado_esperado}</p>}
+        {/* Compatibilidad con planes guardados antes de este cambio */}
+        {r.objetivo&&<p><b>Objetivo:</b> {r.objetivo}</p>}
+      </div>;
+      case'plan_resultado':{
+        const pctKpi=(k)=>{const o=Number(r.objetivos?.[k])||0;const v=Number(r.resultados?.[k])||0;return o?Math.round(v/o*100):null;};
+        return <div style={{fontSize:13}}>
+          <p><b>Semana:</b> {r.semanaLabel||''}</p>
+          {['oportunidades','ventas','instalaciones'].map(k=>{
+            const p=pctKpi(k);
+            return <p key={k} style={{margin:'2px 0'}}>{k[0].toUpperCase()+k.slice(1)}: {r.resultados?.[k]||0}{r.objetivos?.[k]!=null&&` / obj. ${r.objetivos[k]}`}{p!=null&&<b style={{marginLeft:6,color:p>=95?'var(--green)':p>=60?'var(--yellow)':'var(--red)'}}>{p}%</b>}</p>;
+          })}
+          <p>NPPF: {r.resultados?.cuentasRecuperadas||0} · ARPU: {r.resultados?.arpu||0}</p>
+        </div>;
+      }
       case'feedback':return <div style={{fontSize:13}}><div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><b>{r.vendedor}</b> — {r.tipo}<StatusBadge status={r.semaforo} small/></div>{r.hallazgos&&<p>{r.hallazgos}</p>}{r.compromisos&&<p><b>Compromisos:</b> {r.compromisos}</p>}{r.transcript&&<p style={{fontStyle:'italic',background:'var(--bg)',padding:8,borderRadius:6,marginTop:4}}>🎙️ {r.transcript.slice(0,200)}{r.transcript.length>200?'...':''}</p>}</div>;
       default:return null;
     }
@@ -1727,7 +1968,7 @@ function HistorialTab({data,setData,toast,session}){
       </div>
       {vista==='dispositivo'?<>
         <div style={{display:'flex',gap:6,marginBottom:10,flexWrap:'wrap'}}>
-          <Select value={filter} onChange={v=>setFilter(v)} options={[{value:'todos',label:'Todos'},{value:'arranque',label:'☀️ Arranque'},{value:'cierre',label:'🌙 Cierre'},{value:'permiso',label:'📋 Permisos'},{value:'plan',label:'📊 Planes'},{value:'feedback',label:'💬 Hallazgos'}]} style={{flex:1,minWidth:120}}/>
+          <Select value={filter} onChange={v=>setFilter(v)} options={[{value:'todos',label:'Todos'},{value:'arranque',label:'☀️ Arranque'},{value:'cierre',label:'🌙 Cierre'},{value:'permiso',label:'📋 Permisos'},{value:'plan',label:'📊 Planes'},{value:'plan_resultado',label:'📊 Resultados Plan'},{value:'feedback',label:'💬 Hallazgos'}]} style={{flex:1,minWidth:120}}/>
           <Input type="date" value={dateF} onChange={e=>setDateF(e.target.value)} style={{flex:1,minWidth:120}}/>
           {dateF&&<Btn variant="ghost" onClick={()=>setDateF('')}>✕</Btn>}
         </div>
@@ -1844,7 +2085,7 @@ function MainApp({session,onLogout}){
       {tab==='arranque'&&<ArranqueTab data={data} setData={setData} team={allTeam} toast={toast} session={session}/>}
       {tab==='permisos'&&<PermisosTab data={data} setData={setData} team={allTeam} toast={toast} session={session}/>}
       {tab==='cierre'&&<CierreTab data={data} setData={setData} team={allTeam} toast={toast} session={session}/>}
-      {tab==='plan'&&<PlanTab data={data} setData={setData} toast={toast} session={session}/>}
+      {tab==='plan'&&<PlanTab data={data} setData={setData} team={allTeam} toast={toast} session={session}/>}
       {tab==='feedback'&&<FeedbackTab data={data} setData={setData} team={allTeam} toast={toast} session={session}/>}
       {tab==='historial'&&<HistorialTab data={data} setData={setData} toast={toast} session={session}/>}
     </div>
