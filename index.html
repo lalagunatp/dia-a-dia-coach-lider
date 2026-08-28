@@ -258,6 +258,32 @@ function textoPendientesInstalar(m,pendientes,ref){
   }).join('\n');
   return `📋 Cuentas validadas sin instalar de ${m.nombre} (últ. 30 días):\n\n${lineas}`;
 }
+// Zonas por día ({lunes:[{cluster,colonia}],...}) → texto plano, una línea por día con actividad.
+function zonasATexto(zonas){
+  if(!zonas)return'';
+  return DIAS_SEMANA.filter(d=>(zonas[d]||[]).length).map(d=>{
+    const entradas=zonas[d].map(e=>e.colonia?`${e.colonia} (${e.cluster})`:`${e.cluster} (todo)`).join(', ');
+    return `${DIAS_SEMANA_LABEL[d]}: ${entradas}`;
+  }).join('\n');
+}
+function textoPlan(rec){
+  const o=rec.objetivos||{},m=rec.metaOficial||{};
+  const lineas=[
+    `📊 Plan de la semana — ${rec.semanaLabel}`,'',
+    '🎯 Objetivo:',
+    `• Oportunidades: ${o.oportunidades||0} (meta ${m.oportunidades??'-'})`,
+    `• Ventas/validaciones: ${o.ventas||0} (meta ${m.ventas??'-'})`,
+    `• Instalaciones: ${o.instalaciones||0} (meta ${m.instalaciones??'-'})`,
+    `• Cuentas recuperadas NPPF: ${o.cuentasRecuperadas||0}`,
+    `• ARPU: ${fmtMoney(o.arpu)}`,
+  ];
+  if(rec.prioridades)lineas.push('',`📌 Prioridades: ${rec.prioridades}`);
+  if(rec.vendedores_acompanar)lineas.push('',`🤝 Acompañamientos: ${rec.vendedores_acompanar}`);
+  const zt=zonasATexto(rec.zonas);
+  if(zt)lineas.push('','🗺️ Zonas:',zt);
+  if(rec.resultado_esperado)lineas.push('',`✅ Resultado esperado: ${rec.resultado_esperado}`);
+  return lineas.join('\n');
+}
 
 async function fetchPlantilla(){
   const res=await fetch(gvizUrl(PLANTILLA_GID));
@@ -728,6 +754,11 @@ function StatusBadge({status,onClick,small}){
 function Field({label,children}){return <div style={{marginBottom:12}}><label style={{display:'block',fontSize:11,fontWeight:700,color:'var(--dim)',marginBottom:3,textTransform:'uppercase',letterSpacing:'.5px'}}>{label}</label>{children}</div>;}
 function Input(p){return <input {...p} style={{width:'100%',padding:'10px 12px',borderRadius:8,border:'1.5px solid var(--border)',background:'var(--input)',fontSize:14,color:'var(--text)',outline:'none',boxSizing:'border-box',...p.style}} onFocus={e=>{e.target.style.borderColor='var(--accent)';p.onFocus?.(e);}} onBlur={e=>{e.target.style.borderColor='var(--border)';p.onBlur?.(e);}}/>;}
 function Textarea(p){return <textarea {...p} style={{width:'100%',padding:'10px 12px',borderRadius:8,border:'1.5px solid var(--border)',background:'var(--input)',fontSize:14,color:'var(--text)',outline:'none',minHeight:80,fontFamily:'inherit',boxSizing:'border-box',...p.style}} onFocus={e=>{e.target.style.borderColor='var(--accent)';p.onFocus?.(e);}} onBlur={e=>{e.target.style.borderColor='var(--border)';p.onBlur?.(e);}}/>;}
+// Input numérico con "$" fijo a la izquierda, para valores de moneda (ARPU).
+function InputMoney(p){return <div style={{position:'relative'}}>
+  <span style={{position:'absolute',left:12,top:'50%',transform:'translateY(-50%)',color:'var(--dim)',fontSize:14,pointerEvents:'none'}}>$</span>
+  <Input type="number" step="0.01" min="0" inputMode="decimal" placeholder="0.00" {...p} style={{paddingLeft:24,...p.style}}/>
+</div>;}
 function Btn({children,onClick,variant='primary',style:s,disabled}){
   const v={primary:{background:'var(--accent)',color:'#fff'},secondary:{background:'var(--card)',color:'var(--text)',border:'1.5px solid var(--border)'},danger:{background:'var(--red)',color:'#fff'},ghost:{background:'transparent',color:'var(--accent)',padding:'6px 10px'},success:{background:'var(--green)',color:'#fff'}};
   return <button onClick={onClick} disabled={disabled} style={{padding:'10px 18px',borderRadius:8,border:'none',fontSize:14,fontWeight:600,cursor:disabled?'not-allowed':'pointer',opacity:disabled?.5:1,...v[variant],...s}}>{children}</button>;
@@ -1319,21 +1350,23 @@ function PlanTab({data,setData,team,toast,session}){
     {planPendiente&&resForm&&
       <Card title={`📌 Resultado pendiente — Semana ${planPendiente.semanaLabel}`} style={{borderLeft:'4px solid var(--yellow)'}}>
         <p style={{fontSize:11,color:'var(--dim)',marginBottom:8}}>Se precargó de lo que hay en sistema para esa semana — ajústalo si hace falta y guarda el resultado real.</p>
-        {KPIS.map(kpi=>{
-          const obj=Number(planPendiente.objetivos?.[kpi.k])||0;
-          const real=Number(resForm[kpi.k])||0;
-          const p=obj?Math.round(real/obj*100):null;
-          return <Field key={kpi.k} label={`${kpi.label} (objetivo: ${obj})`}>
-            <Input type="number" value={resForm[kpi.k]} onChange={e=>setResForm(f=>({...f,[kpi.k]:e.target.value}))}/>
-            {p!=null&&<p style={{fontSize:11,fontWeight:700,margin:'2px 0 0',color:p>=95?'var(--green)':p>=60?'var(--yellow)':'var(--red)'}}>{p}% del objetivo</p>}
-          </Field>;
-        })}
-        <Field label={`Cuentas recuperadas NPPF (objetivo: ${planPendiente.objetivos?.cuentasRecuperadas||0})`}>
-          <Input type="number" value={resForm.cuentasRecuperadas} onChange={e=>setResForm(f=>({...f,cuentasRecuperadas:e.target.value}))}/>
-        </Field>
-        <Field label={`ARPU (objetivo: ${planPendiente.objetivos?.arpu||0})`}>
-          <Input type="number" value={resForm.arpu} onChange={e=>setResForm(f=>({...f,arpu:e.target.value}))}/>
-        </Field>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+          {KPIS.map(kpi=>{
+            const obj=Number(planPendiente.objetivos?.[kpi.k])||0;
+            const real=Number(resForm[kpi.k])||0;
+            const p=obj?Math.round(real/obj*100):null;
+            return <Field key={kpi.k} label={`${kpi.label} (obj: ${obj})`}>
+              <Input type="number" value={resForm[kpi.k]} onChange={e=>setResForm(f=>({...f,[kpi.k]:e.target.value}))}/>
+              {p!=null&&<p style={{fontSize:11,fontWeight:700,margin:'2px 0 0',color:p>=95?'var(--green)':p>=60?'var(--yellow)':'var(--red)'}}>{p}%</p>}
+            </Field>;
+          })}
+          <Field label={`Cuentas recuperadas NPPF (obj: ${planPendiente.objetivos?.cuentasRecuperadas||0})`}>
+            <Input type="number" value={resForm.cuentasRecuperadas} onChange={e=>setResForm(f=>({...f,cuentasRecuperadas:e.target.value}))}/>
+          </Field>
+          <Field label={`ARPU (obj: ${fmtMoney(planPendiente.objetivos?.arpu)})`}>
+            <InputMoney value={resForm.arpu} onChange={e=>setResForm(f=>({...f,arpu:e.target.value}))}/>
+          </Field>
+        </div>
         <Btn onClick={guardarResultado} style={{width:'100%'}}>💾 Guardar resultado real</Btn>
       </Card>
     }
@@ -1346,21 +1379,27 @@ function PlanTab({data,setData,team,toast,session}){
           <b style={{color:colorVsMeta(planActual.objetivos?.[kpi.k],planActual.metaOficial?.[kpi.k])}}>{planActual.objetivos?.[kpi.k]||0} <span style={{color:'var(--dim)',fontWeight:400}}>/ meta {planActual.metaOficial?.[kpi.k]??'-'}</span></b>
         </div>)}
         <div style={{display:'flex',justifyContent:'space-between',fontSize:13,padding:'3px 0'}}><span>Cuentas recuperadas NPPF</span><b>{planActual.objetivos?.cuentasRecuperadas||0}</b></div>
-        <div style={{display:'flex',justifyContent:'space-between',fontSize:13,padding:'3px 0'}}><span>ARPU</span><b>{planActual.objetivos?.arpu||0}</b></div>
+        <div style={{display:'flex',justifyContent:'space-between',fontSize:13,padding:'3px 0'}}><span>ARPU</span><b>{fmtMoney(planActual.objetivos?.arpu)}</b></div>
+        <a href={whatsappUrl(textoPlan(planActual))} target="_blank" rel="noopener noreferrer"
+          style={{display:'inline-flex',alignItems:'center',gap:6,marginTop:10,padding:'8px 14px',borderRadius:8,background:'#25D366',color:'#fff',fontSize:13,fontWeight:700,textDecoration:'none'}}>
+          📲 Enviar plan al líder por WhatsApp
+        </a>
       </Card>
     :<>
       <Card title="🎯 Objetivo de la semana">
         <p style={{fontSize:11,color:'var(--dim)',marginBottom:8}}>Semana {semanaLabel} (lunes a domingo). Compromiso del equipo al cierre de la semana (domingo).</p>
-        {KPIS.map(kpi=>{
-          const val=form.objetivos[kpi.k];
-          const color=colorVsMeta(val,kpi.meta);
-          return <Field key={kpi.k} label={kpi.label}>
-            <Input type="number" value={val} onChange={e=>updObjetivo(kpi.k,e.target.value)} style={{color,fontWeight:700}}/>
-            <p style={{fontSize:10,color:'var(--dim)',margin:'2px 0 0'}}>Meta oficial del equipo: <b>{kpi.meta}</b> — <span style={{color}}>{color==='var(--red)'?'por debajo de la meta':color==='var(--green)'?'por arriba de la meta':'igual a la meta'}</span></p>
-          </Field>;
-        })}
-        <Field label="Cuentas recuperadas (NPPF)"><Input type="number" value={form.objetivos.cuentasRecuperadas} onChange={e=>updObjetivo('cuentasRecuperadas',e.target.value)}/></Field>
-        <Field label="ARPU"><Input type="number" value={form.objetivos.arpu} onChange={e=>updObjetivo('arpu',e.target.value)}/></Field>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+          {KPIS.map(kpi=>{
+            const val=form.objetivos[kpi.k];
+            const color=colorVsMeta(val,kpi.meta);
+            return <Field key={kpi.k} label={kpi.label}>
+              <Input type="number" value={val} onChange={e=>updObjetivo(kpi.k,e.target.value)} style={{color,fontWeight:700}}/>
+              <p style={{fontSize:10,color:'var(--dim)',margin:'2px 0 0'}}>Meta: <b>{kpi.meta}</b> — <span style={{color}}>{color==='var(--red)'?'debajo':color==='var(--green)'?'arriba':'igual'}</span></p>
+            </Field>;
+          })}
+          <Field label="Cuentas recuperadas (NPPF)"><Input type="number" value={form.objetivos.cuentasRecuperadas} onChange={e=>updObjetivo('cuentasRecuperadas',e.target.value)}/></Field>
+          <Field label="ARPU"><InputMoney value={form.objetivos.arpu} onChange={e=>updObjetivo('arpu',e.target.value)}/></Field>
+        </div>
       </Card>
       <Card title="Prioridades">
         <Textarea value={form.prioridades} onChange={e=>setForm({...form,prioridades:e.target.value})} placeholder="Amarillo/rojo, calidad, incidencias..."/>
@@ -2058,6 +2097,89 @@ function HistorialTab({data,setData,toast,session}){
 }
 
 // ═══════════════════════════════════════
+// REPORTE (respaldo legible, para reemplazar el JSON crudo)
+// ═══════════════════════════════════════
+const escapeHtml=s=>String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+const REPORTE_TIPOS={
+  arranque:{icon:'☀️',label:'Arranque',color:'#ca8a04'},
+  cierre:{icon:'🌙',label:'Cierre',color:'#1e40af'},
+  permiso:{icon:'📋',label:'Permiso',color:'#7c3aed'},
+  plan:{icon:'📊',label:'Plan',color:'#16a34a'},
+  plan_resultado:{icon:'📊',label:'Resultado Plan',color:'#16a34a'},
+  feedback:{icon:'💬',label:'Hallazgo',color:'#dc2626'},
+};
+function reporteDetalleHTML(r){
+  switch(r.type){
+    case'arranque':
+      return `<p><b>Presentes:</b> ${(r.presentes||[]).length} · <b>Ausentes:</b> ${(r.ausentes||[]).length}</p>`+
+        (r.ausentes||[]).map(a=>`<p style="color:#dc2626;margin:2px 0">✗ ${escapeHtml(a.name)}: ${escapeHtml(a.reason)}${a.detail?' — '+escapeHtml(a.detail):''}</p>`).join('')+
+        (r.notas?`<p>${escapeHtml(r.notas)}</p>`:'');
+    case'permiso':
+      return `<p><b>${escapeHtml(r.vendedor)}</b> — ${escapeHtml(r.tipo)}</p><p>${escapeHtml(r.motivo)}</p>`+(r.autorizado_por?`<p>Autorizado: ${escapeHtml(r.autorizado_por)}</p>`:'');
+    case'cierre':
+      return (r.resultados||[]).filter(x=>x.oportunidades||x.validadas||x.instaladas||x.pagadasHoy||x.pendiente)
+        .map(x=>`<p style="margin:2px 0"><b>${escapeHtml(x.nombre)}:</b> ${x.oportunidades||0} op · ${x.validadas||0} val · ${x.instaladas||0} inst${x.pagadasHoy?` · ${x.pagadasHoy} pagada(s)`:''}${x.pendiente?`<br><span style="color:#6b7086">Pendiente: ${escapeHtml(x.pendiente)}</span>`:''}</p>`).join('')+
+        (r.incidencias?`<p><b>Incidencias:</b> ${escapeHtml(r.incidencias)}</p>`:'')+
+        ((r.seguimiento||[]).length?'<p><b>Seguimiento mañana:</b></p>'+r.seguimiento.map(s=>`<p style="margin:2px 0">• ${escapeHtml(s.name)}${s.motivo?': '+escapeHtml(s.motivo):''}</p>`).join(''):'');
+    case'plan':{
+      const o=r.objetivos||{},m=r.metaOficial||{};
+      const zt=zonasATexto(r.zonas);
+      return `<p>🎯 Oport: ${o.oportunidades||0} (meta ${m.oportunidades??'-'}) · Ventas: ${o.ventas||0} (meta ${m.ventas??'-'}) · Instal: ${o.instalaciones||0} (meta ${m.instalaciones??'-'})</p>`+
+        `<p>NPPF: ${o.cuentasRecuperadas||0} · ARPU: ${escapeHtml(fmtMoney(o.arpu))}</p>`+
+        (r.prioridades?`<p><b>Prioridades:</b> ${escapeHtml(r.prioridades)}</p>`:'')+
+        (r.vendedores_acompanar?`<p><b>Acompañamientos:</b> ${escapeHtml(r.vendedores_acompanar)}</p>`:'')+
+        (zt?`<p><b>Zonas:</b><br>${escapeHtml(zt).replace(/\n/g,'<br>')}</p>`:'')+
+        (r.resultado_esperado?`<p><b>Resultado esperado:</b> ${escapeHtml(r.resultado_esperado)}</p>`:'');
+    }
+    case'plan_resultado':{
+      const o=r.objetivos||{},res=r.resultados||{};
+      const pct=(v,ob)=>ob?Math.round((Number(v)||0)/Number(ob)*100):null;
+      return['oportunidades','ventas','instalaciones'].map(k=>{const p=pct(res[k],o[k]);return `<p style="margin:2px 0">${k[0].toUpperCase()+k.slice(1)}: ${res[k]||0}${o[k]!=null?` / obj. ${o[k]}`:''}${p!=null?` <b>${p}%</b>`:''}</p>`;}).join('')+
+        `<p>NPPF: ${res.cuentasRecuperadas||0} · ARPU: ${escapeHtml(fmtMoney(res.arpu))}</p>`;
+    }
+    case'feedback':
+      return `<p><b>${escapeHtml(r.vendedor)}</b> — ${escapeHtml(r.tipo)}${r.semaforo?` (${escapeHtml(STATUS[r.semaforo]?.label||'')})`:''}</p>`+
+        (r.hallazgos?`<p>${escapeHtml(r.hallazgos)}</p>`:'')+(r.compromisos?`<p><b>Compromisos:</b> ${escapeHtml(r.compromisos)}</p>`:'');
+    default:
+      return'';
+  }
+}
+function reporteRecordHTML(r){
+  const t=REPORTE_TIPOS[r.type]||{icon:'•',label:r.type,color:'#6b7086'};
+  return `<div style="border-left:4px solid ${t.color};background:#fff;border-radius:10px;padding:14px 16px;margin-bottom:10px;box-shadow:0 1px 3px rgba(0,0,0,.06)">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+      <span style="font-weight:700;font-size:13px">${t.icon} ${t.label}</span>
+      <span style="font-size:11px;color:#6b7086">${escapeHtml(fmt(r.date))}${r.time?' · '+escapeHtml(r.time):''}</span>
+    </div>
+    <div style="font-size:13px;color:#1a1d29;line-height:1.5">${reporteDetalleHTML(r)||'<span style="color:#6b7086">Sin detalle</span>'}</div>
+    ${r.registradoPor?`<div style="font-size:11px;color:#6b7086;margin-top:8px;border-top:1px solid #e2e4ec;padding-top:6px">Registrado por: ${escapeHtml(r.registradoPor)}</div>`:''}
+  </div>`;
+}
+// Reporte HTML autocontenido (imprimible / compartible) para reemplazar el respaldo en JSON crudo.
+function generarReporteHTML(data,user,rolLabel){
+  const recs=[...data.records].sort((a,b)=>b.savedAt.localeCompare(a.savedAt));
+  const porFecha={};
+  recs.forEach(r=>{(porFecha[r.date]=porFecha[r.date]||[]).push(r);});
+  const fechas=Object.keys(porFecha).sort((a,b)=>b.localeCompare(a));
+  const cuerpo=fechas.map(f=>`
+    <h2 style="font-size:15px;color:#1e40af;border-bottom:2px solid #dbeafe;padding-bottom:6px;margin:24px 0 10px">${escapeHtml(fmt(f))}</h2>
+    ${porFecha[f].map(reporteRecordHTML).join('')}
+  `).join('');
+  return `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>Reporte Supervisión — ${escapeHtml(user.nombre)}</title>
+<style>
+body{font-family:system-ui,-apple-system,sans-serif;background:#f0f2f8;color:#1a1d29;margin:0;padding:20px}
+.header{background:linear-gradient(135deg,#1e3a8a,#1e40af);color:#fff;padding:20px;border-radius:12px;margin-bottom:20px}
+.header h1{margin:0;font-size:20px}
+.header p{margin:4px 0 0;font-size:13px;opacity:.9}
+p{margin:4px 0}
+@media print{body{background:#fff}.header{background:#1e40af!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+</style></head><body>
+<div class="header"><h1>📋 Reporte de Supervisión</h1><p>${escapeHtml(user.nombre)}${rolLabel?' · '+escapeHtml(rolLabel):''}</p><p>Generado el ${escapeHtml(fmt(today()))} · ${recs.length} registro${recs.length!==1?'s':''}</p></div>
+${cuerpo||'<p style="text-align:center;color:#6b7086;padding:40px">Sin registros.</p>'}
+</body></html>`;
+}
+
+// ═══════════════════════════════════════
 // MAIN APP
 // ═══════════════════════════════════════
 function MainApp({session,onLogout}){
@@ -2073,9 +2195,10 @@ function MainApp({session,onLogout}){
   const hasCie=todayRecs.some(r=>r.type==='cierre');
   const roleLabels={coach:'🏅 Coach',lider:'⭐ Líder',director:'👔 Director'};
 
-  const exportJSON=()=>{
-    const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
-    const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`supervision-${today()}.json`;a.click();toast('📥 Respaldo descargado');
+  const exportReporte=()=>{
+    const html=generarReporteHTML(data,user,roleLabels[role]);
+    const blob=new Blob([html],{type:'text/html'});
+    const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`reporte-supervision-${today()}.html`;a.click();toast('📥 Reporte descargado');
   };
 
   return <div style={{maxWidth:600,margin:'0 auto',minHeight:'100vh',background:'var(--bg)'}}>
@@ -2089,7 +2212,7 @@ function MainApp({session,onLogout}){
         <div style={{display:'flex',gap:6,alignItems:'center'}}>
           {hasArr&&<span style={{fontSize:14}}>☀️</span>}
           {hasCie&&<span style={{fontSize:14}}>🌙</span>}
-          <button onClick={exportJSON} style={{background:'rgba(255,255,255,.15)',border:'none',borderRadius:8,padding:'5px 8px',color:'#fff',cursor:'pointer',fontSize:14}} title="Descargar respaldo">📥</button>
+          <button onClick={exportReporte} style={{background:'rgba(255,255,255,.15)',border:'none',borderRadius:8,padding:'5px 8px',color:'#fff',cursor:'pointer',fontSize:14}} title="Descargar reporte">📥</button>
           <button onClick={onLogout} style={{background:'rgba(255,255,255,.15)',border:'none',borderRadius:8,padding:'5px 8px',color:'#fff',cursor:'pointer',fontSize:12,fontWeight:700}} title="Cerrar sesión">Salir</button>
         </div>
       </div>
