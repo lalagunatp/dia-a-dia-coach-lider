@@ -32,10 +32,15 @@
 // se quedaban solo en el teléfono reintentando para siempre. La clave
 // ahora es "PERMISO"; el nombre de la pestaña se conserva "PERMISOS".
 //
-// NUEVO (foto en Hallazgos): los tipos "Acompañamiento" y "Evidencia de
-// asignación externa" ahora mandan foto sellada (obligatoria en la app).
-// FEEDBACK sube esa foto a Drive igual que Arranque/Permisos y guarda su
-// liga en las columnas nuevas "Con foto" / "Foto evidencia".
+// NUEVO (foto en Hallazgos): "Acompañamiento" manda una foto sellada
+// (con nombre/fecha/hora/ubicación, obligatoria). "Evidencia de asignación
+// externa" manda una o varias fotos SIN sello (persona en campo + conversación
+// del avance, obligatorias) y no lleva Observaciones/Compromisos/Grabación.
+// Ambas terminan en las mismas columnas "Con foto" / "Foto evidencia"
+// (varias fotos se guardan como ligas separadas por "; ").
+//
+// NUEVO (Permisos): se agregó el compromiso del día (cuentas, ventas,
+// instalaciones) y la colonia donde va a trabajar la persona con permiso.
 //
 // ══════════════════════════════════════════════════════════════
 
@@ -147,6 +152,7 @@ const SHEET_CONFIG = {
     name: 'PERMISOS',
     headers: [
       'ID', 'Fecha', 'Integrante', 'Tipo', 'Motivo',
+      'Compromiso Cuentas', 'Compromiso Ventas', 'Compromiso Instalaciones', 'Colonia',
       'Autorizado por', 'Notas', 'Con foto', 'Foto evidencia',
       'Registrado por', 'Timestamp'
     ]
@@ -297,8 +303,10 @@ function buildRow(type, d) {
       const fotoUrl = d.photo
         ? subirFotoADrive(d.photo, `Permiso_${d.date}_${nombreSeguro(d.vendedor)}.jpg`)
         : '';
+      const comp = d.compromiso || {};
       const row = [
         d.id, d.date, d.vendedor || '', d.tipo || '', d.motivo || '',
+        comp.cuentas || 0, comp.ventas || 0, comp.instalaciones || 0, d.colonia || '',
         d.autorizado_por || '', d.notas || '',
         fotoUrl ? 'SÍ' : 'NO', fotoUrl,
         d.registradoPor || '', ts
@@ -350,9 +358,16 @@ function buildRow(type, d) {
     }
 
     case 'feedback': {
-      const fotoUrl = d.photo
-        ? subirFotoADrive(d.photo, `Hallazgo_${d.date}_${nombreSeguro(d.vendedor)}.jpg`)
-        : '';
+      // Acompañamiento manda una sola foto sellada (d.photo); Evidencia de asignación externa
+      // manda varias fotos sin sello (d.fotos) — cualquiera de las dos termina en la misma columna.
+      let fotoUrl = '';
+      let fotosEvidencia = null;
+      if (d.photo) {
+        fotoUrl = subirFotoADrive(d.photo, `Hallazgo_${d.date}_${nombreSeguro(d.vendedor)}.jpg`);
+      } else if (d.fotos && d.fotos.length) {
+        fotosEvidencia = d.fotos.map((foto, i) => subirFotoADrive(foto, `Hallazgo_${d.date}_${nombreSeguro(d.vendedor)}_${i + 1}.jpg`)).filter(Boolean);
+        fotoUrl = fotosEvidencia.join('; ');
+      }
       const row = [
         d.id, d.date, d.vendedor || '', d.tipo || '', d.semaforo || '',
         d.hallazgos || '', d.fortalezas || '', d.areas_oportunidad || '',
@@ -362,7 +377,8 @@ function buildRow(type, d) {
         fotoUrl ? 'SÍ' : 'NO', fotoUrl,
         d.registradoPor || '', ts
       ];
-      return { row: row, extra: { fotoUrl: fotoUrl } };
+      const extra = fotosEvidencia ? { fotosEvidencia: fotosEvidencia } : { fotoUrl: fotoUrl };
+      return { row: row, extra: extra };
     }
 
     default:

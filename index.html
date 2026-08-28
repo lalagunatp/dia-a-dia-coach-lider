@@ -109,7 +109,7 @@ async function saveAndSync(data,record,toast,setData){
       pending.push(record);
       localStorage.setItem('sv2-pending',JSON.stringify(pending));
       toast?.('⚠️ Guardado local — sin conexión al Sheet');
-    }else if(setData&&(result.fotoGrupoUrl||result.fotosAusentes||result.fotoUrl)){
+    }else if(setData&&(result.fotoGrupoUrl||result.fotosAusentes||result.fotoUrl||result.fotosEvidencia)){
       // Ya se subieron a Drive: se reemplaza la foto pesada (base64) local por la liga,
       // para que no se quede ocupando espacio en el teléfono.
       setData(d=>{
@@ -118,6 +118,7 @@ async function saveAndSync(data,record,toast,setData){
           const upd={...r};
           if(result.fotoGrupoUrl)upd.photo=result.fotoGrupoUrl;
           if(result.fotoUrl)upd.photo=result.fotoUrl;
+          if(result.fotosEvidencia)upd.fotos=result.fotosEvidencia;
           if(result.fotosAusentes&&upd.ausentes){
             upd.ausentes=upd.ausentes.map(a=>{
               const found=result.fotosAusentes.find(f=>f.name===a.name);
@@ -142,13 +143,14 @@ async function retryPending(toast,setData){
   for(const rec of pending){
     const r=await sendToSheet(rec);
     if(!r.ok){still.push(rec);continue;}
-    if(setData&&(r.fotoGrupoUrl||r.fotosAusentes||r.fotoUrl)){
+    if(setData&&(r.fotoGrupoUrl||r.fotosAusentes||r.fotoUrl||r.fotosEvidencia)){
       setData(d=>{
         const records=d.records.map(x=>{
           if(x.id!==rec.id)return x;
           const upd={...x};
           if(r.fotoGrupoUrl)upd.photo=r.fotoGrupoUrl;
           if(r.fotoUrl)upd.photo=r.fotoUrl;
+          if(r.fotosEvidencia)upd.fotos=r.fotosEvidencia;
           if(r.fotosAusentes&&upd.ausentes){
             upd.ausentes=upd.ausentes.map(a=>{
               const found=r.fotosAusentes.find(f=>f.name===a.name);
@@ -957,6 +959,43 @@ function PhotoCaptureGeo({photo,onCapture,coachName,toast,label}){
   </div>;
 }
 
+// Varias fotos sin sello (persona en campo + conversación del avance, etc.) — cada toque agrega una más.
+function PhotoCaptureMulti({photos,onChange,label}){
+  const refCam=useRef();
+  const refGal=useRef();
+  const handle=e=>{
+    const f=e.target.files?.[0];if(!f)return;
+    const r=new FileReader();
+    r.onload=ev=>{
+      const img=new Image();
+      img.onload=()=>{
+        const c=document.createElement('canvas');const M=800;let w=img.width,h=img.height;if(w>M){h=h*(M/w);w=M;}
+        c.width=w;c.height=h;c.getContext('2d').drawImage(img,0,0,w,h);
+        onChange([...(photos||[]),c.toDataURL('image/jpeg',.7)]);
+      };
+      img.src=ev.target.result;
+    };
+    r.readAsDataURL(f);
+    e.target.value='';
+  };
+  const quitar=i=>onChange(photos.filter((_,idx)=>idx!==i));
+  return <div>
+    <input ref={refCam} type="file" accept="image/*" capture="environment" onChange={handle} style={{display:'none'}}/>
+    <input ref={refGal} type="file" accept="image/*" onChange={handle} style={{display:'none'}}/>
+    {photos&&photos.length>0&&<div style={{display:'flex',flexWrap:'wrap',gap:8,marginBottom:8}}>
+      {photos.map((p,i)=><div key={i} style={{position:'relative',width:90,height:90}}>
+        <img src={p} alt="" style={{width:'100%',height:'100%',objectFit:'cover',borderRadius:8,border:'1px solid var(--border)'}}/>
+        <button onClick={()=>quitar(i)} style={{position:'absolute',top:-6,right:-6,width:22,height:22,borderRadius:'50%',border:'none',background:'var(--red)',color:'#fff',fontSize:12,cursor:'pointer',lineHeight:'22px',padding:0}}>✕</button>
+      </div>)}
+    </div>}
+    {label&&<p style={{fontSize:12,color:'var(--dim)',marginBottom:6}}>{label}</p>}
+    <div style={{display:'flex',gap:8}}>
+      <button onClick={()=>refCam.current.click()} style={{flex:1,padding:'14px 10px',borderRadius:12,border:'2px dashed var(--border)',background:'var(--input)',cursor:'pointer',textAlign:'center',color:'var(--dim)',fontSize:13}}>📷 Tomar foto</button>
+      <button onClick={()=>refGal.current.click()} style={{flex:1,padding:'14px 10px',borderRadius:12,border:'2px dashed var(--border)',background:'var(--input)',cursor:'pointer',textAlign:'center',color:'var(--dim)',fontSize:13}}>🖼️ Subir foto</button>
+    </div>
+  </div>;
+}
+
 // ═══ AUDIO RECORDER ═══
 function AudioRecorder({onTranscript}){
   const[rec,setRec]=useState(false);const[txt,setTxt]=useState('');const rr=useRef(null);
@@ -1102,20 +1141,34 @@ function ArranqueTab({data,setData,team,toast,session}){
 
 // ─── Permisos ───
 function PermisosTab({data,setData,team,toast,session}){
-  const[form,setForm]=useState({date:today(),vendedor:'',tipo:'Trabajo fuera de ruta',motivo:'',autorizado_por:session.user.nombre,notas:'',photo:null});
+  const[form,setForm]=useState({date:today(),vendedor:'',tipo:'Trabajo fuera de ruta',motivo:'',compromiso:{cuentas:'',ventas:'',instalaciones:''},colonia:'',autorizado_por:session.user.nombre,notas:'',photo:null});
+  const[zonasData,setZonasData]=useState({clusterToColonias:{},coloniaToCluster:{},clusters:[]});
+  useEffect(()=>{fetchClustersColonias().then(list=>setZonasData(buildClusterMap(list)));},[]);
   const guardar=async()=>{
     if(!form.vendedor){alert('Selecciona un integrante');return;}
     if(!form.photo){alert('Agrega una foto de evidencia (foto o conversación del motivo) para poder guardar el permiso');return;}
     const rec={id:uid(),type:'permiso',...form,registradoPor:session.user.nombre,savedAt:new Date().toISOString()};
     const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast,setData);toast('✅ Permiso documentado');
-    setForm({date:today(),vendedor:'',tipo:'Trabajo fuera de ruta',motivo:'',autorizado_por:session.user.nombre,notas:'',photo:null});
+    setForm({date:today(),vendedor:'',tipo:'Trabajo fuera de ruta',motivo:'',compromiso:{cuentas:'',ventas:'',instalaciones:''},colonia:'',autorizado_por:session.user.nombre,notas:'',photo:null});
   };
+  const todasColonias=Object.keys(zonasData.coloniaToCluster).sort();
   return <div>
     <Card title="📋 Documentar permiso">
       <Field label="Fecha"><Input type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})}/></Field>
       <Field label="Integrante"><Select value={form.vendedor} onChange={v=>setForm({...form,vendedor:v})} options={[{value:'',label:'— Seleccionar —'},...team.map(m=>({value:m.nombre,label:m.nombre+(isCoach(m.posicion)?' (Coach)':'')}))]}/></Field>
       <Field label="Tipo"><Select value={form.tipo} onChange={v=>setForm({...form,tipo:v})} options={PERMISO_TIPOS}/></Field>
       <Field label="Motivo"><Textarea value={form.motivo} onChange={e=>setForm({...form,motivo:e.target.value})} placeholder="Motivo del permiso..."/></Field>
+      <div style={{marginBottom:12,padding:10,border:'1px solid var(--border)',borderRadius:8,background:'var(--bg)'}}>
+        <div style={{fontSize:12,fontWeight:700,color:'var(--dim)',marginBottom:8}}>🎯 Compromiso del día</div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+          <Field label="Cuentas"><Input type="number" value={form.compromiso.cuentas} onChange={e=>setForm({...form,compromiso:{...form.compromiso,cuentas:e.target.value}})}/></Field>
+          <Field label="Ventas"><Input type="number" value={form.compromiso.ventas} onChange={e=>setForm({...form,compromiso:{...form.compromiso,ventas:e.target.value}})}/></Field>
+          <Field label="Instalaciones"><Input type="number" value={form.compromiso.instalaciones} onChange={e=>setForm({...form,compromiso:{...form.compromiso,instalaciones:e.target.value}})}/></Field>
+        </div>
+        <Field label="Colonia donde va a trabajar">
+          <Autocomplete value={form.colonia} onChange={v=>setForm({...form,colonia:v})} placeholder="Buscar colonia..." options={todasColonias.map(c=>({value:c,label:`${c} (${zonasData.coloniaToCluster[c]})`}))}/>
+        </Field>
+      </div>
       <Field label="Autorizado por"><Input value={form.autorizado_por} onChange={e=>setForm({...form,autorizado_por:e.target.value})}/></Field>
       <Field label="Evidencia (obligatoria)"><PhotoCapture photo={form.photo} onCapture={p=>setForm({...form,photo:p})} label="Foto o conversación del motivo del permiso"/></Field>
       <Field label="Notas"><Textarea value={form.notas} onChange={e=>setForm({...form,notas:e.target.value})} placeholder="Observaciones..." style={{minHeight:50}}/></Field>
@@ -1487,15 +1540,17 @@ function PlanTab({data,setData,team,toast,session}){
 
 // ─── Feedback ───
 function FeedbackTab({data,setData,team,toast,session}){
-  const[form,setForm]=useState({date:today(),vendedor:'',tipo:'Acompañamiento',hallazgos:'',fortalezas:'',areas_oportunidad:'',compromisos:'',fecha_revision:'',semaforo:'verde',grabado:false,transcript:'',notas:'',photo:null});
+  const[form,setForm]=useState({date:today(),vendedor:'',tipo:'Acompañamiento',hallazgos:'',fortalezas:'',areas_oportunidad:'',compromisos:'',fecha_revision:'',semaforo:'verde',grabado:false,transcript:'',notas:'',photo:null,fotos:[]});
   const[consent,setConsent]=useState(false);
-  const fotoRequerida=FEEDBACK_TIPOS_CON_FOTO.includes(form.tipo);
+  const esAcompanamiento=form.tipo==='Acompañamiento';
+  const esEvidenciaExterna=form.tipo==='Evidencia de asignación externa';
   const guardar=async()=>{
     if(!form.vendedor){alert('Selecciona un integrante');return;}
-    if(fotoRequerida&&!form.photo){alert('Agrega una foto (con sello) — es obligatoria para este tipo de hallazgo');return;}
+    if(esAcompanamiento&&!form.photo){alert('Agrega una foto (con sello) — es obligatoria para este tipo de hallazgo');return;}
+    if(esEvidenciaExterna&&!form.fotos.length){alert('Agrega al menos una foto (persona en campo y conversación del avance) — es obligatoria para este tipo de hallazgo');return;}
     const rec={id:uid(),type:'feedback',...form,registradoPor:session.user.nombre,savedAt:new Date().toISOString()};
     const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast,setData);toast('✅ Hallazgo guardado');
-    setForm({date:today(),vendedor:'',tipo:'Acompañamiento',hallazgos:'',fortalezas:'',areas_oportunidad:'',compromisos:'',fecha_revision:'',semaforo:'verde',grabado:false,transcript:'',notas:'',photo:null});
+    setForm({date:today(),vendedor:'',tipo:'Acompañamiento',hallazgos:'',fortalezas:'',areas_oportunidad:'',compromisos:'',fecha_revision:'',semaforo:'verde',grabado:false,transcript:'',notas:'',photo:null,fotos:[]});
     setConsent(false);
   };
   const selectedMember=form.vendedor?team.find(m=>m.nombre===form.vendedor):null;
@@ -1564,23 +1619,29 @@ function FeedbackTab({data,setData,team,toast,session}){
       }
       <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:12}}><span style={{fontSize:11,fontWeight:700,color:'var(--dim)'}}>SEMÁFORO:</span><StatusBadge status={form.semaforo} onClick={()=>setForm({...form,semaforo:cycleS(form.semaforo)})}/></div>
     </Card>
-    {fotoRequerida&&<Card title="📷 Evidencia (obligatoria)">
+    {esAcompanamiento&&<Card title="📷 Evidencia (obligatoria)">
       <PhotoCaptureGeo photo={form.photo} onCapture={p=>setForm({...form,photo:p})} coachName={session.user.nombre} toast={toast} label="📷 Tomar foto (con sello)"/>
     </Card>}
-    <Card title="Observaciones">
-      <Field label="Hallazgos"><Textarea value={form.hallazgos} onChange={e=>setForm({...form,hallazgos:e.target.value})} placeholder="Qué se observó..."/></Field>
-      <Field label="Fortalezas"><Textarea value={form.fortalezas} onChange={e=>setForm({...form,fortalezas:e.target.value})} style={{minHeight:50}}/></Field>
-      <Field label="Áreas de oportunidad"><Textarea value={form.areas_oportunidad} onChange={e=>setForm({...form,areas_oportunidad:e.target.value})} style={{minHeight:50}}/></Field>
-    </Card>
-    <Card title="Compromisos">
-      <Field label="Qué + Quién + Cuándo"><Textarea value={form.compromisos} onChange={e=>setForm({...form,compromisos:e.target.value})}/></Field>
-      <Field label="Fecha de revisión"><Input type="date" value={form.fecha_revision} onChange={e=>setForm({...form,fecha_revision:e.target.value})}/></Field>
-    </Card>
-    <Card title="🎙️ Grabación de voz">
-      <p style={{fontSize:12,color:'var(--dim)',margin:'0 0 10px'}}>Requiere autorización previa.</p>
-      {!consent?<div style={{textAlign:'center',padding:12}}><p style={{fontSize:13,marginBottom:10}}>¿Autoriza la grabación?</p><div style={{display:'flex',gap:8,justifyContent:'center'}}><Btn onClick={()=>{setConsent(true);setForm({...form,grabado:true});}}>Sí</Btn><Btn variant="secondary" onClick={()=>toast('Sin autorización')}>No</Btn></div></div>:
-      <AudioRecorder onTranscript={t=>setForm({...form,transcript:t})}/>}
-    </Card>
+    {esEvidenciaExterna&&<Card title="📷 Evidencia (obligatoria)">
+      <p style={{fontSize:12,color:'var(--dim)',marginBottom:8}}>Sube foto(s) de la persona en campo y de la conversación con el avance al momento (sin sello).</p>
+      <PhotoCaptureMulti photos={form.fotos} onChange={fotos=>setForm({...form,fotos})} label="Agregar foto"/>
+    </Card>}
+    {!esEvidenciaExterna&&<>
+      <Card title="Observaciones">
+        <Field label="Observación"><Textarea value={form.hallazgos} onChange={e=>setForm({...form,hallazgos:e.target.value})} placeholder="Qué se observó..."/></Field>
+        <Field label="Fortalezas"><Textarea value={form.fortalezas} onChange={e=>setForm({...form,fortalezas:e.target.value})} style={{minHeight:50}}/></Field>
+        <Field label="Áreas de oportunidad"><Textarea value={form.areas_oportunidad} onChange={e=>setForm({...form,areas_oportunidad:e.target.value})} style={{minHeight:50}}/></Field>
+      </Card>
+      <Card title="Compromisos">
+        <Field label="Qué + Quién + Cuándo"><Textarea value={form.compromisos} onChange={e=>setForm({...form,compromisos:e.target.value})}/></Field>
+        <Field label="Fecha de revisión"><Input type="date" value={form.fecha_revision} onChange={e=>setForm({...form,fecha_revision:e.target.value})}/></Field>
+      </Card>
+      <Card title="🎙️ Grabación de voz">
+        <p style={{fontSize:12,color:'var(--dim)',margin:'0 0 10px'}}>Requiere autorización previa.</p>
+        {!consent?<div style={{textAlign:'center',padding:12}}><p style={{fontSize:13,marginBottom:10}}>¿Autoriza la grabación?</p><div style={{display:'flex',gap:8,justifyContent:'center'}}><Btn onClick={()=>{setConsent(true);setForm({...form,grabado:true});}}>Sí</Btn><Btn variant="secondary" onClick={()=>toast('Sin autorización')}>No</Btn></div></div>:
+        <AudioRecorder onTranscript={t=>setForm({...form,transcript:t})}/>}
+      </Card>
+    </>}
     <Card title="Notas"><Textarea value={form.notas} onChange={e=>setForm({...form,notas:e.target.value})} style={{minHeight:50}}/></Card>
     <Btn onClick={guardar} style={{width:'100%'}}>💾 Guardar hallazgo</Btn>
   </div>;
@@ -2064,7 +2125,7 @@ function HistorialTab({data,setData,toast,session}){
   const detail=r=>{
     switch(r.type){
       case'arranque':return <div style={{fontSize:13}}><p><b>Presentes:</b> {r.presentes?.length||0} · <b>Ausentes:</b> {r.ausentes?.length||0}</p>{r.ausentes?.map(a=><div key={a.name} style={{margin:'2px 0'}}><p style={{color:'var(--red)',margin:0}}>✗ {a.name}: {a.reason}{a.detail?` — ${a.detail}`:''}</p>{a.photo&&<FotoMini src={a.photo} style={{maxHeight:160,marginTop:4}}/>}</div>)}{r.notas&&<p style={{marginTop:6}}>{r.notas}</p>}{r.photo&&<FotoMini src={r.photo} style={{maxHeight:120,marginTop:6}}/>}</div>;
-      case'permiso':return <div style={{fontSize:13}}><p><b>{r.vendedor}</b> — {r.tipo}</p><p>{r.motivo}</p>{r.autorizado_por&&<p style={{color:'var(--dim)'}}>Autorizado: {r.autorizado_por}</p>}{r.photo&&<FotoMini src={r.photo} style={{maxHeight:160,marginTop:6}}/>}</div>;
+      case'permiso':return <div style={{fontSize:13}}><p><b>{r.vendedor}</b> — {r.tipo}</p><p>{r.motivo}</p>{r.compromiso&&(r.compromiso.cuentas||r.compromiso.ventas||r.compromiso.instalaciones)&&<p>🎯 Compromiso: {r.compromiso.cuentas||0} cuentas · {r.compromiso.ventas||0} ventas · {r.compromiso.instalaciones||0} instal.</p>}{r.colonia&&<p>📍 {r.colonia}</p>}{r.autorizado_por&&<p style={{color:'var(--dim)'}}>Autorizado: {r.autorizado_por}</p>}{r.photo&&<FotoMini src={r.photo} style={{maxHeight:160,marginTop:6}}/>}</div>;
       case'cierre':return <div style={{fontSize:13}}>
         {r.resultados?.filter(x=>x.oportunidades||x.validadas||x.instaladas||x.pagadasHoy||x.pendiente).map((x,i)=>
           <div key={i} style={{fontSize:12,padding:'3px 0',borderBottom:'1px solid var(--border)'}}>
@@ -2107,7 +2168,7 @@ function HistorialTab({data,setData,toast,session}){
           <p>NPPF: {r.resultados?.cuentasRecuperadas||0} · ARPU: {r.resultados?.arpu||0}</p>
         </div>;
       }
-      case'feedback':return <div style={{fontSize:13}}><div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><b>{r.vendedor}</b> — {r.tipo}<StatusBadge status={r.semaforo} small/></div>{r.hallazgos&&<p>{r.hallazgos}</p>}{r.compromisos&&<p><b>Compromisos:</b> {r.compromisos}</p>}{r.transcript&&<p style={{fontStyle:'italic',background:'var(--bg)',padding:8,borderRadius:6,marginTop:4}}>🎙️ {r.transcript.slice(0,200)}{r.transcript.length>200?'...':''}</p>}{r.photo&&<FotoMini src={r.photo} style={{maxHeight:160,marginTop:6}}/>}</div>;
+      case'feedback':return <div style={{fontSize:13}}><div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><b>{r.vendedor}</b> — {r.tipo}<StatusBadge status={r.semaforo} small/></div>{r.hallazgos&&<p>{r.hallazgos}</p>}{r.compromisos&&<p><b>Compromisos:</b> {r.compromisos}</p>}{r.transcript&&<p style={{fontStyle:'italic',background:'var(--bg)',padding:8,borderRadius:6,marginTop:4}}>🎙️ {r.transcript.slice(0,200)}{r.transcript.length>200?'...':''}</p>}{r.photo&&<FotoMini src={r.photo} style={{maxHeight:160,marginTop:6}}/>}{r.fotos?.length>0&&<div style={{display:'flex',flexWrap:'wrap',gap:6,marginTop:6}}>{r.fotos.map((p,i)=><FotoMini key={i} src={p} style={{width:90,height:90,maxHeight:90}}/>)}</div>}</div>;
       default:return null;
     }
   };
