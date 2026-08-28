@@ -89,17 +89,29 @@ function nombreSeguro(txt) {
     .slice(0, 60);
 }
 
-// Resume las zonas por día ({lunes:[{cluster,colonia}], ...}) en una línea de texto
-// legible para el Sheet: "Lunes: Colonia X (Cluster A), Cluster B (todo) | Martes: ...".
+// Un día de zonas puede venir en dos formatos: el viejo (arreglo simple de entradas) o el nuevo
+// ({entradas, direccion, comentarios}) — se normaliza a lo segundo para leer cualquiera de los dos.
+function normalizaDiaZonas(dia) {
+  if (Array.isArray(dia)) return { entradas: dia, direccion: '', comentarios: '' };
+  return dia || { entradas: [], direccion: '', comentarios: '' };
+}
+
+// Resume las zonas por día ({lunes:{entradas:[{cluster,colonia}],direccion,comentarios}, ...}) en
+// una línea de texto legible para el Sheet, incluyendo punto de reunión/carpa y comentarios:
+// "Lunes: Colonia X (Cluster A) · 📍 Carpa junto a la plaza · 💬 Llevar folletos | Martes: ...".
 function formatZonas(zonas) {
   if (!zonas) return '';
   const DIAS = ['lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado', 'domingo'];
   const DIAS_LABEL = { lunes: 'Lunes', martes: 'Martes', miercoles: 'Miércoles', jueves: 'Jueves', viernes: 'Viernes', sabado: 'Sábado', domingo: 'Domingo' };
   return DIAS
-    .filter(d => (zonas[d] || []).length)
-    .map(d => {
-      const entradas = zonas[d].map(e => e.colonia ? `${e.colonia} (${e.cluster})` : `${e.cluster} (todo)`).join(', ');
-      return `${DIAS_LABEL[d]}: ${entradas}`;
+    .map(d => ({ d: d, dz: normalizaDiaZonas(zonas[d]) }))
+    .filter(({ dz }) => dz.entradas.length || dz.direccion || dz.comentarios)
+    .map(({ d, dz }) => {
+      const partes = [];
+      if (dz.entradas.length) partes.push(dz.entradas.map(e => e.colonia ? `${e.colonia} (${e.cluster})` : `${e.cluster} (todo)`).join(', '));
+      if (dz.direccion) partes.push('📍 ' + dz.direccion);
+      if (dz.comentarios) partes.push('💬 ' + dz.comentarios);
+      return `${DIAS_LABEL[d]}: ${partes.join(' · ')}`;
     })
     .join(' | ');
 }
