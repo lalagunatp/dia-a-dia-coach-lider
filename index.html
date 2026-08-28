@@ -88,7 +88,7 @@ async function sendToSheet(record){
   }
 }
 // Guardar localmente + enviar al Sheet del Director
-async function saveAndSync(data,record,toast){
+async function saveAndSync(data,record,toast,setData){
   saveData(data);
   if(DOPOST_URL){
     const result=await sendToSheet(record);
@@ -98,18 +98,57 @@ async function saveAndSync(data,record,toast){
       pending.push(record);
       localStorage.setItem('sv2-pending',JSON.stringify(pending));
       toast?.('⚠️ Guardado local — sin conexión al Sheet');
+    }else if(setData&&(result.fotoGrupoUrl||result.fotosAusentes)){
+      // Ya se subieron a Drive: se reemplaza la foto pesada (base64) local por la liga,
+      // para que no se quede ocupando espacio en el teléfono.
+      setData(d=>{
+        const records=d.records.map(r=>{
+          if(r.id!==record.id)return r;
+          const upd={...r};
+          if(result.fotoGrupoUrl)upd.photo=result.fotoGrupoUrl;
+          if(result.fotosAusentes&&upd.ausentes){
+            upd.ausentes=upd.ausentes.map(a=>{
+              const found=result.fotosAusentes.find(f=>f.name===a.name);
+              return found?{...a,photo:found.url}:a;
+            });
+          }
+          return upd;
+        });
+        const nuevo={...d,records};
+        saveData(nuevo);
+        return nuevo;
+      });
     }
   }
 }
 // Reintentar pendientes
-async function retryPending(toast){
+async function retryPending(toast,setData){
   if(!DOPOST_URL)return;
   const pending=JSON.parse(localStorage.getItem('sv2-pending')||'[]');
   if(pending.length===0)return;
   const still=[];
   for(const rec of pending){
     const r=await sendToSheet(rec);
-    if(!r.ok)still.push(rec);
+    if(!r.ok){still.push(rec);continue;}
+    if(setData&&(r.fotoGrupoUrl||r.fotosAusentes)){
+      setData(d=>{
+        const records=d.records.map(x=>{
+          if(x.id!==rec.id)return x;
+          const upd={...x};
+          if(r.fotoGrupoUrl)upd.photo=r.fotoGrupoUrl;
+          if(r.fotosAusentes&&upd.ausentes){
+            upd.ausentes=upd.ausentes.map(a=>{
+              const found=r.fotosAusentes.find(f=>f.name===a.name);
+              return found?{...a,photo:found.url}:a;
+            });
+          }
+          return upd;
+        });
+        const nuevo={...d,records};
+        saveData(nuevo);
+        return nuevo;
+      });
+    }
   }
   localStorage.setItem('sv2-pending',JSON.stringify(still));
   if(still.length===0&&pending.length>0)toast?.('✅ Registros pendientes sincronizados');
@@ -691,13 +730,13 @@ function MemberInfo({m,expanded,onToggle}){
   </div>;
 }
 // ═══ PHOTO CAPTURE ═══
-function PhotoCapture({photo,onCapture}){
+function PhotoCapture({photo,onCapture,label}){
   const ref=useRef();
   const handle=e=>{const f=e.target.files?.[0];if(!f)return;const r=new FileReader();r.onload=ev=>{const img=new Image();img.onload=()=>{const c=document.createElement('canvas');const M=800;let w=img.width,h=img.height;if(w>M){h=h*(M/w);w=M;}c.width=w;c.height=h;c.getContext('2d').drawImage(img,0,0,w,h);onCapture(c.toDataURL('image/jpeg',.7));};img.src=ev.target.result;};r.readAsDataURL(f);};
-  return <div><input ref={ref} type="file" accept="image/*" capture="environment" onChange={handle} style={{display:'none'}}/>{photo?<div style={{position:'relative'}}><img src={photo} alt="" style={{width:'100%',maxHeight:220,objectFit:'cover',borderRadius:10,border:'1px solid var(--border)'}}/><Btn onClick={()=>ref.current.click()} variant="ghost" style={{position:'absolute',top:6,right:6,background:'rgba(0,0,0,.55)',color:'#fff',borderRadius:8,fontSize:12}}>📷</Btn></div>:<button onClick={()=>ref.current.click()} style={{width:'100%',padding:'28px 20px',borderRadius:12,border:'2px dashed var(--border)',background:'var(--input)',cursor:'pointer',textAlign:'center',color:'var(--dim)',fontSize:14}}>📷 Tomar foto de grupo</button>}</div>;
+  return <div><input ref={ref} type="file" accept="image/*" capture="environment" onChange={handle} style={{display:'none'}}/>{photo?<div style={{position:'relative'}}><img src={photo} alt="" style={{width:'100%',maxHeight:220,objectFit:'cover',borderRadius:10,border:'1px solid var(--border)'}}/><Btn onClick={()=>ref.current.click()} variant="ghost" style={{position:'absolute',top:6,right:6,background:'rgba(0,0,0,.55)',color:'#fff',borderRadius:8,fontSize:12}}>📷</Btn></div>:<button onClick={()=>ref.current.click()} style={{width:'100%',padding:'28px 20px',borderRadius:12,border:'2px dashed var(--border)',background:'var(--input)',cursor:'pointer',textAlign:'center',color:'var(--dim)',fontSize:14}}>{label||'📷 Tomar foto'}</button>}</div>;
 }
-// Foto de evidencia con sello de coach, fecha/hora, dirección y coordenadas (geolocalización del dispositivo).
-function PhotoCaptureGeo({photo,onCapture,coachName,toast}){
+// Foto con sello de coach, día/fecha/hora, dirección y coordenadas (geolocalización del dispositivo).
+function PhotoCaptureGeo({photo,onCapture,coachName,toast,label}){
   const ref=useRef();
   const[loading,setLoading]=useState(false);
   const handle=e=>{
@@ -771,7 +810,7 @@ function PhotoCaptureGeo({photo,onCapture,coachName,toast}){
       </div>
     :
       <button onClick={()=>ref.current.click()} disabled={loading} style={{width:'100%',padding:'10px 12px',borderRadius:8,border:'2px dashed var(--border)',background:'var(--input)',cursor:loading?'wait':'pointer',textAlign:'center',color:'var(--dim)',fontSize:12}}>
-        {loading?'📍 Obteniendo ubicación...':'📷 Agregar evidencia (foto/plática)'}
+        {loading?'📍 Obteniendo ubicación...':(label||'📷 Tomar foto')}
       </button>
     }
   </div>;
@@ -880,7 +919,7 @@ function ArranqueTab({data,setData,team,toast,session}){
   const updAus=(name,field,val)=>setForm(f=>({...f,ausentes:f.ausentes.map(a=>a.name===name?{...a,[field]:val}:a)}));
   const guardar=async()=>{
     const rec={id:uid(),type:'arranque',...form,registradoPor:session.user.nombre,rolRegistro:session.role,savedAt:new Date().toISOString()};
-    const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast);toast('✅ Arranque guardado');
+    const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast,setData);toast('✅ Arranque guardado');
     setForm({date:today(),time:now(),photo:null,presentes:team.map(m=>m.nombre),ausentes:[],notas:''});
   };
   return <div>
@@ -889,7 +928,7 @@ function ArranqueTab({data,setData,team,toast,session}){
         <Field label="Fecha"><Input type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})}/></Field>
         <Field label="Hora"><Input value={form.time} readOnly style={{background:'var(--bg)'}}/></Field>
       </div>
-      <Field label="Foto de grupo"><PhotoCapture photo={form.photo} onCapture={p=>setForm({...form,photo:p})}/></Field>
+      <Field label="Foto de grupo"><PhotoCaptureGeo photo={form.photo} onCapture={p=>setForm({...form,photo:p})} coachName={session.user.nombre} toast={toast} label="📷 Tomar foto de grupo (con sello)"/></Field>
     </Card>
     <Card title={`Asistencia (${team.length})`}>
       {team.length===0?<p style={{color:'var(--dim)',fontSize:14}}>Sin integrantes asignados.</p>:
@@ -909,7 +948,7 @@ function ArranqueTab({data,setData,team,toast,session}){
               <Select value={aus.reason} onChange={v=>updAus(m.nombre,'reason',v)} options={ABSENCE_REASONS} style={{flex:1,minWidth:130}}/>
               <Input placeholder="Detalle..." value={aus.detail} onChange={e=>updAus(m.nombre,'detail',e.target.value)} style={{flex:2,minWidth:130}}/>
             </div>
-            <PhotoCaptureGeo photo={aus.photo} onCapture={p=>updAus(m.nombre,'photo',p)} coachName={session.user.nombre} toast={toast}/>
+            <PhotoCapture photo={aus.photo} onCapture={p=>updAus(m.nombre,'photo',p)} label="📷 Agregar evidencia (foto/plática)"/>
           </div>}
         </div>;
       })}
@@ -1566,7 +1605,7 @@ function MainApp({session,onLogout}){
   const[tab,setTab]=useState('dashboard');
   const[toastMsg,setToastMsg]=useState('');
   const toast=msg=>setToastMsg(msg);
-  useEffect(()=>{retryPending(toast);},[]);
+  useEffect(()=>{retryPending(toast,setData);},[]);
   const{user,team,coaches,role}=session;
   const allTeam=[...(coaches||[]),...team];
   const todayRecs=data.records.filter(r=>r.date===today());
