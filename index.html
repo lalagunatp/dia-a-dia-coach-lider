@@ -749,9 +749,28 @@ function MemberInfo({m,expanded,onToggle}){
 }
 // ═══ PHOTO CAPTURE ═══
 function PhotoCapture({photo,onCapture,label}){
-  const ref=useRef();
-  const handle=e=>{const f=e.target.files?.[0];if(!f)return;const r=new FileReader();r.onload=ev=>{const img=new Image();img.onload=()=>{const c=document.createElement('canvas');const M=800;let w=img.width,h=img.height;if(w>M){h=h*(M/w);w=M;}c.width=w;c.height=h;c.getContext('2d').drawImage(img,0,0,w,h);onCapture(c.toDataURL('image/jpeg',.7));};img.src=ev.target.result;};r.readAsDataURL(f);};
-  return <div><input ref={ref} type="file" accept="image/*" capture="environment" onChange={handle} style={{display:'none'}}/>{photo?<div style={{position:'relative'}}><img src={photo} alt="" style={{width:'100%',maxHeight:220,objectFit:'cover',borderRadius:10,border:'1px solid var(--border)'}}/><Btn onClick={()=>ref.current.click()} variant="ghost" style={{position:'absolute',top:6,right:6,background:'rgba(0,0,0,.55)',color:'#fff',borderRadius:8,fontSize:12}}>📷</Btn></div>:<button onClick={()=>ref.current.click()} style={{width:'100%',padding:'28px 20px',borderRadius:12,border:'2px dashed var(--border)',background:'var(--input)',cursor:'pointer',textAlign:'center',color:'var(--dim)',fontSize:14}}>{label||'📷 Tomar foto'}</button>}</div>;
+  const refCam=useRef();
+  const refGal=useRef();
+  const handle=e=>{const f=e.target.files?.[0];if(!f)return;const r=new FileReader();r.onload=ev=>{const img=new Image();img.onload=()=>{const c=document.createElement('canvas');const M=800;let w=img.width,h=img.height;if(w>M){h=h*(M/w);w=M;}c.width=w;c.height=h;c.getContext('2d').drawImage(img,0,0,w,h);onCapture(c.toDataURL('image/jpeg',.7));};img.src=ev.target.result;};r.readAsDataURL(f);e.target.value='';};
+  return <div>
+    <input ref={refCam} type="file" accept="image/*" capture="environment" onChange={handle} style={{display:'none'}}/>
+    <input ref={refGal} type="file" accept="image/*" onChange={handle} style={{display:'none'}}/>
+    {photo?
+      <div style={{position:'relative'}}>
+        <img src={photo} alt="" style={{width:'100%',maxHeight:220,objectFit:'cover',borderRadius:10,border:'1px solid var(--border)'}}/>
+        <div style={{position:'absolute',top:6,right:6,display:'flex',gap:4}}>
+          <Btn onClick={()=>refCam.current.click()} variant="ghost" style={{background:'rgba(0,0,0,.55)',color:'#fff',borderRadius:8,fontSize:12,padding:'5px 9px'}}>📷</Btn>
+          <Btn onClick={()=>refGal.current.click()} variant="ghost" style={{background:'rgba(0,0,0,.55)',color:'#fff',borderRadius:8,fontSize:12,padding:'5px 9px'}}>🖼️</Btn>
+        </div>
+      </div>
+    :<>
+      {label&&<p style={{fontSize:12,color:'var(--dim)',marginBottom:6}}>{label}</p>}
+      <div style={{display:'flex',gap:8}}>
+        <button onClick={()=>refCam.current.click()} style={{flex:1,padding:'18px 10px',borderRadius:12,border:'2px dashed var(--border)',background:'var(--input)',cursor:'pointer',textAlign:'center',color:'var(--dim)',fontSize:13}}>📷 Tomar foto</button>
+        <button onClick={()=>refGal.current.click()} style={{flex:1,padding:'18px 10px',borderRadius:12,border:'2px dashed var(--border)',background:'var(--input)',cursor:'pointer',textAlign:'center',color:'var(--dim)',fontSize:13}}>🖼️ Subir foto</button>
+      </div>
+    </>}
+  </div>;
 }
 // Foto con sello de coach, día/fecha/hora, dirección y coordenadas (geolocalización del dispositivo).
 function PhotoCaptureGeo({photo,onCapture,coachName,toast,label}){
