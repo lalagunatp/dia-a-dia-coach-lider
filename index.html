@@ -70,7 +70,9 @@ const TABS=[
 ];
 const ABSENCE_REASONS=['Falta justificada','Falta injustificada','Incapacidad','Permiso autorizado','Vacaciones','Retardo','Otro'];
 const PERMISO_TIPOS=['Trabajo fuera de ruta','Trabajo por su cuenta','Salida anticipada','Llegada tardía','Cambio de zona','Actividad especial','Otro'];
-const FEEDBACK_TIPOS=['Acompañamiento','Feedback 1 a 1','Revisión semanal','Incidencia operativa','Incidencia crítica','Retroalimentación','Otro'];
+const FEEDBACK_TIPOS=['Acompañamiento','Feedback 1 a 1','Revisión semanal','Incidencia operativa','Incidencia crítica','Retroalimentación','Evidencia de asignación externa','Otro'];
+// Tipos de hallazgo que requieren foto sellada (como en Arranque) obligatoria.
+const FEEDBACK_TIPOS_CON_FOTO=['Acompañamiento','Evidencia de asignación externa'];
 const DIAS_SEMANA=['lunes','martes','miercoles','jueves','viernes','sabado','domingo'];
 const DIAS_SEMANA_LABEL={lunes:'Lunes',martes:'Martes',miercoles:'Miércoles',jueves:'Jueves',viernes:'Viernes',sabado:'Sábado',domingo:'Domingo'};
 const cycleS=c=>{const o=['verde','amarillo','rojo'];return o[(o.indexOf(c)+1)%3];};
@@ -297,6 +299,21 @@ function textoPlan(rec){
   const zt=zonasATexto(rec.zonas);
   if(zt)lineas.push('','🗺️ Zonas:',zt);
   if(rec.resultado_esperado)lineas.push('',`✅ Resultado esperado: ${rec.resultado_esperado}`);
+  return lineas.join('\n');
+}
+function textoCierre(rec){
+  const lineas=[`🌙 Cierre del día — ${fmt(rec.date)}${rec.time?' · '+rec.time:''}`,''];
+  const resultados=(rec.resultados||[]).filter(x=>x.oportunidades||x.validadas||x.instaladas||x.pagadasHoy||x.pendiente);
+  if(resultados.length){
+    lineas.push('📊 Resultado del día:');
+    resultados.forEach(x=>lineas.push(`• ${x.nombre}: ${x.oportunidades||0} op · ${x.validadas||0} val · ${x.instaladas||0} inst${x.pagadasHoy?` · ${x.pagadasHoy} pagada(s) hoy`:''}${x.pendiente?` — Pendiente: ${x.pendiente}`:''}`));
+  }
+  if(rec.incidencias)lineas.push('',`⚠️ Incidencias: ${rec.incidencias}`);
+  if((rec.seguimiento||[]).length){
+    lineas.push('','🔁 Seguimiento mañana:');
+    rec.seguimiento.forEach(s=>lineas.push(`• ${s.name}${s.motivo?`: ${s.motivo}`:''}`));
+  }
+  if(rec.notas)lineas.push('',`📝 Notas: ${rec.notas}`);
   return lineas.join('\n');
 }
 
@@ -1113,6 +1130,7 @@ function CierreTab({data,setData,team,toast,session}){
   const nowDate=new Date();
   const semanaIni=startOfWeek(nowDate),semanaFin=endOfWeek(nowDate);
   const[form,setForm]=useState({date:today(),time:now(),resultados:[],incidencias:'',seguimiento:[],notas:''});
+  const[ultimoGuardado,setUltimoGuardado]=useState(null);
   useEffect(()=>{
     const hoyIni=new Date();hoyIni.setHours(0,0,0,0);
     const hoyFin=new Date();hoyFin.setHours(23,59,59,999);
@@ -1130,9 +1148,17 @@ function CierreTab({data,setData,team,toast,session}){
   const guardar=async()=>{
     const rec={id:uid(),type:'cierre',...form,registradoPor:session.user.nombre,savedAt:new Date().toISOString()};
     const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast);toast('✅ Cierre guardado');
+    setUltimoGuardado(rec);
     setForm(f=>({date:today(),time:now(),resultados:f.resultados.map(r=>({...r,oportunidades:0,validadas:0,instaladas:0,pendiente:'',pagadasHoy:0})),incidencias:'',seguimiento:[],notas:''}));
   };
   return <div>
+    {ultimoGuardado&&<Card style={{borderLeft:'4px solid var(--green)'}}>
+      <p style={{fontSize:13,fontWeight:700,marginBottom:8}}>✅ Cierre guardado</p>
+      <a href={whatsappUrl(textoCierre(ultimoGuardado))} target="_blank" rel="noopener noreferrer"
+        style={{display:'inline-flex',alignItems:'center',gap:6,padding:'8px 14px',borderRadius:8,background:'#25D366',color:'#fff',fontSize:13,fontWeight:700,textDecoration:'none'}}>
+        📲 Enviar cierre por WhatsApp
+      </a>
+    </Card>}
     <Card title="🌙 Cierre del día">
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:12}}>
         <Field label="Fecha"><Input type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})}/></Field>
@@ -1446,7 +1472,7 @@ function PlanTab({data,setData,team,toast,session}){
       <Card title="Acompañamientos">
         <Textarea value={form.vendedores_acompanar} onChange={e=>setForm({...form,vendedores_acompanar:e.target.value})} placeholder="Quién y por qué..." style={{minHeight:50}}/>
       </Card>
-      <Card title="🗺️ Zonas a trabajar (lunes a domingo)">
+      <Card title="🗺️ Zonas a trabajar en la semana">
         {zonasData.clusters.length===0?<p style={{color:'var(--dim)',fontSize:12}}>Cargando clusters/colonias…</p>:
         DIAS_SEMANA.map(d=><ZonaDia key={d} label={DIAS_SEMANA_LABEL[d]} dia={form.zonas[d]} zonasData={zonasData} onChange={nuevoDia=>setForm(f=>({...f,zonas:{...f.zonas,[d]:nuevoDia}}))}/>)}
       </Card>
@@ -1461,9 +1487,17 @@ function PlanTab({data,setData,team,toast,session}){
 
 // ─── Feedback ───
 function FeedbackTab({data,setData,team,toast,session}){
-  const[form,setForm]=useState({date:today(),vendedor:'',tipo:'Acompañamiento',hallazgos:'',fortalezas:'',areas_oportunidad:'',compromisos:'',fecha_revision:'',semaforo:'verde',grabado:false,transcript:'',notas:''});
+  const[form,setForm]=useState({date:today(),vendedor:'',tipo:'Acompañamiento',hallazgos:'',fortalezas:'',areas_oportunidad:'',compromisos:'',fecha_revision:'',semaforo:'verde',grabado:false,transcript:'',notas:'',photo:null});
   const[consent,setConsent]=useState(false);
-  const guardar=async()=>{if(!form.vendedor){alert('Selecciona un integrante');return;}const rec={id:uid(),type:'feedback',...form,registradoPor:session.user.nombre,savedAt:new Date().toISOString()};const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast);toast('✅ Hallazgo guardado');setForm({date:today(),vendedor:'',tipo:'Acompañamiento',hallazgos:'',fortalezas:'',areas_oportunidad:'',compromisos:'',fecha_revision:'',semaforo:'verde',grabado:false,transcript:'',notas:''});setConsent(false);};
+  const fotoRequerida=FEEDBACK_TIPOS_CON_FOTO.includes(form.tipo);
+  const guardar=async()=>{
+    if(!form.vendedor){alert('Selecciona un integrante');return;}
+    if(fotoRequerida&&!form.photo){alert('Agrega una foto (con sello) — es obligatoria para este tipo de hallazgo');return;}
+    const rec={id:uid(),type:'feedback',...form,registradoPor:session.user.nombre,savedAt:new Date().toISOString()};
+    const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast,setData);toast('✅ Hallazgo guardado');
+    setForm({date:today(),vendedor:'',tipo:'Acompañamiento',hallazgos:'',fortalezas:'',areas_oportunidad:'',compromisos:'',fecha_revision:'',semaforo:'verde',grabado:false,transcript:'',notas:'',photo:null});
+    setConsent(false);
+  };
   const selectedMember=form.vendedor?team.find(m=>m.nombre===form.vendedor):null;
   return <div>
     <Card title="💬 Hallazgos y feedback">
@@ -1530,6 +1564,9 @@ function FeedbackTab({data,setData,team,toast,session}){
       }
       <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:12}}><span style={{fontSize:11,fontWeight:700,color:'var(--dim)'}}>SEMÁFORO:</span><StatusBadge status={form.semaforo} onClick={()=>setForm({...form,semaforo:cycleS(form.semaforo)})}/></div>
     </Card>
+    {fotoRequerida&&<Card title="📷 Evidencia (obligatoria)">
+      <PhotoCaptureGeo photo={form.photo} onCapture={p=>setForm({...form,photo:p})} coachName={session.user.nombre} toast={toast} label="📷 Tomar foto (con sello)"/>
+    </Card>}
     <Card title="Observaciones">
       <Field label="Hallazgos"><Textarea value={form.hallazgos} onChange={e=>setForm({...form,hallazgos:e.target.value})} placeholder="Qué se observó..."/></Field>
       <Field label="Fortalezas"><Textarea value={form.fortalezas} onChange={e=>setForm({...form,fortalezas:e.target.value})} style={{minHeight:50}}/></Field>
@@ -2070,7 +2107,7 @@ function HistorialTab({data,setData,toast,session}){
           <p>NPPF: {r.resultados?.cuentasRecuperadas||0} · ARPU: {r.resultados?.arpu||0}</p>
         </div>;
       }
-      case'feedback':return <div style={{fontSize:13}}><div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><b>{r.vendedor}</b> — {r.tipo}<StatusBadge status={r.semaforo} small/></div>{r.hallazgos&&<p>{r.hallazgos}</p>}{r.compromisos&&<p><b>Compromisos:</b> {r.compromisos}</p>}{r.transcript&&<p style={{fontStyle:'italic',background:'var(--bg)',padding:8,borderRadius:6,marginTop:4}}>🎙️ {r.transcript.slice(0,200)}{r.transcript.length>200?'...':''}</p>}</div>;
+      case'feedback':return <div style={{fontSize:13}}><div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><b>{r.vendedor}</b> — {r.tipo}<StatusBadge status={r.semaforo} small/></div>{r.hallazgos&&<p>{r.hallazgos}</p>}{r.compromisos&&<p><b>Compromisos:</b> {r.compromisos}</p>}{r.transcript&&<p style={{fontStyle:'italic',background:'var(--bg)',padding:8,borderRadius:6,marginTop:4}}>🎙️ {r.transcript.slice(0,200)}{r.transcript.length>200?'...':''}</p>}{r.photo&&<FotoMini src={r.photo} style={{maxHeight:160,marginTop:6}}/>}</div>;
       default:return null;
     }
   };
