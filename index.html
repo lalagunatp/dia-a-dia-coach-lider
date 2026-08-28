@@ -1023,21 +1023,68 @@ function PermisosTab({data,setData,team,toast,session}){
 }
 
 // ─── Cierre ───
-function CierreTab({data,setData,toast,session}){
-  const[form,setForm]=useState({date:today(),time:now(),resultado:'',pendientes:'',incidencias:'',vendedores_seguimiento:'',notas:''});
-  const guardar=async()=>{const rec={id:uid(),type:'cierre',...form,registradoPor:session.user.nombre,savedAt:new Date().toISOString()};const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast);toast('✅ Cierre guardado');setForm({date:today(),time:now(),resultado:'',pendientes:'',incidencias:'',vendedores_seguimiento:'',notas:''});};
+function CierreTab({data,setData,team,toast,session}){
+  const vendedores=team.filter(m=>isVendedor(m.posicion));
+  const[form,setForm]=useState({date:today(),time:now(),resultados:[],incidencias:'',seguimiento:[],notas:''});
+  useEffect(()=>{
+    const hoyIni=new Date();hoyIni.setHours(0,0,0,0);
+    const hoyFin=new Date();hoyFin.setHours(23,59,59,999);
+    setForm(f=>({...f,resultados:vendedores.map(m=>{
+      const fp=funnelPeriodo(m.ventas,hoyIni,hoyFin);
+      return{nombre:m.nombre,oportunidades:fp.oportunidades,validadas:fp.validadas,instaladas:fp.instaladas,pendiente:'',pagadasHoy:0};
+    }),seguimiento:[]}));
+  },[team]);
+  const updResultado=(nombre,field,val)=>setForm(f=>({...f,resultados:f.resultados.map(r=>r.nombre===nombre?{...r,[field]:val}:r)}));
+  const toggleSeguimiento=nombre=>setForm(f=>{
+    const existe=f.seguimiento.some(s=>s.name===nombre);
+    return{...f,seguimiento:existe?f.seguimiento.filter(s=>s.name!==nombre):[...f.seguimiento,{name:nombre,motivo:''}]};
+  });
+  const updSeguimiento=(nombre,motivo)=>setForm(f=>({...f,seguimiento:f.seguimiento.map(s=>s.name===nombre?{...s,motivo}:s)}));
+  const guardar=async()=>{
+    const rec={id:uid(),type:'cierre',...form,registradoPor:session.user.nombre,savedAt:new Date().toISOString()};
+    const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast);toast('✅ Cierre guardado');
+    setForm(f=>({date:today(),time:now(),resultados:f.resultados.map(r=>({...r,oportunidades:0,validadas:0,instaladas:0,pendiente:'',pagadasHoy:0})),incidencias:'',seguimiento:[],notas:''}));
+  };
   return <div>
     <Card title="🌙 Cierre del día">
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:12}}>
         <Field label="Fecha"><Input type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})}/></Field>
         <Field label="Hora"><Input value={form.time} readOnly style={{background:'var(--bg)'}}/></Field>
       </div>
-      <Field label="Resultado del día"><Textarea value={form.resultado} onChange={e=>setForm({...form,resultado:e.target.value})} placeholder="Ventas, instalaciones, oportunidades..."/></Field>
-      <Field label="Pendientes"><Textarea value={form.pendientes} onChange={e=>setForm({...form,pendientes:e.target.value})} placeholder="Para mañana..."/></Field>
-      <Field label="Incidencias"><Textarea value={form.incidencias} onChange={e=>setForm({...form,incidencias:e.target.value})} placeholder="Rechazos, desviaciones..."/></Field>
-      <Field label="Seguimiento mañana"><Textarea value={form.vendedores_seguimiento} onChange={e=>setForm({...form,vendedores_seguimiento:e.target.value})} placeholder="Vendedores y motivo..." style={{minHeight:50}}/></Field>
-      <Field label="Notas"><Textarea value={form.notas} onChange={e=>setForm({...form,notas:e.target.value})} style={{minHeight:50}}/></Field>
     </Card>
+    <Card title={`📊 Resultado del día por vendedor (${vendedores.length})`}>
+      {vendedores.length===0?<p style={{color:'var(--dim)',fontSize:14}}>Sin integrantes asignados.</p>:
+      form.resultados.map(r=>
+        <div key={r.nombre} style={{border:'1px solid var(--border)',borderRadius:8,padding:10,marginBottom:8}}>
+          <div style={{fontWeight:600,fontSize:13,marginBottom:6}}>{r.nombre}</div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:6,marginBottom:6}}>
+            <Field label="Oport."><Input type="number" value={r.oportunidades} onChange={e=>updResultado(r.nombre,'oportunidades',Number(e.target.value))} style={{padding:'6px 8px'}}/></Field>
+            <Field label="Valid."><Input type="number" value={r.validadas} onChange={e=>updResultado(r.nombre,'validadas',Number(e.target.value))} style={{padding:'6px 8px'}}/></Field>
+            <Field label="Instal."><Input type="number" value={r.instaladas} onChange={e=>updResultado(r.nombre,'instaladas',Number(e.target.value))} style={{padding:'6px 8px'}}/></Field>
+            <Field label="Pagadas hoy"><Input type="number" value={r.pagadasHoy} onChange={e=>updResultado(r.nombre,'pagadasHoy',Number(e.target.value))} style={{padding:'6px 8px'}}/></Field>
+          </div>
+          <Field label="Pendiente para mañana"><Input value={r.pendiente} onChange={e=>updResultado(r.nombre,'pendiente',e.target.value)} placeholder="..."/></Field>
+        </div>
+      )}
+      <p style={{fontSize:11,color:'var(--dim)'}}>Oportunidades, validaciones e instalaciones se precargan del día — ajústalas si hace falta. "Pagadas hoy" son cuentas que hoy se confirmaron como ya pagadas (dejaron de estar en NPPF).</p>
+    </Card>
+    <Card title="Incidencias">
+      <Textarea value={form.incidencias} onChange={e=>setForm({...form,incidencias:e.target.value})} placeholder="Rechazos, desviaciones..."/>
+    </Card>
+    <Card title="Seguimiento mañana">
+      {vendedores.length===0?<p style={{color:'var(--dim)',fontSize:14}}>Sin integrantes asignados.</p>:
+      vendedores.map(m=>{
+        const sel=form.seguimiento.find(s=>s.name===m.nombre);
+        return <div key={m.numEmp||m.nombre} style={{marginBottom:6}}>
+          <div onClick={()=>toggleSeguimiento(m.nombre)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 10px',borderRadius:8,border:`1.5px solid ${sel?'var(--accent)':'var(--border)'}`,background:sel?'var(--accent-light)':'transparent',cursor:'pointer'}}>
+            <span style={{fontSize:13,fontWeight:600}}>{m.nombre}</span>
+            <span style={{fontSize:12,color:sel?'var(--accent)':'var(--dim)'}}>{sel?'✓ Seguimiento':'+ Agregar'}</span>
+          </div>
+          {sel&&<Input placeholder="Motivo del seguimiento..." value={sel.motivo} onChange={e=>updSeguimiento(m.nombre,e.target.value)} style={{marginTop:4}}/>}
+        </div>;
+      })}
+    </Card>
+    <Card title="Notas"><Textarea value={form.notas} onChange={e=>setForm({...form,notas:e.target.value})} style={{minHeight:50}}/></Card>
     <Btn onClick={guardar} style={{width:'100%'}}>💾 Guardar cierre</Btn>
   </div>;
 }
@@ -1631,7 +1678,23 @@ function HistorialTab({data,setData,toast,session}){
     switch(r.type){
       case'arranque':return <div style={{fontSize:13}}><p><b>Presentes:</b> {r.presentes?.length||0} · <b>Ausentes:</b> {r.ausentes?.length||0}</p>{r.ausentes?.map(a=><div key={a.name} style={{margin:'2px 0'}}><p style={{color:'var(--red)',margin:0}}>✗ {a.name}: {a.reason}{a.detail?` — ${a.detail}`:''}</p>{a.photo&&<FotoMini src={a.photo} style={{maxHeight:160,marginTop:4}}/>}</div>)}{r.notas&&<p style={{marginTop:6}}>{r.notas}</p>}{r.photo&&<FotoMini src={r.photo} style={{maxHeight:120,marginTop:6}}/>}</div>;
       case'permiso':return <div style={{fontSize:13}}><p><b>{r.vendedor}</b> — {r.tipo}</p><p>{r.motivo}</p>{r.autorizado_por&&<p style={{color:'var(--dim)'}}>Autorizado: {r.autorizado_por}</p>}{r.photo&&<FotoMini src={r.photo} style={{maxHeight:160,marginTop:6}}/>}</div>;
-      case'cierre':return <div style={{fontSize:13}}>{r.resultado&&<p><b>Resultado:</b> {r.resultado}</p>}{r.pendientes&&<p><b>Pendientes:</b> {r.pendientes}</p>}{r.incidencias&&<p><b>Incidencias:</b> {r.incidencias}</p>}</div>;
+      case'cierre':return <div style={{fontSize:13}}>
+        {r.resultados?.filter(x=>x.oportunidades||x.validadas||x.instaladas||x.pagadasHoy||x.pendiente).map((x,i)=>
+          <div key={i} style={{fontSize:12,padding:'3px 0',borderBottom:'1px solid var(--border)'}}>
+            <b>{x.nombre}:</b> {x.oportunidades||0} op · {x.validadas||0} val · {x.instaladas||0} inst{x.pagadasHoy?` · ${x.pagadasHoy} cta(s) pagada(s) hoy`:''}
+            {x.pendiente&&<div style={{color:'var(--dim)'}}>Pendiente: {x.pendiente}</div>}
+          </div>
+        )}
+        {r.incidencias&&<p style={{marginTop:4}}><b>Incidencias:</b> {r.incidencias}</p>}
+        {r.seguimiento?.length>0&&<div style={{marginTop:4}}>
+          <b>Seguimiento mañana:</b>
+          {r.seguimiento.map((s,i)=><p key={i} style={{fontSize:12,margin:'2px 0'}}>• {s.name}{s.motivo?`: ${s.motivo}`:''}</p>)}
+        </div>}
+        {/* Compatibilidad con cierres guardados antes de este cambio */}
+        {r.resultado&&<p><b>Resultado:</b> {r.resultado}</p>}
+        {r.pendientes&&<p><b>Pendientes:</b> {r.pendientes}</p>}
+        {r.vendedores_seguimiento&&<p><b>Seguimiento:</b> {r.vendedores_seguimiento}</p>}
+      </div>;
       case'plan':return <div style={{fontSize:13}}>{r.objetivo&&<p><b>Objetivo:</b> {r.objetivo}</p>}{r.prioridades&&<p><b>Prioridades:</b> {r.prioridades}</p>}</div>;
       case'feedback':return <div style={{fontSize:13}}><div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><b>{r.vendedor}</b> — {r.tipo}<StatusBadge status={r.semaforo} small/></div>{r.hallazgos&&<p>{r.hallazgos}</p>}{r.compromisos&&<p><b>Compromisos:</b> {r.compromisos}</p>}{r.transcript&&<p style={{fontStyle:'italic',background:'var(--bg)',padding:8,borderRadius:6,marginTop:4}}>🎙️ {r.transcript.slice(0,200)}{r.transcript.length>200?'...':''}</p>}</div>;
       default:return null;
@@ -1761,7 +1824,7 @@ function MainApp({session,onLogout}){
       {tab==='dashboard'&&<DashboardTab data={data} team={allTeam} coaches={coaches} session={session} setTab={setTab}/>}
       {tab==='arranque'&&<ArranqueTab data={data} setData={setData} team={allTeam} toast={toast} session={session}/>}
       {tab==='permisos'&&<PermisosTab data={data} setData={setData} team={allTeam} toast={toast} session={session}/>}
-      {tab==='cierre'&&<CierreTab data={data} setData={setData} toast={toast} session={session}/>}
+      {tab==='cierre'&&<CierreTab data={data} setData={setData} team={allTeam} toast={toast} session={session}/>}
       {tab==='plan'&&<PlanTab data={data} setData={setData} toast={toast} session={session}/>}
       {tab==='feedback'&&<FeedbackTab data={data} setData={setData} team={allTeam} toast={toast} session={session}/>}
       {tab==='historial'&&<HistorialTab data={data} setData={setData} toast={toast} session={session}/>}
