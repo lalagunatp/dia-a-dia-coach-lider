@@ -1142,6 +1142,40 @@ function CierreTab({data,setData,team,toast,session}){
   </div>;
 }
 
+// Quita acentos para que la búsqueda no dependa de teclearlos (Muñoz ~ munoz).
+const sinAcentos=s=>String(s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'');
+
+// ─── Combobox con búsqueda: escribe y filtra desde la primera letra, elige de la lista. ───
+function Autocomplete({value,onChange,options,placeholder}){
+  const[query,setQuery]=useState('');
+  const[open,setOpen]=useState(false);
+  const wrapRef=useRef(null);
+  useEffect(()=>{
+    const opt=options.find(o=>o.value===value);
+    setQuery(opt?opt.label:'');
+  },[value]);
+  useEffect(()=>{
+    const onClickFuera=e=>{if(wrapRef.current&&!wrapRef.current.contains(e.target))setOpen(false);};
+    document.addEventListener('mousedown',onClickFuera);
+    return()=>document.removeEventListener('mousedown',onClickFuera);
+  },[]);
+  const q=sinAcentos(query);
+  const filtradas=q?options.filter(o=>sinAcentos(o.label).includes(q)):options;
+  return <div ref={wrapRef} style={{position:'relative'}}>
+    <Input value={query} placeholder={placeholder} onFocus={()=>setOpen(true)}
+      onChange={e=>{setQuery(e.target.value);setOpen(true);if(!e.target.value&&value)onChange('');}}/>
+    {open&&<div style={{position:'absolute',zIndex:30,top:'calc(100% + 2px)',left:0,right:0,background:'var(--card)',border:'1.5px solid var(--border)',borderRadius:8,maxHeight:170,overflowY:'auto',boxShadow:'0 6px 16px rgba(0,0,0,.15)'}}>
+      {filtradas.length===0&&<div style={{padding:'8px 10px',fontSize:12,color:'var(--dim)'}}>Sin coincidencias</div>}
+      {filtradas.slice(0,60).map(o=><AutocompleteOpcion key={o.value} label={o.label} onClick={()=>{onChange(o.value);setQuery(o.label);setOpen(false);}}/>)}
+    </div>}
+  </div>;
+}
+function AutocompleteOpcion({label,onClick}){
+  const[hover,setHover]=useState(false);
+  return <div onClick={onClick} onMouseDown={e=>e.preventDefault()} onMouseEnter={()=>setHover(true)} onMouseLeave={()=>setHover(false)}
+    style={{padding:'8px 10px',fontSize:13,cursor:'pointer',background:hover?'var(--accent-light)':'transparent'}}>{label}</div>;
+}
+
 // ─── Plan: selector de zonas de un día (cluster y/o colonia, con cruce colonia↔cluster) ───
 function ZonaDia({label,entradas,zonasData,onChange}){
   const[modo,setModo]=useState('cluster');
@@ -1184,7 +1218,9 @@ function ZonaDia({label,entradas,zonasData,onChange}){
       <button onClick={()=>setModo('colonia')} style={{flex:1,padding:'5px 6px',fontSize:11,fontWeight:700,borderRadius:6,border:'1.5px solid var(--border)',background:modo==='colonia'?'var(--accent)':'var(--card)',color:modo==='colonia'?'#fff':'var(--dim)',cursor:'pointer'}}>Por Colonia</button>
     </div>
     {modo==='cluster'?<>
-      <Select value={clusterSel} onChange={v=>{setClusterSel(v);setColoniasSel([]);}} options={[{value:'',label:'— Cluster —'},...zonasData.clusters.map(c=>({value:c,label:c}))]} style={{marginBottom:6}}/>
+      <div style={{marginBottom:6}}>
+        <Autocomplete value={clusterSel} onChange={v=>{setClusterSel(v);setColoniasSel([]);}} placeholder="Buscar cluster..." options={zonasData.clusters.map(c=>({value:c,label:c}))}/>
+      </div>
       {clusterSel&&coloniasDelCluster.length>0&&<div style={{maxHeight:120,overflowY:'auto',border:'1px solid var(--border)',borderRadius:6,padding:6,marginBottom:6}}>
         <p style={{fontSize:10,color:'var(--dim)',margin:'0 0 4px'}}>Opcional: marca colonias específicas (si no marcas ninguna, aplica a todo el cluster)</p>
         {coloniasDelCluster.map(c=><label key={c} style={{display:'flex',alignItems:'center',gap:6,fontSize:12,padding:'2px 0',cursor:'pointer'}}>
@@ -1192,7 +1228,9 @@ function ZonaDia({label,entradas,zonasData,onChange}){
         </label>)}
       </div>}
     </>:
-      <Select value={coloniaSel} onChange={setColoniaSel} options={[{value:'',label:'— Colonia —'},...todasColonias.map(c=>({value:c,label:`${c} (${zonasData.coloniaToCluster[c]})`}))]} style={{marginBottom:6}}/>
+      <div style={{marginBottom:6}}>
+        <Autocomplete value={coloniaSel} onChange={setColoniaSel} placeholder="Buscar colonia..." options={todasColonias.map(c=>({value:c,label:`${c} (${zonasData.coloniaToCluster[c]})`}))}/>
+      </div>
     }
     <Btn variant="secondary" onClick={agregar} style={{width:'100%',fontSize:12,padding:'6px 10px'}}>+ Agregar</Btn>
   </div>;
