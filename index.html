@@ -258,12 +258,27 @@ function textoPendientesInstalar(m,pendientes,ref){
   }).join('\n');
   return `📋 Cuentas validadas sin instalar de ${m.nombre} (últ. 30 días):\n\n${lineas}`;
 }
-// Zonas por día ({lunes:[{cluster,colonia}],...}) → texto plano, una línea por día con actividad.
+// Normaliza un día de zonas a {entradas,direccion,comentarios} — acepta también el formato
+// viejo (un simple array de entradas) de planes guardados antes de agregar carpa/comentarios.
+function diaZonas(zonas,d){
+  const v=zonas?.[d];
+  if(Array.isArray(v))return{entradas:v,direccion:'',comentarios:''};
+  return v||{entradas:[],direccion:'',comentarios:''};
+}
+// Zonas por día ({lunes:{entradas:[{cluster,colonia}],direccion,comentarios},...}) → texto plano,
+// una línea por día con actividad (zonas y/o punto de reunión y/o comentarios).
 function zonasATexto(zonas){
   if(!zonas)return'';
-  return DIAS_SEMANA.filter(d=>(zonas[d]||[]).length).map(d=>{
-    const entradas=zonas[d].map(e=>e.colonia?`${e.colonia} (${e.cluster})`:`${e.cluster} (todo)`).join(', ');
-    return `${DIAS_SEMANA_LABEL[d]}: ${entradas}`;
+  return DIAS_SEMANA.filter(d=>{
+    const dz=diaZonas(zonas,d);
+    return dz.entradas.length||dz.direccion||dz.comentarios;
+  }).map(d=>{
+    const dz=diaZonas(zonas,d);
+    const partes=[];
+    if(dz.entradas.length)partes.push(dz.entradas.map(e=>e.colonia?`${e.colonia} (${e.cluster})`:`${e.cluster} (todo)`).join(', '));
+    if(dz.direccion)partes.push(`📍 ${dz.direccion}`);
+    if(dz.comentarios)partes.push(`💬 ${dz.comentarios}`);
+    return `${DIAS_SEMANA_LABEL[d]}: ${partes.join(' · ')}`;
   }).join('\n');
 }
 function textoPlan(rec){
@@ -1208,7 +1223,8 @@ function AutocompleteOpcion({label,onClick}){
 }
 
 // ─── Plan: selector de zonas de un día (cluster y/o colonia, con cruce colonia↔cluster) ───
-function ZonaDia({label,entradas,zonasData,onChange}){
+function ZonaDia({label,dia,zonasData,onChange}){
+  const entradas=dia.entradas||[];
   const[modo,setModo]=useState('cluster');
   const[clusterSel,setClusterSel]=useState('');
   const[coloniasSel,setColoniasSel]=useState([]);
@@ -1221,19 +1237,19 @@ function ZonaDia({label,entradas,zonasData,onChange}){
       if(!clusterSel)return;
       if(coloniasSel.length===0){
         if(entradas.some(e=>e.cluster===clusterSel&&!e.colonia))return;
-        onChange([...entradas,{cluster:clusterSel,colonia:null}]);
+        onChange({...dia,entradas:[...entradas,{cluster:clusterSel,colonia:null}]});
       }else{
         const nuevas=coloniasSel.filter(c=>!entradas.some(e=>e.cluster===clusterSel&&e.colonia===c)).map(c=>({cluster:clusterSel,colonia:c}));
-        onChange([...entradas,...nuevas]);
+        onChange({...dia,entradas:[...entradas,...nuevas]});
       }
       setColoniasSel([]);
     }else{
       if(!coloniaSel||entradas.some(e=>e.colonia===coloniaSel))return;
-      onChange([...entradas,{cluster:zonasData.coloniaToCluster[coloniaSel]||'',colonia:coloniaSel}]);
+      onChange({...dia,entradas:[...entradas,{cluster:zonasData.coloniaToCluster[coloniaSel]||'',colonia:coloniaSel}]});
       setColoniaSel('');
     }
   };
-  const quitar=i=>onChange(entradas.filter((_,idx)=>idx!==i));
+  const quitar=i=>onChange({...dia,entradas:entradas.filter((_,idx)=>idx!==i)});
   const toggleColonia=c=>setColoniasSel(s=>s.includes(c)?s.filter(x=>x!==c):[...s,c]);
 
   return <div style={{marginBottom:10,padding:8,border:'1px solid var(--border)',borderRadius:8}}>
@@ -1264,6 +1280,14 @@ function ZonaDia({label,entradas,zonasData,onChange}){
       </div>
     }
     <Btn variant="secondary" onClick={agregar} style={{width:'100%',fontSize:12,padding:'6px 10px'}}>+ Agregar</Btn>
+    <div style={{marginTop:8,paddingTop:8,borderTop:'1px dashed var(--border)'}}>
+      <Field label="📍 Punto de reunión / Carpa">
+        <Input value={dia.direccion||''} onChange={e=>onChange({...dia,direccion:e.target.value})} placeholder="Dirección o referencia..." style={{fontSize:13}}/>
+      </Field>
+      <Field label="💬 Comentarios adicionales">
+        <Textarea value={dia.comentarios||''} onChange={e=>onChange({...dia,comentarios:e.target.value})} placeholder="Notas para este día..." style={{minHeight:50,fontSize:13}}/>
+      </Field>
+    </div>
   </div>;
 }
 
@@ -1300,7 +1324,7 @@ function PlanTab({data,setData,team,toast,session}){
   const[zonasData,setZonasData]=useState({clusterToColonias:{},coloniaToCluster:{},clusters:[]});
   useEffect(()=>{fetchClustersColonias().then(list=>setZonasData(buildClusterMap(list)));},[]);
 
-  const emptyZonas=()=>Object.fromEntries(DIAS_SEMANA.map(d=>[d,[]]));
+  const emptyZonas=()=>Object.fromEntries(DIAS_SEMANA.map(d=>[d,{entradas:[],direccion:'',comentarios:''}]));
   const[form,setForm]=useState({objetivos:{oportunidades:'',ventas:'',instalaciones:'',cuentasRecuperadas:'',arpu:''},prioridades:'',vendedores_acompanar:'',zonas:emptyZonas(),resultado_esperado:'',notas:''});
   const updObjetivo=(k,v)=>setForm(f=>({...f,objetivos:{...f.objetivos,[k]:v}}));
 
@@ -1380,13 +1404,17 @@ function PlanTab({data,setData,team,toast,session}){
         </div>)}
         <div style={{display:'flex',justifyContent:'space-between',fontSize:13,padding:'3px 0'}}><span>Cuentas recuperadas NPPF</span><b>{planActual.objetivos?.cuentasRecuperadas||0}</b></div>
         <div style={{display:'flex',justifyContent:'space-between',fontSize:13,padding:'3px 0'}}><span>ARPU</span><b>{fmtMoney(planActual.objetivos?.arpu)}</b></div>
-        {DIAS_SEMANA.some(d=>(planActual.zonas?.[d]||[]).length>0)&&<div style={{marginTop:10,paddingTop:10,borderTop:'1px solid var(--border)'}}>
+        {DIAS_SEMANA.some(d=>{const dz=diaZonas(planActual.zonas,d);return dz.entradas.length||dz.direccion||dz.comentarios;})&&<div style={{marginTop:10,paddingTop:10,borderTop:'1px solid var(--border)'}}>
           <div style={{fontSize:12,fontWeight:700,color:'var(--dim)',marginBottom:4}}>🗺️ Zonas de la semana</div>
-          {DIAS_SEMANA.filter(d=>(planActual.zonas?.[d]||[]).length>0).map(d=>
-            <p key={d} style={{fontSize:12,margin:'2px 0'}}>
-              <b>{DIAS_SEMANA_LABEL[d]}:</b> {planActual.zonas[d].map(e=>e.colonia?`${e.colonia} (${e.cluster})`:`${e.cluster} (todo)`).join(', ')}
-            </p>
-          )}
+          {DIAS_SEMANA.filter(d=>{const dz=diaZonas(planActual.zonas,d);return dz.entradas.length||dz.direccion||dz.comentarios;}).map(d=>{
+            const dz=diaZonas(planActual.zonas,d);
+            return <div key={d} style={{marginBottom:4}}>
+              {dz.entradas.length>0&&<p style={{fontSize:12,margin:'2px 0'}}><b>{DIAS_SEMANA_LABEL[d]}:</b> {dz.entradas.map(e=>e.colonia?`${e.colonia} (${e.cluster})`:`${e.cluster} (todo)`).join(', ')}</p>}
+              {!dz.entradas.length&&<p style={{fontSize:12,margin:'2px 0'}}><b>{DIAS_SEMANA_LABEL[d]}</b></p>}
+              {dz.direccion&&<p style={{fontSize:11,color:'var(--dim)',margin:'0 0 0 10px'}}>📍 {dz.direccion}</p>}
+              {dz.comentarios&&<p style={{fontSize:11,color:'var(--dim)',margin:'0 0 0 10px'}}>💬 {dz.comentarios}</p>}
+            </div>;
+          })}
         </div>}
         <div style={{display:'flex',gap:8,marginTop:10,flexWrap:'wrap'}}>
           <a href={whatsappUrl(textoPlan(planActual))} target="_blank" rel="noopener noreferrer"
@@ -1420,7 +1448,7 @@ function PlanTab({data,setData,team,toast,session}){
       </Card>
       <Card title="🗺️ Zonas a trabajar (lunes a domingo)">
         {zonasData.clusters.length===0?<p style={{color:'var(--dim)',fontSize:12}}>Cargando clusters/colonias…</p>:
-        DIAS_SEMANA.map(d=><ZonaDia key={d} label={DIAS_SEMANA_LABEL[d]} entradas={form.zonas[d]} zonasData={zonasData} onChange={nuevas=>setForm(f=>({...f,zonas:{...f.zonas,[d]:nuevas}}))}/>)}
+        DIAS_SEMANA.map(d=><ZonaDia key={d} label={DIAS_SEMANA_LABEL[d]} dia={form.zonas[d]} zonasData={zonasData} onChange={nuevoDia=>setForm(f=>({...f,zonas:{...f.zonas,[d]:nuevoDia}}))}/>)}
       </Card>
       <Card title="Resultado esperado">
         <Textarea value={form.resultado_esperado} onChange={e=>setForm({...form,resultado_esperado:e.target.value})} style={{minHeight:50}}/>
@@ -2023,11 +2051,9 @@ function HistorialTab({data,setData,toast,session}){
         {r.objetivos&&<p>NPPF: {r.objetivos.cuentasRecuperadas||0} · ARPU: {r.objetivos.arpu||0}</p>}
         {r.prioridades&&<p><b>Prioridades:</b> {r.prioridades}</p>}
         {r.vendedores_acompanar&&<p><b>Acompañamientos:</b> {r.vendedores_acompanar}</p>}
-        {r.zonas&&Object.entries(r.zonas).some(([,v])=>v?.length)&&<div style={{marginTop:4}}>
+        {zonasATexto(r.zonas)&&<div style={{marginTop:4}}>
           <b>Zonas:</b>
-          {Object.entries(r.zonas).filter(([,v])=>v?.length).map(([dia,entradas])=>
-            <p key={dia} style={{margin:'2px 0'}}>• {DIAS_SEMANA_LABEL[dia]||dia}: {entradas.map(e=>e.colonia?`${e.colonia} (${e.cluster})`:`${e.cluster} (todo)`).join(', ')}</p>
-          )}
+          {zonasATexto(r.zonas).split('\n').map((linea,i)=><p key={i} style={{margin:'2px 0'}}>• {linea}</p>)}
         </div>}
         {r.resultado_esperado&&<p><b>Resultado esperado:</b> {r.resultado_esperado}</p>}
         {/* Compatibilidad con planes guardados antes de este cambio */}
