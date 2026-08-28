@@ -98,7 +98,7 @@ async function saveAndSync(data,record,toast,setData){
       pending.push(record);
       localStorage.setItem('sv2-pending',JSON.stringify(pending));
       toast?.('⚠️ Guardado local — sin conexión al Sheet');
-    }else if(setData&&(result.fotoGrupoUrl||result.fotosAusentes)){
+    }else if(setData&&(result.fotoGrupoUrl||result.fotosAusentes||result.fotoUrl)){
       // Ya se subieron a Drive: se reemplaza la foto pesada (base64) local por la liga,
       // para que no se quede ocupando espacio en el teléfono.
       setData(d=>{
@@ -106,6 +106,7 @@ async function saveAndSync(data,record,toast,setData){
           if(r.id!==record.id)return r;
           const upd={...r};
           if(result.fotoGrupoUrl)upd.photo=result.fotoGrupoUrl;
+          if(result.fotoUrl)upd.photo=result.fotoUrl;
           if(result.fotosAusentes&&upd.ausentes){
             upd.ausentes=upd.ausentes.map(a=>{
               const found=result.fotosAusentes.find(f=>f.name===a.name);
@@ -130,12 +131,13 @@ async function retryPending(toast,setData){
   for(const rec of pending){
     const r=await sendToSheet(rec);
     if(!r.ok){still.push(rec);continue;}
-    if(setData&&(r.fotoGrupoUrl||r.fotosAusentes)){
+    if(setData&&(r.fotoGrupoUrl||r.fotosAusentes||r.fotoUrl)){
       setData(d=>{
         const records=d.records.map(x=>{
           if(x.id!==rec.id)return x;
           const upd={...x};
           if(r.fotoGrupoUrl)upd.photo=r.fotoGrupoUrl;
+          if(r.fotoUrl)upd.photo=r.fotoUrl;
           if(r.fotosAusentes&&upd.ausentes){
             upd.ausentes=upd.ausentes.map(a=>{
               const found=r.fotosAusentes.find(f=>f.name===a.name);
@@ -955,6 +957,7 @@ function ArranqueTab({data,setData,team,toast,session}){
   const toggle=name=>{setForm(f=>{const p=f.presentes.includes(name);return{...f,presentes:p?f.presentes.filter(n=>n!==name):[...f.presentes,name],ausentes:p?[...f.ausentes,{name,reason:'Falta justificada',detail:'',photo:null}]:f.ausentes.filter(a=>a.name!==name)};});};
   const updAus=(name,field,val)=>setForm(f=>({...f,ausentes:f.ausentes.map(a=>a.name===name?{...a,[field]:val}:a)}));
   const guardar=async()=>{
+    if(!form.photo){alert('Agrega la foto de grupo para poder guardar el arranque');return;}
     const rec={id:uid(),type:'arranque',...form,registradoPor:session.user.nombre,rolRegistro:session.role,savedAt:new Date().toISOString()};
     const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast,setData);toast('✅ Arranque guardado');
     setForm({date:today(),time:now(),photo:null,presentes:team.map(m=>m.nombre),ausentes:[],notas:''});
@@ -965,7 +968,7 @@ function ArranqueTab({data,setData,team,toast,session}){
         <Field label="Fecha"><Input type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})}/></Field>
         <Field label="Hora"><Input value={form.time} readOnly style={{background:'var(--bg)'}}/></Field>
       </div>
-      <Field label="Foto de grupo"><PhotoCaptureGeo photo={form.photo} onCapture={p=>setForm({...form,photo:p})} coachName={session.user.nombre} toast={toast} label="📷 Tomar foto de grupo (con sello)"/></Field>
+      <Field label="Foto de grupo (obligatoria)"><PhotoCaptureGeo photo={form.photo} onCapture={p=>setForm({...form,photo:p})} coachName={session.user.nombre} toast={toast} label="📷 Tomar foto de grupo (con sello)"/></Field>
     </Card>
     <Card title={`Asistencia (${team.length})`}>
       {team.length===0?<p style={{color:'var(--dim)',fontSize:14}}>Sin integrantes asignados.</p>:
@@ -997,8 +1000,14 @@ function ArranqueTab({data,setData,team,toast,session}){
 
 // ─── Permisos ───
 function PermisosTab({data,setData,team,toast,session}){
-  const[form,setForm]=useState({date:today(),vendedor:'',tipo:'Trabajo fuera de ruta',motivo:'',autorizado_por:session.user.nombre,notas:''});
-  const guardar=async()=>{if(!form.vendedor){alert('Selecciona un integrante');return;}const rec={id:uid(),type:'permiso',...form,registradoPor:session.user.nombre,savedAt:new Date().toISOString()};const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast);toast('✅ Permiso documentado');setForm({date:today(),vendedor:'',tipo:'Trabajo fuera de ruta',motivo:'',autorizado_por:session.user.nombre,notas:''});};
+  const[form,setForm]=useState({date:today(),vendedor:'',tipo:'Trabajo fuera de ruta',motivo:'',autorizado_por:session.user.nombre,notas:'',photo:null});
+  const guardar=async()=>{
+    if(!form.vendedor){alert('Selecciona un integrante');return;}
+    if(!form.photo){alert('Agrega una foto de evidencia (foto o conversación del motivo) para poder guardar el permiso');return;}
+    const rec={id:uid(),type:'permiso',...form,registradoPor:session.user.nombre,savedAt:new Date().toISOString()};
+    const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast,setData);toast('✅ Permiso documentado');
+    setForm({date:today(),vendedor:'',tipo:'Trabajo fuera de ruta',motivo:'',autorizado_por:session.user.nombre,notas:'',photo:null});
+  };
   return <div>
     <Card title="📋 Documentar permiso">
       <Field label="Fecha"><Input type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})}/></Field>
@@ -1006,6 +1015,7 @@ function PermisosTab({data,setData,team,toast,session}){
       <Field label="Tipo"><Select value={form.tipo} onChange={v=>setForm({...form,tipo:v})} options={PERMISO_TIPOS}/></Field>
       <Field label="Motivo"><Textarea value={form.motivo} onChange={e=>setForm({...form,motivo:e.target.value})} placeholder="Motivo del permiso..."/></Field>
       <Field label="Autorizado por"><Input value={form.autorizado_por} onChange={e=>setForm({...form,autorizado_por:e.target.value})}/></Field>
+      <Field label="Evidencia (obligatoria)"><PhotoCapture photo={form.photo} onCapture={p=>setForm({...form,photo:p})} label="Foto o conversación del motivo del permiso"/></Field>
       <Field label="Notas"><Textarea value={form.notas} onChange={e=>setForm({...form,notas:e.target.value})} placeholder="Observaciones..." style={{minHeight:50}}/></Field>
     </Card>
     <Btn onClick={guardar} style={{width:'100%'}}>💾 Guardar permiso</Btn>
@@ -1620,7 +1630,7 @@ function HistorialTab({data,setData,toast,session}){
   const detail=r=>{
     switch(r.type){
       case'arranque':return <div style={{fontSize:13}}><p><b>Presentes:</b> {r.presentes?.length||0} · <b>Ausentes:</b> {r.ausentes?.length||0}</p>{r.ausentes?.map(a=><div key={a.name} style={{margin:'2px 0'}}><p style={{color:'var(--red)',margin:0}}>✗ {a.name}: {a.reason}{a.detail?` — ${a.detail}`:''}</p>{a.photo&&<FotoMini src={a.photo} style={{maxHeight:160,marginTop:4}}/>}</div>)}{r.notas&&<p style={{marginTop:6}}>{r.notas}</p>}{r.photo&&<FotoMini src={r.photo} style={{maxHeight:120,marginTop:6}}/>}</div>;
-      case'permiso':return <div style={{fontSize:13}}><p><b>{r.vendedor}</b> — {r.tipo}</p><p>{r.motivo}</p>{r.autorizado_por&&<p style={{color:'var(--dim)'}}>Autorizado: {r.autorizado_por}</p>}</div>;
+      case'permiso':return <div style={{fontSize:13}}><p><b>{r.vendedor}</b> — {r.tipo}</p><p>{r.motivo}</p>{r.autorizado_por&&<p style={{color:'var(--dim)'}}>Autorizado: {r.autorizado_por}</p>}{r.photo&&<FotoMini src={r.photo} style={{maxHeight:160,marginTop:6}}/>}</div>;
       case'cierre':return <div style={{fontSize:13}}>{r.resultado&&<p><b>Resultado:</b> {r.resultado}</p>}{r.pendientes&&<p><b>Pendientes:</b> {r.pendientes}</p>}{r.incidencias&&<p><b>Incidencias:</b> {r.incidencias}</p>}</div>;
       case'plan':return <div style={{fontSize:13}}>{r.objetivo&&<p><b>Objetivo:</b> {r.objetivo}</p>}{r.prioridades&&<p><b>Prioridades:</b> {r.prioridades}</p>}</div>;
       case'feedback':return <div style={{fontSize:13}}><div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><b>{r.vendedor}</b> — {r.tipo}<StatusBadge status={r.semaforo} small/></div>{r.hallazgos&&<p>{r.hallazgos}</p>}{r.compromisos&&<p><b>Compromisos:</b> {r.compromisos}</p>}{r.transcript&&<p style={{fontStyle:'italic',background:'var(--bg)',padding:8,borderRadius:6,marginTop:4}}>🎙️ {r.transcript.slice(0,200)}{r.transcript.length>200?'...':''}</p>}</div>;
