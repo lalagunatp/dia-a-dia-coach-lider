@@ -6,7 +6,12 @@
 <title>Supervisión 2.0</title>
 <meta name="theme-color" content="#1e3a8a">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Supervisión">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="manifest" href="./manifest.json">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📋</text></svg>">
+<link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='18' fill='%231e40af'/><text x='50' y='68' font-size='60' text-anchor='middle'>📋</text></svg>">
 <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -1025,6 +1030,8 @@ function PermisosTab({data,setData,team,toast,session}){
 // ─── Cierre ───
 function CierreTab({data,setData,team,toast,session}){
   const vendedores=team.filter(m=>isVendedor(m.posicion));
+  const nowDate=new Date();
+  const semanaIni=startOfWeek(nowDate),semanaFin=endOfWeek(nowDate);
   const[form,setForm]=useState({date:today(),time:now(),resultados:[],incidencias:'',seguimiento:[],notas:''});
   useEffect(()=>{
     const hoyIni=new Date();hoyIni.setHours(0,0,0,0);
@@ -1072,17 +1079,29 @@ function CierreTab({data,setData,team,toast,session}){
       <Textarea value={form.incidencias} onChange={e=>setForm({...form,incidencias:e.target.value})} placeholder="Rechazos, desviaciones..."/>
     </Card>
     <Card title="Seguimiento mañana">
-      {vendedores.length===0?<p style={{color:'var(--dim)',fontSize:14}}>Sin integrantes asignados.</p>:
-      vendedores.map(m=>{
+      {vendedores.length===0?<p style={{color:'var(--dim)',fontSize:14}}>Sin integrantes asignados.</p>:<>
+      {vendedores.map(m=>{
         const sel=form.seguimiento.find(s=>s.name===m.nombre);
+        const fSem=funnelPeriodo(m.ventas,semanaIni,semanaFin);
+        const rHoy=form.resultados.find(r=>r.nombre===m.nombre);
+        const resumen={
+          oportunidades:fSem.oportunidades+(Number(rHoy?.oportunidades)||0),
+          validadas:fSem.validadas+(Number(rHoy?.validadas)||0),
+          instaladas:fSem.instaladas+(Number(rHoy?.instaladas)||0),
+        };
         return <div key={m.numEmp||m.nombre} style={{marginBottom:6}}>
           <div onClick={()=>toggleSeguimiento(m.nombre)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 10px',borderRadius:8,border:`1.5px solid ${sel?'var(--accent)':'var(--border)'}`,background:sel?'var(--accent-light)':'transparent',cursor:'pointer'}}>
             <span style={{fontSize:13,fontWeight:600}}>{m.nombre}</span>
             <span style={{fontSize:12,color:sel?'var(--accent)':'var(--dim)'}}>{sel?'✓ Seguimiento':'+ Agregar'}</span>
           </div>
+          <div style={{fontSize:11,color:'var(--dim)',padding:'3px 10px 0'}}>
+            📊 Semana: <b>{resumen.oportunidades}</b> oport. · <b>{resumen.validadas}</b> valid. · <b>{resumen.instaladas}</b> instal.
+          </div>
           {sel&&<Input placeholder="Motivo del seguimiento..." value={sel.motivo} onChange={e=>updSeguimiento(m.nombre,e.target.value)} style={{marginTop:4}}/>}
         </div>;
       })}
+      <p style={{fontSize:11,color:'var(--dim)',marginTop:4}}>Resumen de la semana en curso: lo que ya está en sistema + lo capturado arriba en "Resultado del día". Es solo informativo (referencia de cómo van), no se usa para ninguna métrica oficial.</p>
+      </>}
     </Card>
     <Card title="Notas"><Textarea value={form.notas} onChange={e=>setForm({...form,notas:e.target.value})} style={{minHeight:50}}/></Card>
     <Btn onClick={guardar} style={{width:'100%'}}>💾 Guardar cierre</Btn>
@@ -1842,6 +1861,11 @@ function App(){
   return <MainApp session={session} onLogout={logout}/>;
 }
 ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+<script>
+if('serviceWorker' in navigator){
+  window.addEventListener('load',()=>{navigator.serviceWorker.register('./sw.js').catch(()=>{});});
+}
 </script>
 </body>
 </html>
