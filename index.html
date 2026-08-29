@@ -996,19 +996,41 @@ function PhotoCaptureMulti({photos,onChange,label}){
   </div>;
 }
 
+// Tono corto (beep) antes de empezar a escuchar, para que los participantes sepan cuándo hablar.
+function reproducirTono(){
+  return new Promise(resolve=>{
+    try{
+      const ctx=new(window.AudioContext||window.webkitAudioContext)();
+      const osc=ctx.createOscillator();
+      const gain=ctx.createGain();
+      osc.frequency.value=880;
+      osc.connect(gain);gain.connect(ctx.destination);
+      gain.gain.setValueAtTime(.001,ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(.2,ctx.currentTime+.02);
+      gain.gain.exponentialRampToValueAtTime(.001,ctx.currentTime+.35);
+      osc.start();
+      osc.stop(ctx.currentTime+.35);
+      osc.onended=()=>{ctx.close();resolve();};
+    }catch(e){resolve();}
+  });
+}
+
 // ═══ AUDIO RECORDER ═══
 function AudioRecorder({onTranscript}){
-  const[rec,setRec]=useState(false);const[txt,setTxt]=useState('');const rr=useRef(null);
-  const toggle=()=>{
+  const[rec,setRec]=useState(false);const[preparando,setPreparando]=useState(false);const[txt,setTxt]=useState('');const rr=useRef(null);
+  const toggle=async()=>{
     if(rec){rr.current?.stop();setRec(false);return;}
     const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
     if(!SR){alert('Navegador sin soporte de voz. Usa Chrome.');return;}
+    setPreparando(true);
+    await reproducirTono();
+    setPreparando(false);
     const r=new SR();r.lang='es-MX';r.continuous=true;r.interimResults=true;let final=txt;
     r.onresult=e=>{let interim='';for(let i=e.resultIndex;i<e.results.length;i++){if(e.results[i].isFinal)final+=e.results[i][0].transcript+' ';else interim+=e.results[i][0].transcript;}setTxt(final+interim);onTranscript(final+interim);};
     r.onerror=()=>setRec(false);r.onend=()=>{if(rec)try{r.start();}catch{}};
     rr.current=r;r.start();setRec(true);
   };
-  return <div><div style={{display:'flex',gap:8,alignItems:'center',marginBottom:8}}><Btn onClick={toggle} variant={rec?'danger':'primary'} style={{display:'flex',alignItems:'center',gap:6}}>{rec?<><span style={{width:10,height:10,borderRadius:'50%',background:'#fff',animation:'pulse 1s infinite'}}/>Detener</>:<>🎙️ Grabar</>}</Btn>{rec&&<span style={{fontSize:12,color:'var(--red)',fontWeight:600}}>● Escuchando...</span>}</div>{txt&&<Textarea value={txt} onChange={e=>{setTxt(e.target.value);onTranscript(e.target.value);}} style={{minHeight:100}}/>}</div>;
+  return <div><div style={{display:'flex',gap:8,alignItems:'center',marginBottom:8}}><Btn onClick={toggle} disabled={preparando} variant={rec?'danger':'primary'} style={{display:'flex',alignItems:'center',gap:6}}>{rec?<><span style={{width:10,height:10,borderRadius:'50%',background:'#fff',animation:'pulse 1s infinite'}}/>Detener</>:preparando?<>🔔 Suena el tono...</>:<>🎙️ Grabar</>}</Btn>{rec&&<span style={{fontSize:12,color:'var(--red)',fontWeight:600}}>● Escuchando...</span>}</div>{txt&&<Textarea value={txt} onChange={e=>{setTxt(e.target.value);onTranscript(e.target.value);}} style={{minHeight:100}}/>}</div>;
 }
 
 // ═══════════════════════════════════════
@@ -1637,8 +1659,17 @@ function FeedbackTab({data,setData,team,toast,session}){
         <Field label="Fecha de revisión"><Input type="date" value={form.fecha_revision} onChange={e=>setForm({...form,fecha_revision:e.target.value})}/></Field>
       </Card>
       <Card title="🎙️ Grabación de voz">
-        <p style={{fontSize:12,color:'var(--dim)',margin:'0 0 10px'}}>Requiere autorización previa.</p>
-        {!consent?<div style={{textAlign:'center',padding:12}}><p style={{fontSize:13,marginBottom:10}}>¿Autoriza la grabación?</p><div style={{display:'flex',gap:8,justifyContent:'center'}}><Btn onClick={()=>{setConsent(true);setForm({...form,grabado:true});}}>Sí</Btn><Btn variant="secondary" onClick={()=>toast('Sin autorización')}>No</Btn></div></div>:
+        <p style={{fontSize:12,color:'var(--dim)',margin:'0 0 10px'}}>Transcribe lo que se hable a texto en tiempo real (no guarda audio). Requiere autorización previa.</p>
+        {!consent?<div style={{textAlign:'center',padding:12}}>
+          <p style={{fontSize:13,marginBottom:8,textAlign:'left'}}>Antes de grabar, pide a los participantes que:</p>
+          <ul style={{textAlign:'left',fontSize:13,margin:'0 0 12px',paddingLeft:18,color:'var(--text)'}}>
+            <li>Digan su <b>nombre y puesto</b> al iniciar.</li>
+            <li>Acepten en voz alta que se va a grabar este feedback.</li>
+            <li>Empiecen a hablar <b>después del tono</b>.</li>
+          </ul>
+          <p style={{fontSize:13,fontWeight:700,marginBottom:10}}>¿Autoriza la grabación?</p>
+          <div style={{display:'flex',gap:8,justifyContent:'center'}}><Btn onClick={()=>{setConsent(true);setForm({...form,grabado:true});}}>Sí</Btn><Btn variant="secondary" onClick={()=>toast('Sin autorización')}>No</Btn></div>
+        </div>:
         <AudioRecorder onTranscript={t=>setForm({...form,transcript:t})}/>}
       </Card>
     </>}
