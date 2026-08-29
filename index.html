@@ -35,7 +35,7 @@ const{useState,useEffect,useRef,useCallback}=React;
 
 // ═══ CONFIG ═══
 const SHEET_ID='1Ph5T-m-Lkbdw1LBq-9wIIMW6C8bljOG1t5GfZQhNZ2o';
-const PLANTILLA_GID='913334386';
+// PLANTILLA ya no se lee por gid/gviz — ver fetchPlantilla() (usa Apps Script, evita el bug de filas inmovilizadas).
 const RANKING_ENT_GID='1643927631';
 const RANKING_GID='1495976066';
 const BASEDATOS_SHEET='Base de Datos y Comisiones'; // oportunidades: creación/validación/activación, rechazos, asignación
@@ -320,28 +320,35 @@ function textoCierre(rec){
   return lineas.join('\n');
 }
 
+// Se lee vía Apps Script (SpreadsheetApp.getValues, del lado del servidor) y no por gviz:
+// gviz trata las filas inmovilizadas como "encabezado" y las excluye — si BASE LA LAGUNA 2026
+// tiene más de 1 fila inmovilizada en PLANTILLA (Director/Líderes/Coaches arriba), esas personas
+// nunca llegaban a la app ("Número de empleado no encontrado"). getValues() ignora el inmovilizado.
 async function fetchPlantilla(){
-  const res=await fetch(gvizUrl(PLANTILLA_GID));
-  const text=await res.text();
-  const rows=parseGviz(text);
-  // cols: 0=A(TGS),1=B(SF),2=C(ID),3=D(NumEmp),4=E(Nombre),5=F(Posicion),
-  // 6=G(FechaAlta),7=H(Distrito),8=I(NumLR),9=J(PosLR),
-  // 10=K(NombreLR),11=L(PuestoLR),12=M,13=N,...
-  // 25=Z(SegundaLR),26=AA(Activo),27=AB(PIN)
-  return rows.map(r=>({
-    numEmp:String(r[3]||'').trim(),      // D - primary key
-    numEmpB:String(r[1]||'').trim(),     // B - NUMERO EMPLEADO SF
-    numEmpC:String(r[2]||'').trim(),     // C - ID POSICIONES
-    nombre:String(r[4]||'').trim(),
-    posicion:String(r[5]||'').trim(),
-    fechaAlta:String(r[6]||''),
-    distrito:String(r[7]||''),
-    reportaA:String(r[10]||'').trim(),
-    puestoLR:String(r[11]||'').trim(),
-    segundaLR:String(r[25]||'').trim(),
-    activo:String(r[26]||'').trim(),
-    pin:String(r[27]||'').trim(),
-  })).filter(e=>e.nombre&&e.nombre!=='VACANTE'&&e.nombre!=='NOMBRE DEL EMPLEADO');
+  try{
+    const res=await fetch(`${DOPOST_URL}?accion=plantilla`);
+    const json=await res.json();
+    if(!json.ok){console.error('Plantilla fetch error:',json.error);return[];}
+    const rows=json.filas;
+    // cols: 0=A(TGS),1=B(SF),2=C(ID),3=D(NumEmp),4=E(Nombre),5=F(Posicion),
+    // 6=G(FechaAlta),7=H(Distrito),8=I(NumLR),9=J(PosLR),
+    // 10=K(NombreLR),11=L(PuestoLR),12=M,13=N,...
+    // 25=Z(SegundaLR),26=AA(Activo),27=AB(PIN)
+    return rows.map(r=>({
+      numEmp:String(r[3]||'').trim(),      // D - primary key
+      numEmpB:String(r[1]||'').trim(),     // B - NUMERO EMPLEADO SF
+      numEmpC:String(r[2]||'').trim(),     // C - ID POSICIONES
+      nombre:String(r[4]||'').trim(),
+      posicion:String(r[5]||'').trim(),
+      fechaAlta:String(r[6]||''),
+      distrito:String(r[7]||''),
+      reportaA:String(r[10]||'').trim(),
+      puestoLR:String(r[11]||'').trim(),
+      segundaLR:String(r[25]||'').trim(),
+      activo:String(r[26]||'').trim(),
+      pin:String(r[27]||'').trim(),
+    })).filter(e=>e.nombre&&e.nombre!=='VACANTE'&&e.nombre!=='NOMBRE DEL EMPLEADO');
+  }catch(e){console.error('Plantilla fetch error:',e);return[];}
 }
 
 // ═══ BUILD TEAM ═══

@@ -42,9 +42,22 @@
 // NUEVO (Permisos): se agregó el compromiso del día (cuentas, ventas,
 // instalaciones) y la colonia donde va a trabajar la persona con permiso.
 //
+// NUEVO (login vía Apps Script, no gviz): la app ya NO lee la hoja PLANTILLA
+// de BASE LA LAGUNA 2026 con el método de antes (gviz) — ese método trata las
+// filas inmovilizadas como "encabezado" y las excluye por completo, así que si
+// esa hoja tiene más de 1 fila inmovilizada (Director/Líderes/Coaches arriba),
+// esas personas nunca podían iniciar sesión ("Número de empleado no encontrado"),
+// sin importar qué tan bien esté hecha la hoja. Ahora este script la lee del lado
+// del servidor (SpreadsheetApp.getValues), que ignora el inmovilizado por completo.
+// IMPORTANTE: la cuenta de Google con la que se ejecuta/despliega este script debe
+// tener acceso de lectura a BASE LA LAGUNA 2026 (SPREADSHEET_ID_PLANTILLA abajo) —
+// es un archivo distinto al de este Sheet del Director.
+//
 // ══════════════════════════════════════════════════════════════
 
 const SPREADSHEET_ID = '1jMrhZMQRqXQRD6VrEUJ0JcWT5dK599BwLYzAOBnmPv4';
+const SPREADSHEET_ID_PLANTILLA = '1Ph5T-m-Lkbdw1LBq-9wIIMW6C8bljOG1t5GfZQhNZ2o'; // BASE LA LAGUNA 2026
+const PLANTILLA_SHEET_NAME = 'PLANTILLA';
 const DRIVE_FOLDER_NAME = 'Supervisión 2.0 - Evidencias';
 
 function getSpreadsheet() {
@@ -396,12 +409,32 @@ function doGet(e) {
   if (accion === 'historial') {
     return jsonResponse(obtenerHistorial(e.parameter));
   }
+  if (accion === 'plantilla') {
+    return jsonResponse(obtenerPlantilla());
+  }
   return jsonResponse({
     ok: true,
     service: 'Supervisión 2.0',
     sheets: Object.values(SHEET_CONFIG).map(c => c.name),
     timestamp: new Date().toISOString()
   });
+}
+
+// Lee PLANTILLA de BASE LA LAGUNA 2026 tal cual (todas las filas, sin importar el
+// inmovilizado) — a diferencia de gviz, getValues() no trata ninguna fila como "encabezado".
+function obtenerPlantilla() {
+  try {
+    const ss = SpreadsheetApp.openById(SPREADSHEET_ID_PLANTILLA);
+    const sheet = ss.getSheetByName(PLANTILLA_SHEET_NAME);
+    if (!sheet) return { ok: false, error: 'Hoja no encontrada: ' + PLANTILLA_SHEET_NAME };
+    const values = sheet.getDataRange().getValues();
+    const filas = values.map(row => row.map(v =>
+      (v instanceof Date) ? Utilities.formatDate(v, Session.getScriptTimeZone(), 'dd/MM/yyyy') : v
+    ));
+    return { ok: true, filas: filas };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
 }
 
 // Devuelve las filas de una hoja como arreglo de objetos {header: valor},
