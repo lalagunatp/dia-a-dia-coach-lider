@@ -2105,14 +2105,20 @@ function HistorialTab({data,setData,toast,session}){
   const[cargandoEquipo,setCargandoEquipo]=useState(false);
   // Nombres cuyos registros puede ver este usuario: los suyos propios y los de su equipo.
   const nombresEquipo=new Set([session?.user?.nombre,...(session?.team||[]).map(m=>m.nombre),...(session?.coaches||[]).map(m=>m.nombre)].filter(Boolean));
+  const HOJAS_EQUIPO=['arranque','cierre','permiso','plan','plan_resultado','feedback'];
+  const TIPO_A_HOJA={arranque:'ARRANQUE',cierre:'CIERRE',permiso:'PERMISO',plan:'PLAN',plan_resultado:'PLAN_RESULTADO',feedback:'FEEDBACK'};
   useEffect(()=>{
     if(vista!=='equipo')return;
     setCargandoEquipo(true);
-    fetchHistorialEquipo('ARRANQUE').then(regs=>{
-      setEquipoRecs(regs.filter(r=>nombresEquipo.has(r['Registrado por'])));
-      setCargandoEquipo(false);
-    });
-  },[vista]);
+    const hojas=filter==='todos'?HOJAS_EQUIPO:[filter];
+    Promise.all(hojas.map(tipo=>fetchHistorialEquipo(TIPO_A_HOJA[tipo]).then(regs=>regs.map(r=>({...r,_tipo:tipo})))))
+      .then(resultados=>{
+        const todos=resultados.flat().filter(r=>nombresEquipo.has(r['Registrado por']));
+        todos.sort((a,b)=>String(b['Timestamp']||'').localeCompare(String(a['Timestamp']||'')));
+        setEquipoRecs(todos);
+        setCargandoEquipo(false);
+      });
+  },[vista,filter]);
   const typeL={arranque:'☀️ Arranque',cierre:'🌙 Cierre',permiso:'📋 Permiso',plan:'📊 Plan',plan_resultado:'📊 Resultado Plan',feedback:'💬 Hallazgo'};
   const recs=data.records.filter(r=>filter==='todos'||r.type===filter).filter(r=>!dateF||r.date===dateF).sort((a,b)=>b.savedAt.localeCompare(a.savedAt));
   const del=id=>{if(!confirm('¿Eliminar?'))return;const upd={...data,records:data.records.filter(r=>r.id!==id)};setData(upd);saveData(upd);toast('Eliminado');};
@@ -2172,21 +2178,79 @@ function HistorialTab({data,setData,toast,session}){
       default:return null;
     }
   };
+  // Detalle para registros que vienen del Sheet (vista "Equipo"): las columnas ya son texto
+  // legible tal cual el Apps Script las guardó, no hay que reconstruir estructuras.
+  const detailEquipo=(tipo,r)=>{
+    switch(tipo){
+      case'arranque':{
+        const fotosAus=parseFotosAusentes(r['Fotos evidencia ausentes']);
+        return <>
+          <p style={{fontSize:13}}><b>Presentes:</b> {r['Presentes']} · <b>Ausentes:</b> {r['Ausentes']}</p>
+          {r['Detalle ausentes']&&<p style={{fontSize:12,color:'var(--red)',margin:'2px 0'}}>{r['Detalle ausentes']}</p>}
+          {r['Notas']&&<p style={{fontSize:13,marginTop:4}}>{r['Notas']}</p>}
+          {r['Foto grupo']&&<div style={{marginTop:6}}><FotoMini src={r['Foto grupo']}/></div>}
+          {fotosAus.length>0&&<div style={{marginTop:6,display:'flex',flexWrap:'wrap',gap:6}}>
+            {fotosAus.map((f,j)=><a key={j} href={f.url} target="_blank" rel="noopener noreferrer" style={{display:'inline-flex',alignItems:'center',gap:6,padding:'6px 10px',borderRadius:8,background:'var(--rbg)',color:'var(--red)',fontSize:11,fontWeight:700,textDecoration:'none'}}>📷 {f.nombre}</a>)}
+          </div>}
+        </>;
+      }
+      case'cierre':return <>
+        {r['Resultados por vendedor']&&<p style={{fontSize:13}}>{r['Resultados por vendedor']}</p>}
+        {r['Incidencias']&&<p style={{fontSize:13}}><b>Incidencias:</b> {r['Incidencias']}</p>}
+        {r['Seguimiento mañana']&&<p style={{fontSize:13}}><b>Seguimiento mañana:</b> {r['Seguimiento mañana']}</p>}
+        {r['Notas']&&<p style={{fontSize:13}}>{r['Notas']}</p>}
+      </>;
+      case'permiso':return <>
+        <p style={{fontSize:13}}><b>{r['Integrante']}</b> — {r['Tipo']}</p>
+        {r['Motivo']&&<p style={{fontSize:13}}>{r['Motivo']}</p>}
+        {(r['Compromiso Cuentas']||r['Compromiso Ventas']||r['Compromiso Instalaciones'])&&<p style={{fontSize:13}}>🎯 Compromiso: {r['Compromiso Cuentas']||0} cuentas · {r['Compromiso Ventas']||0} ventas · {r['Compromiso Instalaciones']||0} instal.</p>}
+        {r['Colonia']&&<p style={{fontSize:13}}>📍 {r['Colonia']}</p>}
+        {r['Autorizado por']&&<p style={{fontSize:12,color:'var(--dim)'}}>Autorizado: {r['Autorizado por']}</p>}
+        {r['Foto evidencia']&&<FotoMini src={r['Foto evidencia']} style={{maxHeight:160,marginTop:6}}/>}
+      </>;
+      case'plan':return <>
+        <p style={{fontSize:13}}><b>Semana:</b> {r['Semana']}</p>
+        <p style={{fontSize:13}}>🎯 Oport: {r['Obj. Oportunidades']||0} (meta {r['Meta Oportunidades']??'-'}) · Ventas: {r['Obj. Ventas']||0} (meta {r['Meta Ventas']??'-'}) · Instal: {r['Obj. Instalaciones']||0} (meta {r['Meta Instalaciones']??'-'})</p>
+        <p style={{fontSize:13}}>NPPF: {r['Obj. Cuentas recuperadas NPPF']||0} · ARPU: {fmtMoney(r['Obj. ARPU'])}</p>
+        {r['Prioridades']&&<p style={{fontSize:13}}><b>Prioridades:</b> {r['Prioridades']}</p>}
+        {r['Acompañamientos']&&<p style={{fontSize:13}}><b>Acompañamientos:</b> {r['Acompañamientos']}</p>}
+        {r['Zonas']&&<p style={{fontSize:13}}><b>Zonas:</b> {r['Zonas']}</p>}
+        {r['Resultado esperado']&&<p style={{fontSize:13}}><b>Resultado esperado:</b> {r['Resultado esperado']}</p>}
+      </>;
+      case'plan_resultado':return <>
+        <p style={{fontSize:13}}><b>Semana:</b> {r['Semana']}</p>
+        <p style={{fontSize:13}}>Oport: {r['Real Oportunidades']||0}{r['% Oportunidades']!==''?` (${r['% Oportunidades']}%)`:''} · Ventas: {r['Real Ventas']||0}{r['% Ventas']!==''?` (${r['% Ventas']}%)`:''} · Instal: {r['Real Instalaciones']||0}{r['% Instalaciones']!==''?` (${r['% Instalaciones']}%)`:''}</p>
+        <p style={{fontSize:13}}>NPPF: {r['Real Cuentas recuperadas NPPF']||0} · ARPU: {fmtMoney(r['Real ARPU'])}</p>
+      </>;
+      case'feedback':{
+        const fotos=String(r['Foto evidencia']||'').split(';').map(s=>s.trim()).filter(Boolean);
+        return <>
+          <div style={{display:'flex',alignItems:'center',gap:8}}><b style={{fontSize:13}}>{r['Integrante']}</b><span style={{fontSize:13}}>— {r['Tipo']}</span>{r['Semáforo']&&<StatusBadge status={r['Semáforo']} small/>}</div>
+          {r['Hallazgos']&&<p style={{fontSize:13}}>{r['Hallazgos']}</p>}
+          {r['Compromisos']&&<p style={{fontSize:13}}><b>Compromisos:</b> {r['Compromisos']}</p>}
+          {r['Transcripción']&&<p style={{fontStyle:'italic',background:'var(--bg)',padding:8,borderRadius:6,marginTop:4,fontSize:12}}>🎙️ {String(r['Transcripción']).slice(0,200)}{String(r['Transcripción']).length>200?'...':''}</p>}
+          {fotos.length>0&&<div style={{display:'flex',flexWrap:'wrap',gap:6,marginTop:6}}>{fotos.map((f,i)=><FotoMini key={i} src={f} style={{width:90,height:90,maxHeight:90}}/>)}</div>}
+        </>;
+      }
+      default:return null;
+    }
+  };
+  const equipoRecsFiltrados=equipoRecs.filter(r=>!dateF||r['Fecha']===dateF);
   return <div>
     <Card title="📁 Historial">
       <div style={{display:'flex',gap:6,marginBottom:10}}>
         <button onClick={()=>setVista('dispositivo')} style={{flex:1,padding:'8px 10px',borderRadius:8,border:'1.5px solid var(--border)',background:vista==='dispositivo'?'var(--accent)':'var(--card)',color:vista==='dispositivo'?'#fff':'var(--dim)',fontWeight:700,fontSize:12,cursor:'pointer'}}>📱 Este dispositivo</button>
-        <button onClick={()=>setVista('equipo')} style={{flex:1,padding:'8px 10px',borderRadius:8,border:'1.5px solid var(--border)',background:vista==='equipo'?'var(--accent)':'var(--card)',color:vista==='equipo'?'#fff':'var(--dim)',fontWeight:700,fontSize:12,cursor:'pointer'}}>👥 Equipo (Arranques)</button>
+        <button onClick={()=>setVista('equipo')} style={{flex:1,padding:'8px 10px',borderRadius:8,border:'1.5px solid var(--border)',background:vista==='equipo'?'var(--accent)':'var(--card)',color:vista==='equipo'?'#fff':'var(--dim)',fontWeight:700,fontSize:12,cursor:'pointer'}}>👥 Equipo</button>
       </div>
-      {vista==='dispositivo'?<>
-        <div style={{display:'flex',gap:6,marginBottom:10,flexWrap:'wrap'}}>
-          <Select value={filter} onChange={v=>setFilter(v)} options={[{value:'todos',label:'Todos'},{value:'arranque',label:'☀️ Arranque'},{value:'cierre',label:'🌙 Cierre'},{value:'permiso',label:'📋 Permisos'},{value:'plan',label:'📊 Planes'},{value:'plan_resultado',label:'📊 Resultados Plan'},{value:'feedback',label:'💬 Hallazgos'}]} style={{flex:1,minWidth:120}}/>
-          <Input type="date" value={dateF} onChange={e=>setDateF(e.target.value)} style={{flex:1,minWidth:120}}/>
-          {dateF&&<Btn variant="ghost" onClick={()=>setDateF('')}>✕</Btn>}
-        </div>
+      <div style={{display:'flex',gap:6,marginBottom:10,flexWrap:'wrap'}}>
+        <Select value={filter} onChange={v=>setFilter(v)} options={[{value:'todos',label:'Todos'},{value:'arranque',label:'☀️ Arranque'},{value:'cierre',label:'🌙 Cierre'},{value:'permiso',label:'📋 Permisos'},{value:'plan',label:'📊 Planes'},{value:'plan_resultado',label:'📊 Resultados Plan'},{value:'feedback',label:'💬 Hallazgos'}]} style={{flex:1,minWidth:120}}/>
+        <Input type="date" value={dateF} onChange={e=>setDateF(e.target.value)} style={{flex:1,minWidth:120}}/>
+        {dateF&&<Btn variant="ghost" onClick={()=>setDateF('')}>✕</Btn>}
+      </div>
+      {vista==='dispositivo'?
         <p style={{fontSize:12,color:'var(--dim)'}}>{recs.length} registro{recs.length!==1?'s':''} · guardados en este teléfono</p>
-      </>:
-        <p style={{fontSize:12,color:'var(--dim)'}}>Arranques de tu equipo ya sincronizados al Sheet — se ven desde cualquier dispositivo.</p>
+      :
+        <p style={{fontSize:12,color:'var(--dim)'}}>{cargandoEquipo?'Cargando…':`${equipoRecsFiltrados.length} registro${equipoRecsFiltrados.length!==1?'s':''} del equipo`} · sincronizados al Sheet, se ven desde cualquier dispositivo.</p>
       }
     </Card>
 
@@ -2204,24 +2268,15 @@ function HistorialTab({data,setData,toast,session}){
 
     {vista==='equipo'&&<>
       {cargandoEquipo&&<div style={{textAlign:'center',padding:30}}><Spinner/></div>}
-      {!cargandoEquipo&&equipoRecs.length===0&&<div style={{textAlign:'center',padding:40,color:'var(--dim)'}}>Sin arranques del equipo todavía.</div>}
-      {!cargandoEquipo&&equipoRecs.map((r,i)=>{
-        const fotosAus=parseFotosAusentes(r['Fotos evidencia ausentes']);
-        return <Card key={r.ID||i} style={{borderLeft:'4px solid var(--accent)'}}>
-          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
-            <span style={{fontWeight:700,fontSize:13}}>☀️ Arranque</span>
-            <span style={{fontSize:11,color:'var(--dim)'}}>{fmt(r['Fecha'])} · {r['Hora']}</span>
-          </div>
-          <p style={{fontSize:13}}><b>Presentes:</b> {r['Presentes']} · <b>Ausentes:</b> {r['Ausentes']}</p>
-          {r['Detalle ausentes']&&<p style={{fontSize:12,color:'var(--red)',margin:'2px 0'}}>{r['Detalle ausentes']}</p>}
-          {r['Notas']&&<p style={{fontSize:13,marginTop:4}}>{r['Notas']}</p>}
-          {r['Foto grupo']&&<div style={{marginTop:6}}><FotoMini src={r['Foto grupo']}/></div>}
-          {fotosAus.length>0&&<div style={{marginTop:6,display:'flex',flexWrap:'wrap',gap:6}}>
-            {fotosAus.map((f,j)=><a key={j} href={f.url} target="_blank" rel="noopener noreferrer" style={{display:'inline-flex',alignItems:'center',gap:6,padding:'6px 10px',borderRadius:8,background:'var(--rbg)',color:'var(--red)',fontSize:11,fontWeight:700,textDecoration:'none'}}>📷 {f.nombre}</a>)}
-          </div>}
-          <p style={{fontSize:11,color:'var(--dim)',marginTop:6,borderTop:'1px solid var(--border)',paddingTop:4}}>Registrado por: {r['Registrado por']} ({r['Rol']})</p>
-        </Card>;
-      })}
+      {!cargandoEquipo&&equipoRecsFiltrados.length===0&&<div style={{textAlign:'center',padding:40,color:'var(--dim)'}}>Sin registros del equipo todavía.</div>}
+      {!cargandoEquipo&&equipoRecsFiltrados.map((r,i)=><Card key={(r.ID||i)+'_'+r._tipo} style={{borderLeft:`4px solid ${r._tipo==='feedback'&&r['Semáforo']?STATUS[r['Semáforo']]?.border:'var(--accent)'}`}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+          <span style={{fontWeight:700,fontSize:13}}>{typeL[r._tipo]||r._tipo}</span>
+          <span style={{fontSize:11,color:'var(--dim)'}}>{fmt(r['Fecha'])}{r['Hora']?' · '+r['Hora']:''}</span>
+        </div>
+        {detailEquipo(r._tipo,r)}
+        <p style={{fontSize:11,color:'var(--dim)',marginTop:6,borderTop:'1px solid var(--border)',paddingTop:4}}>Registrado por: {r['Registrado por']}{r['Rol']?` (${r['Rol']})`:''}</p>
+      </Card>)}
     </>}
 
     {verFoto&&<div onClick={()=>setVerFoto(null)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,.9)',zIndex:9999,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}>
