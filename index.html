@@ -42,7 +42,8 @@ const BASEDATOS_SHEET='Base de Datos y Comisiones'; // oportunidades: creación/
 const COMISIONES_SHEET='COMISIONES'; // cuentas: estatus de pago por cuenta
 const OSPORINSTALAR_SHEET='OS POR INSTALAR'; // un renglón por intento de asignación de técnico a una OS
 const DOPOST_URL='https://script.google.com/macros/s/AKfycbx7DYc01sJV7QJsA9kVdtgW0JOZdyySjLqqHzszA9qsDE3xt8kpr7SfrdF2KqseVTr0/exec';
-const POSITIONS_ALLOWED=['DIRECTOR DISTRITAL','LIDER VENTAS','LIDER DE CANALES Y VENTA TECNICO','COACH VENTAS','COACH DE VENTAS TECNICO','COACH PROMOVENDEDOR PUNTO DE VENTA','VENDEDOR','PROMOVENDEDOR PUNTO DE VENTA'];
+// Únicos puestos con acceso a la app (comparación exacta, no por palabra contenida).
+const POSITIONS_ALLOWED=['COACH VENTAS','LIDER VENTAS','COACH PROMOVENDEDOR PUNTO DE VENTA','DIRECTOR DISTRITAL','GESTOR DE CAPITAL HUMANO'];
 // Meta semanal de instalaciones por ranking (misma convención que informeseguimiento/avancecomisiones).
 const META_SEMANAL_RANKING={ENTRENAMIENTO:3,CONDICIONADO:3,BRONCE:3,PLATA:4,ORO:5,PLATINO:6,DIAMANTE:6};
 const metaSemanal=badge=>META_SEMANAL_RANKING[badge]||0;
@@ -362,6 +363,16 @@ function buildTeam(user,allEmployees){
     const liderNames=lideres.map(l=>l.nombre);
     const allCoaches=activos.filter(e=>liderNames.includes(e.reportaA)&&isCoach(e.posicion));
     team=allCoaches;
+  }else if(role==='gestor'){
+    // Gestor de Capital Humano: visibilidad amplia — todos los coaches del distrito (para ver
+    // sus Arranques/Permisos/Hallazgos en Historial), más su propia gente si tiene reportes directos.
+    coaches=activos.filter(e=>isCoach(e.posicion));
+    const coachNames=coaches.map(c=>c.nombre);
+    team=activos.filter(e=>coachNames.includes(e.reportaA)&&isVendedor(e.posicion));
+    activos.filter(e=>e.reportaA===user.nombre).forEach(p=>{
+      if(isCoach(p.posicion)){if(!coaches.some(c=>c.nombre===p.nombre))coaches.push(p);}
+      else if(!team.some(t=>t.nombre===p.nombre))team.push(p);
+    });
   }
 
   return{team,coaches,role};
@@ -770,7 +781,8 @@ const RANK_COLORS={
 };
 
 function getRoleType(pos){
-  const p=(pos||'').toUpperCase();
+  const p=(pos||'').toUpperCase().trim();
+  if(p==='GESTOR DE CAPITAL HUMANO')return'gestor';
   if(p.includes('DIRECTOR'))return'director';
   if(p.includes('LIDER'))return'lider';
   if(p.includes('COACH'))return'coach';
@@ -1050,8 +1062,8 @@ function LoginScreen({onLogin}){
       const user=all.find(e=>e.numEmp===numEmp.trim());
       if(!user){setError('Número de empleado no encontrado');setLoading(false);return;}
       if(String(user.pin)!==pin.trim()){setError('PIN incorrecto');setLoading(false);return;}
+      if(!POSITIONS_ALLOWED.includes((user.posicion||'').trim().toUpperCase())){setError('Acceso solo para Coach Ventas, Líder Ventas, Coach Promovendedor Punto de Venta, Director Distrital o Gestor de Capital Humano');setLoading(false);return;}
       const role=getRoleType(user.posicion);
-      if(role==='vendedor'){setError('Acceso solo para Coach, Líder o Director');setLoading(false);return;}
       let{team,coaches}=buildTeam(user,all);
       // Ventas y comisiones del equipo (semana/mes en curso, rechazos, asignaciones, cuentas sin pagar)
       // Base de Datos y Comisiones no siempre etiqueta "Num Vendedor" con la misma columna de ID
@@ -2414,7 +2426,7 @@ function MainApp({session,onLogout}){
   const todayRecs=data.records.filter(r=>r.date===today());
   const hasArr=todayRecs.some(r=>r.type==='arranque');
   const hasCie=todayRecs.some(r=>r.type==='cierre');
-  const roleLabels={coach:'🏅 Coach',lider:'⭐ Líder',director:'👔 Director'};
+  const roleLabels={coach:'🏅 Coach',lider:'⭐ Líder',director:'👔 Director',gestor:'🧑‍💼 Gestor CH'};
 
   const exportReporte=()=>{
     const html=generarReporteHTML(data,user,roleLabels[role]);
