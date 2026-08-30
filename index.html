@@ -1134,12 +1134,30 @@ function LoginScreen({onLogin}){
 
 // ─── Arranque ───
 function ArranqueTab({data,setData,team,toast,session}){
+  const esLider=session.role==='lider';
   const[form,setForm]=useState({date:today(),time:now(),photo:null,presentes:[],ausentes:[],notas:''});
   useEffect(()=>{setForm(f=>({...f,presentes:team.map(m=>m.nombre),ausentes:[]}));},[team]);
   const toggle=name=>{setForm(f=>{const p=f.presentes.includes(name);return{...f,presentes:p?f.presentes.filter(n=>n!==name):[...f.presentes,name],ausentes:p?[...f.ausentes,{name,reason:'Falta justificada',detail:'',photo:null}]:f.ausentes.filter(a=>a.name!==name)};});};
   const updAus=(name,field,val)=>setForm(f=>({...f,ausentes:f.ausentes.map(a=>a.name===name?{...a,[field]:val}:a)}));
+
+  // Líder: estatus de arranque de hoy de cada coach (leído del Sheet, cada coach lo guarda en su
+  // propio teléfono) + qué coach le toca priorizar hoy según su Plan de la semana ya guardado.
+  const hoyStr=today();
+  const[arranquesEquipo,setArranquesEquipo]=useState([]);
+  const[cargandoArranquesEquipo,setCargandoArranquesEquipo]=useState(false);
+  useEffect(()=>{
+    if(!esLider)return;
+    setCargandoArranquesEquipo(true);
+    fetchHistorialEquipo('ARRANQUE').then(regs=>{setArranquesEquipo(regs);setCargandoArranquesEquipo(false);});
+  },[esLider]);
+  const coachesArranqueHoy=esLider?(session.coaches||[]).map(c=>({coach:c,row:arranquesEquipo.find(r=>r['Registrado por']===c.nombre&&r['Fecha']===hoyStr)||null})):[];
+  const diaHoyKey=DIAS_SEMANA[(new Date().getDay()+6)%7];
+  const semanaIniHoy=ymdLocal(startOfWeek(new Date()));
+  const planLiderSemana=esLider?data.records.find(r=>r.type==='plan'&&r.registradoPor===session.user.nombre&&r.semanaInicio===semanaIniHoy):null;
+  const coachesPrioridadHoy=planLiderSemana?.zonas?.[diaHoyKey]?.entradas?.map(e=>e.cluster)||[];
+
   const guardar=async()=>{
-    if(!form.photo){alert('Agrega la foto de grupo para poder guardar el arranque');return;}
+    if(!form.photo){alert(esLider?'Agrega la foto con el coach prioridad del día para poder guardar el arranque':'Agrega la foto de grupo para poder guardar el arranque');return;}
     const rec={id:uid(),type:'arranque',...form,registradoPor:session.user.nombre,rolRegistro:session.role,savedAt:new Date().toISOString()};
     const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast,setData);toast('✅ Arranque guardado');
     setForm({date:today(),time:now(),photo:null,presentes:team.map(m=>m.nombre),ausentes:[],notas:''});
@@ -1150,31 +1168,59 @@ function ArranqueTab({data,setData,team,toast,session}){
         <Field label="Fecha"><Input type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})}/></Field>
         <Field label="Hora"><Input value={form.time} readOnly style={{background:'var(--bg)'}}/></Field>
       </div>
-      <Field label="Foto de grupo (obligatoria)"><PhotoCaptureGeo photo={form.photo} onCapture={p=>setForm({...form,photo:p})} coachName={session.user.nombre} toast={toast} label="📷 Tomar foto de grupo (con sello)"/></Field>
+      <Field label={esLider?'Foto con coach prioridad del día (obligatoria)':'Foto de grupo (obligatoria)'}>
+        {esLider&&coachesPrioridadHoy.length>0&&<p style={{fontSize:11,color:'var(--accent)',marginBottom:6}}>👤 Hoy toca: <b>{coachesPrioridadHoy.join(', ')}</b> (según tu Plan de la semana)</p>}
+        <PhotoCaptureGeo photo={form.photo} onCapture={p=>setForm({...form,photo:p})} coachName={session.user.nombre} toast={toast} label={esLider?'📷 Tomar foto con el coach (con sello)':'📷 Tomar foto de grupo (con sello)'}/>
+      </Field>
     </Card>
-    <Card title={`Asistencia (${team.length})`}>
-      {team.length===0?<p style={{color:'var(--dim)',fontSize:14}}>Sin integrantes asignados.</p>:
-      team.map(m=>{
-        const present=form.presentes.includes(m.nombre);
-        const aus=form.ausentes.find(a=>a.name===m.nombre);
-        return <div key={m.numEmp||m.nombre} style={{padding:'8px 10px',borderRadius:8,marginBottom:6,border:`1.5px solid ${present?'var(--green)':'var(--red)'}`,background:present?'var(--gbg)':'var(--rbg)'}}>
-          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-            <div><span style={{fontWeight:600,fontSize:13}}>{m.nombre}</span>
-              {isCoach(m.posicion)&&<span style={{marginLeft:6,fontSize:10,background:'var(--accent-light)',color:'var(--accent)',padding:'1px 6px',borderRadius:8,fontWeight:700}}>COACH</span>}
-              <RankBadge badge={m.badge}/>
-            </div>
-            <Btn onClick={()=>toggle(m.nombre)} variant={present?'success':'danger'} style={{padding:'3px 12px',fontSize:11}}>{present?'✓':'✗'}</Btn>
+    {esLider?<>
+      <Card title="Asistencia — ¿ya guardaron su arranque hoy?">
+        {cargandoArranquesEquipo?<div style={{textAlign:'center',padding:20}}><Spinner/></div>:
+        (session.coaches||[]).length===0?<p style={{color:'var(--dim)',fontSize:14}}>Sin coaches asignados.</p>:
+        coachesArranqueHoy.map(({coach,row})=>
+          <div key={coach.nombre} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 10px',borderRadius:8,marginBottom:6,border:`1.5px solid ${row?'var(--green)':'var(--red)'}`,background:row?'var(--gbg)':'var(--rbg)'}}>
+            <span style={{fontWeight:600,fontSize:13}}>{coach.nombre}</span>
+            <span style={{fontWeight:800,fontSize:15,color:row?'var(--green)':'var(--red)'}}>{row?'✓':'✗'}</span>
           </div>
-          {aus&&<div style={{marginTop:6,display:'flex',flexDirection:'column',gap:6}}>
-            <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
-              <Select value={aus.reason} onChange={v=>updAus(m.nombre,'reason',v)} options={ABSENCE_REASONS} style={{flex:1,minWidth:130}}/>
-              <Input placeholder="Detalle..." value={aus.detail} onChange={e=>updAus(m.nombre,'detail',e.target.value)} style={{flex:2,minWidth:130}}/>
+        )}
+      </Card>
+      <Card title="📋 Reporte de asistencia por coach">
+        {cargandoArranquesEquipo?<div style={{textAlign:'center',padding:20}}><Spinner/></div>:
+        coachesArranqueHoy.filter(x=>x.row).length===0?<p style={{color:'var(--dim)',fontSize:14}}>Ningún coach ha guardado su arranque todavía.</p>:
+        coachesArranqueHoy.filter(x=>x.row).map(({coach,row})=>
+          <div key={coach.nombre} style={{marginBottom:10,padding:10,border:'1px solid var(--border)',borderRadius:8}}>
+            <div style={{fontWeight:700,fontSize:13,marginBottom:4}}>{coach.nombre} <span style={{fontWeight:400,fontSize:11,color:'var(--dim)'}}>· {row['Hora']}</span></div>
+            <p style={{fontSize:12,margin:'2px 0'}}><b>Presentes:</b> {row['Presentes']} · <b>Ausentes:</b> {row['Ausentes']}</p>
+            {row['Detalle ausentes']&&<p style={{fontSize:11,color:'var(--red)',margin:'2px 0'}}>{row['Detalle ausentes']}</p>}
+            {row['Notas']&&<p style={{fontSize:12,color:'var(--dim)',margin:'2px 0'}}>{row['Notas']}</p>}
+          </div>
+        )}
+      </Card>
+    </>:
+      <Card title={`Asistencia (${team.length})`}>
+        {team.length===0?<p style={{color:'var(--dim)',fontSize:14}}>Sin integrantes asignados.</p>:
+        team.map(m=>{
+          const present=form.presentes.includes(m.nombre);
+          const aus=form.ausentes.find(a=>a.name===m.nombre);
+          return <div key={m.numEmp||m.nombre} style={{padding:'8px 10px',borderRadius:8,marginBottom:6,border:`1.5px solid ${present?'var(--green)':'var(--red)'}`,background:present?'var(--gbg)':'var(--rbg)'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <div><span style={{fontWeight:600,fontSize:13}}>{m.nombre}</span>
+                {isCoach(m.posicion)&&<span style={{marginLeft:6,fontSize:10,background:'var(--accent-light)',color:'var(--accent)',padding:'1px 6px',borderRadius:8,fontWeight:700}}>COACH</span>}
+                <RankBadge badge={m.badge}/>
+              </div>
+              <Btn onClick={()=>toggle(m.nombre)} variant={present?'success':'danger'} style={{padding:'3px 12px',fontSize:11}}>{present?'✓':'✗'}</Btn>
             </div>
-            <PhotoCapture photo={aus.photo} onCapture={p=>updAus(m.nombre,'photo',p)} label="📷 Agregar evidencia (foto/plática)"/>
-          </div>}
-        </div>;
-      })}
-    </Card>
+            {aus&&<div style={{marginTop:6,display:'flex',flexDirection:'column',gap:6}}>
+              <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+                <Select value={aus.reason} onChange={v=>updAus(m.nombre,'reason',v)} options={ABSENCE_REASONS} style={{flex:1,minWidth:130}}/>
+                <Input placeholder="Detalle..." value={aus.detail} onChange={e=>updAus(m.nombre,'detail',e.target.value)} style={{flex:2,minWidth:130}}/>
+              </div>
+              <PhotoCapture photo={aus.photo} onCapture={p=>updAus(m.nombre,'photo',p)} label="📷 Agregar evidencia (foto/plática)"/>
+            </div>}
+          </div>;
+        })}
+      </Card>
+    }
     <Card title="Notas"><Textarea value={form.notas} onChange={e=>setForm({...form,notas:e.target.value})} placeholder="Prioridades, situaciones especiales..."/></Card>
     <Btn onClick={guardar} style={{width:'100%'}}>💾 Guardar arranque</Btn>
   </div>;
