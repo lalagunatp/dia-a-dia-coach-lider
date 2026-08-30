@@ -1722,6 +1722,14 @@ function DashboardTab({data,team,coaches,session,setTab}){
   const diasLabTransc=Math.round(diasTranscurridos*6/7);
 
   const vendedores=team.filter(m=>isVendedor(m.posicion));
+  // Para el líder: la información se muestra primero agrupada por coach (no por vendedor) —
+  // se profundiza a nivel vendedor solo al tocar un coach específico.
+  const esLider=role==='lider';
+  const vendedoresPorCoach={};
+  if(esLider){
+    (coaches||[]).forEach(c=>{vendedoresPorCoach[c.nombre]=[];});
+    vendedores.forEach(m=>{(vendedoresPorCoach[m.reportaA]=vendedoresPorCoach[m.reportaA]||[]).push(m);});
+  }
 
   // ── Ventas del equipo: semana/mes en curso, rechazos, asignaciones y cuentas sin pagar ──
   const semanaIni=startOfWeek(now),semanaFin=endOfWeek(now);
@@ -1736,6 +1744,13 @@ function DashboardTab({data,team,coaches,session,setTab}){
   const sinPagarPorPlan={}; // plan -> {n, importe}
   const instaladoPorPlan2m={}; // plan -> instalaciones (pagadas o no) en los 2 meses previos, para el % de sin pagar
   const pendientesPorVendedor=[]; // [{m, pendientes}]
+  // Mismos datos que arriba, pero agregados por coach (solo se llena si esLider).
+  const porCoachLider={};
+  if(esLider){
+    (coaches||[]).forEach(c=>{
+      porCoachLider[c.nombre]={coach:c,rechazos:{},rechazosTotal:0,planes:{},planesTotal:0,pendientes:[],pendientesTotal:0,sinPagarPorPlan:{},sinPagarTotal:0};
+    });
+  }
   const[expandedMotivo,setExpandedMotivo]=useState(null);
   const[expandedPlan,setExpandedPlan]=useState(null);
   const[expandedPendienteVendedor,setExpandedPendienteVendedor]=useState(null);
@@ -1743,34 +1758,61 @@ function DashboardTab({data,team,coaches,session,setTab}){
   const[abrirPlanes,setAbrirPlanes]=useState(false);
   const[abrirPendientesPanel,setAbrirPendientesPanel]=useState(false);
   const[abrirSinPagarPlan,setAbrirSinPagarPlan]=useState(false);
+  const[expandedCoachRechazo,setExpandedCoachRechazo]=useState(null);
+  const[expandedCoachPlan,setExpandedCoachPlan]=useState(null);
+  const[expandedCoachPendiente,setExpandedCoachPendiente]=useState(null);
+  const[expandedPendienteVendedorLider,setExpandedPendienteVendedorLider]=useState(null);
+  const[expandedPlanSinPagar,setExpandedPlanSinPagar]=useState(null);
+  const[expandedCoachEquipo,setExpandedCoachEquipo]=useState(null);
   vendedores.forEach(m=>{
     const f=funnelPeriodo(m.ventas,rangoIni,rangoFin);
     ventasTotal.oportunidades+=f.oportunidades;
     ventasTotal.validadas+=f.validadas;
     ventasTotal.instaladas+=f.instaladas;
     metaInstalTotal+=periodoVentas==='semana'?metaSemanal(m.badge):metaMensual(m.badge);
+    const cLider=esLider?porCoachLider[m.reportaA]:null;
+
     const rz=rechazosPeriodo(m.ventas,rangoIni,rangoFin);
     rechazosTotalN+=rz.length;
     rz.forEach(v=>{
       const mo=v.motivoRechazo||'Sin motivo';
       (rechazosMotivos[mo]=rechazosMotivos[mo]||[]).push({nombre:m.nombre,oportunidad:v.oportunidad,cuenta:v.cuenta,fecha:v.creacion});
+      if(cLider){
+        cLider.rechazosTotal++;
+        (cLider.rechazos[mo]=cLider.rechazos[mo]||[]).push({nombre:m.nombre,oportunidad:v.oportunidad,cuenta:v.cuenta,fecha:v.creacion});
+      }
     });
     const planes=instalacionesPorPlan(m.ventas,rangoIni,rangoFin);
     Object.entries(planes).forEach(([p,items])=>{
       planesTotalN[p]=(planesTotalN[p]||0)+items.length;
       (planesDetalle[p]=planesDetalle[p]||[]).push(...items.map(v=>({nombre:m.nombre,cuenta:v.cuenta,fecha:v.activacion})));
+      if(cLider){
+        cLider.planesTotal+=items.length;
+        (cLider.planes[p]=cLider.planes[p]||[]).push(...items.map(v=>({nombre:m.nombre,cuenta:v.cuenta,fecha:v.activacion})));
+      }
     });
     cuentasSinPagar(m.cuentasCom,now).forEach(c=>{
       const p=normalizarPlan(c.plan);
       const b=sinPagarPorPlan[p]=sinPagarPorPlan[p]||{n:0,importe:0};
       b.n++;b.importe+=c.importe;
+      if(cLider){
+        const bc=cLider.sinPagarPorPlan[p]=cLider.sinPagarPorPlan[p]||{n:0,importe:0};
+        bc.n++;bc.importe+=c.importe;
+        cLider.sinPagarTotal++;
+      }
     });
     cuentasDelPeriodo(m.cuentasCom,now).forEach(c=>{
       const p=normalizarPlan(c.plan);
       instaladoPorPlan2m[p]=(instaladoPorPlan2m[p]||0)+1;
     });
     const pend=pendientesInstalar30d(m.ventas,now);
-    if(pend.length)pendientesPorVendedor.push({m,pendientes:pend});
+    if(pend.length){
+      pendientesPorVendedor.push({m,pendientes:pend});
+      if(cLider){
+        cLider.pendientes.push({m,pendientes:pend});
+        cLider.pendientesTotal+=pend.length;
+      }
+    }
   });
   const motivosOrdenados=Object.entries(rechazosMotivos).sort((a,b)=>b[1].length-a[1].length);
   const planesOrdenados=Object.entries(planesTotalN).sort((a,b)=>b[1]-a[1]);
@@ -1779,6 +1821,10 @@ function DashboardTab({data,team,coaches,session,setTab}){
   const instaladoPorPlan2mTotal=Object.values(instaladoPorPlan2m).reduce((a,b)=>a+b,0);
   const sinPagarPorPlanPctTotal=instaladoPorPlan2mTotal?Math.round(sinPagarPorPlanTotales.n/instaladoPorPlan2mTotal*100):0;
   const totalPendientesInstalar=pendientesPorVendedor.reduce((s,x)=>s+x.pendientes.length,0);
+  // Coaches ordenados por total, para las vistas de líder (solo los que tienen algo que mostrar).
+  const coachesOrdenadosRechazos=esLider?Object.values(porCoachLider).filter(c=>c.rechazosTotal>0).sort((a,b)=>b.rechazosTotal-a.rechazosTotal):[];
+  const coachesOrdenadosPlanes=esLider?Object.values(porCoachLider).filter(c=>c.planesTotal>0).sort((a,b)=>b.planesTotal-a.planesTotal):[];
+  const coachesOrdenadosPendientes=esLider?Object.values(porCoachLider).filter(c=>c.pendientesTotal>0).sort((a,b)=>b.pendientesTotal-a.pendientesTotal):[];
 
   const semaforoMap={};
   recs.filter(r=>r.type==='feedback').sort((a,b)=>a.savedAt.localeCompare(b.savedAt)).forEach(r=>{
@@ -1920,6 +1966,56 @@ function DashboardTab({data,team,coaches,session,setTab}){
     </div>;
   };
 
+  // Fila de un vendedor con su semáforo/meta/último feedback — se usa tanto en el listado plano
+  // (coach/director) como anidada dentro de un coach expandido (líder).
+  const VendedorRow=({m})=>{
+    const sem=semaforoMap[m.nombre];
+    const isExp=expanded===m.nombre;
+    const lastFb=recs.filter(r=>r.type==='feedback'&&r.vendedor===m.nombre).sort((a,b)=>b.savedAt.localeCompare(a.savedAt))[0];
+    const sinPagarN=cuentasSinPagar(m.cuentasCom,now).length;
+    const sinPagarPct=sinPagarN?Math.round(sinPagarN/cuentasDelPeriodo(m.cuentasCom,now).length*100):0;
+    return <div key={m.numEmp||m.nombre}>
+      <div onClick={()=>setExpanded(isExp?null:m.nombre)} style={{
+        display:'flex',alignItems:'center',justifyContent:'space-between',
+        padding:'8px 10px',borderRadius:isExp?'8px 8px 0 0':8,marginBottom:isExp?0:4,cursor:'pointer',
+        background:sem==='rojo'?'var(--rbg)':sem==='amarillo'?'var(--ybg)':'transparent',
+        border:`1px solid ${sem==='rojo'?'var(--red)':sem==='amarillo'?'var(--yellow)':'var(--border)'}`,
+        borderBottom:isExp?'none':undefined,
+      }}>
+        <div style={{flex:1}}>
+          <div style={{display:'flex',alignItems:'center',gap:4,flexWrap:'wrap'}}>
+            <span style={{fontSize:13,fontWeight:600}}>{m.nombre.split(' ').slice(0,3).join(' ')}</span>
+            <RankBadge badge={m.badge}/>
+            {m.obs&&<span style={{fontSize:10,fontWeight:600,color:'var(--yellow)'}}>⚠️ {m.obs}</span>}
+            {sinPagarN>0&&<span style={{fontSize:10,fontWeight:700,color:'var(--red)'}}>💰 {sinPagarN} sin pagar ({sinPagarPct}%)</span>}
+          </div>
+          {m.rankingMen&&<div style={{fontSize:10,color:'var(--dim)',marginTop:1}}>
+            Prom: {m.rankingMen.promedioMensual} ins/mes
+            {m.mesesEnRanking>0&&<span> · {m.mesesEnRanking}m en nivel</span>}
+          </div>}
+          {metaMensual(m.badge)>0&&<div style={{fontSize:10,color:'var(--dim)',marginTop:1}}>
+            🎯 {funnelPeriodo(m.ventas,mesIni,mesFin).instaladas}/{metaMensual(m.badge)} inst. del mes
+          </div>}
+          {metaSemanal(m.badge)>0&&<div style={{fontSize:10,color:'var(--dim)',marginTop:1}}>
+            🎯 {funnelPeriodo(m.ventas,semanaIni,semanaFin).instaladas}/{metaSemanal(m.badge)} inst. de la semana
+          </div>}
+          {m.rankingMen?.ventaSana&&<div style={{fontSize:10,color:'var(--dim)',marginTop:1}}>
+            % Venta sana ({m.rankingMen.ventaSana.mes}): <b>{m.rankingMen.ventaSana.valor}</b>
+          </div>}
+          {lastFb&&<div style={{fontSize:10,color:'var(--dim)',marginTop:1}}>Último: {fmt(lastFb.date)} · {lastFb.tipo}</div>}
+          {!lastFb&&<div style={{fontSize:10,color:'var(--yellow)',marginTop:1}}>Sin evaluación</div>}
+        </div>
+        <div style={{display:'flex',alignItems:'center',gap:4}}>
+          {sem?<StatusBadge status={sem} small/>:<span style={{fontSize:10,color:'#9ca3af'}}>⚪</span>}
+          <span style={{fontSize:12,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
+        </div>
+      </div>
+      {isExp&&<div style={{border:'1px solid var(--border)',borderTop:'none',borderRadius:'0 0 8px 8px',marginBottom:4}}>
+        <ContextCard m={m}/>
+      </div>}
+    </div>;
+  };
+
   return <div>
     <Card title={`📈 Dashboard — ${MESES[mesActual]} ${anioActual}`}>
       <p style={{fontSize:12,color:'var(--dim)',marginBottom:4}}>Día {diasTranscurridos} de {diasMes} · ~{diasLabTransc} días laborables</p>
@@ -1969,7 +2065,31 @@ function DashboardTab({data,team,coaches,session,setTab}){
 
     {rechazosTotalN>0&&
       <PanelAcordeon title={`❌ Motivos de rechazo OPORTUNIDADES — ${periodoVentas} (${rechazosTotalN})`} abierto={abrirRechazos} onToggle={()=>setAbrirRechazos(!abrirRechazos)}>
-        {motivosOrdenados.map(([mo,items])=>{
+        {esLider?coachesOrdenadosRechazos.map(c=>{
+          const key=c.coach.nombre;
+          const isExp=expandedCoachRechazo===key;
+          const motivosCoach=Object.entries(c.rechazos).sort((a,b)=>b[1].length-a[1].length);
+          return <div key={key}>
+            <div onClick={()=>setExpandedCoachRechazo(isExp?null:key)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:12,padding:'6px 2px',borderBottom:isExp?'none':'1px solid var(--border)',cursor:'pointer'}}>
+              <span style={{fontWeight:600}}>{c.coach.nombre.split(' ').slice(0,3).join(' ')}</span>
+              <span style={{display:'flex',alignItems:'center',gap:6}}>
+                <b>{c.rechazosTotal}</b>
+                <span style={{fontSize:11,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
+              </span>
+            </div>
+            {isExp&&<div style={{background:'var(--bg)',borderRadius:6,padding:'6px 8px',marginBottom:6}}>
+              {motivosCoach.map(([mo,items])=><div key={mo} style={{marginBottom:6}}>
+                <div style={{fontSize:11,fontWeight:700,color:'var(--dim)',marginBottom:2}}>{mo} ({items.length})</div>
+                {items.map((it,i)=>
+                  <div key={i} style={{fontSize:11,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:i<items.length-1?'1px solid var(--border)':'none'}}>
+                    <span>{it.nombre}</span>
+                    <span>Op. {it.oportunidad||'—'} · Cta. {it.cuenta||'—'} · {fmtDateObj(it.fecha)}</span>
+                  </div>
+                )}
+              </div>)}
+            </div>}
+          </div>;
+        }):motivosOrdenados.map(([mo,items])=>{
           const isExp=expandedMotivo===mo;
           return <div key={mo}>
             <div onClick={()=>setExpandedMotivo(isExp?null:mo)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:12,padding:'6px 2px',borderBottom:isExp?'none':'1px solid var(--border)',cursor:'pointer'}}>
@@ -1994,7 +2114,32 @@ function DashboardTab({data,team,coaches,session,setTab}){
 
     {planesOrdenados.length>0&&
       <PanelAcordeon title={`📦 Instalaciones por plan — ${periodoVentas}`} abierto={abrirPlanes} onToggle={()=>setAbrirPlanes(!abrirPlanes)}>
-        {planesOrdenados.map(([p,n])=>{
+        {esLider?coachesOrdenadosPlanes.map(c=>{
+          const key=c.coach.nombre;
+          const isExp=expandedCoachPlan===key;
+          const planesCoach=Object.entries(c.planes).sort((a,b)=>b[1].length-a[1].length);
+          return <div key={key}>
+            <div onClick={()=>setExpandedCoachPlan(isExp?null:key)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:12,padding:'6px 2px',borderBottom:isExp?'none':'1px solid var(--border)',cursor:'pointer'}}>
+              <span style={{fontWeight:600}}>{c.coach.nombre.split(' ').slice(0,3).join(' ')}</span>
+              <span style={{display:'flex',alignItems:'center',gap:6}}>
+                <b>{c.planesTotal}</b>
+                <span style={{color:'var(--dim)'}}>({ventasTotal.instaladas?Math.round(c.planesTotal/ventasTotal.instaladas*100):0}%)</span>
+                <span style={{fontSize:11,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
+              </span>
+            </div>
+            {isExp&&<div style={{background:'var(--bg)',borderRadius:6,padding:'6px 8px',marginBottom:6}}>
+              {planesCoach.map(([p,items])=><div key={p} style={{marginBottom:6}}>
+                <div style={{fontSize:11,fontWeight:700,color:'var(--dim)',marginBottom:2}}>{p} ({items.length})</div>
+                {items.map((it,i)=>
+                  <div key={i} style={{fontSize:11,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:i<items.length-1?'1px solid var(--border)':'none'}}>
+                    <span>{it.nombre}</span>
+                    <span>Cta. {it.cuenta||'—'} · {fmtDateObj(it.fecha)}</span>
+                  </div>
+                )}
+              </div>)}
+            </div>}
+          </div>;
+        }):planesOrdenados.map(([p,n])=>{
           const isExp=expandedPlan===p;
           const items=planesDetalle[p]||[];
           return <div key={p}>
@@ -2021,7 +2166,58 @@ function DashboardTab({data,team,coaches,session,setTab}){
 
     {totalPendientesInstalar>0&&
       <PanelAcordeon title={`⏳ Cuentas por instalar, últ. 30 días (${totalPendientesInstalar})`} abierto={abrirPendientesPanel} onToggle={()=>setAbrirPendientesPanel(!abrirPendientesPanel)}>
-        {pendientesPorVendedor.map(({m,pendientes})=>{
+        {esLider?coachesOrdenadosPendientes.map(c=>{
+          const key=c.coach.nombre;
+          const isExp=expandedCoachPendiente===key;
+          return <div key={key} style={{marginBottom:6}}>
+            <div onClick={()=>setExpandedCoachPendiente(isExp?null:key)} style={{
+              display:'flex',justifyContent:'space-between',alignItems:'center',cursor:'pointer',
+              padding:'8px 10px',borderRadius:isExp?'8px 8px 0 0':8,
+              border:'1px solid var(--border)',borderBottom:isExp?'none':undefined,
+              background:'var(--bg)',
+            }}>
+              <span style={{fontWeight:700,fontSize:12}}>{c.coach.nombre.split(' ').slice(0,3).join(' ')}</span>
+              <div style={{display:'flex',alignItems:'center',gap:6}}>
+                <span style={{fontSize:11,fontWeight:700,color:'var(--yellow)',background:'var(--ybg)',padding:'2px 8px',borderRadius:10}}>{c.pendientesTotal}</span>
+                <span style={{fontSize:12,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
+              </div>
+            </div>
+            {isExp&&<div style={{border:'1px solid var(--border)',borderTop:'none',borderRadius:'0 0 8px 8px',padding:'8px 10px'}}>
+              {c.pendientes.map(({m,pendientes})=>{
+                const keyV=m.numEmp||m.nombre;
+                const isExpV=expandedPendienteVendedorLider===keyV;
+                return <div key={keyV} style={{marginBottom:6}}>
+                  <div onClick={()=>setExpandedPendienteVendedorLider(isExpV?null:keyV)} style={{
+                    display:'flex',justifyContent:'space-between',alignItems:'center',cursor:'pointer',
+                    padding:'6px 8px',borderRadius:isExpV?'8px 8px 0 0':8,
+                    border:'1px solid var(--border)',borderBottom:isExpV?'none':undefined,
+                    background:'var(--card)',
+                  }}>
+                    <span style={{fontWeight:600,fontSize:11}}>{m.nombre.split(' ').slice(0,3).join(' ')}</span>
+                    <div style={{display:'flex',alignItems:'center',gap:6}}>
+                      <span style={{fontSize:10,fontWeight:700,color:'var(--yellow)',background:'var(--ybg)',padding:'2px 8px',borderRadius:10}}>{pendientes.length}</span>
+                      <span style={{fontSize:11,color:'var(--dim)'}}>{isExpV?'▲':'▼'}</span>
+                    </div>
+                  </div>
+                  {isExpV&&<div style={{border:'1px solid var(--border)',borderTop:'none',borderRadius:'0 0 8px 8px',padding:'8px 10px'}}>
+                    {pendientes.map((v,i)=>{
+                      const dias=Math.floor((now-v.validacion)/86400000);
+                      const asig=(m.asignacionesPorOS||{})[v.os]||0;
+                      return <div key={i} style={{fontSize:11,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:i<pendientes.length-1?'1px solid var(--border)':'none'}}>
+                        <span>{v.cuenta} · {v.os}</span>
+                        <span>{dias} día{dias!==1?'s':''} sin activar · {asig} asignación{asig!==1?'es':''}</span>
+                      </div>;
+                    })}
+                    <a href={whatsappUrl(textoPendientesInstalar(m,pendientes,now))} target="_blank" rel="noopener noreferrer"
+                      style={{display:'inline-flex',alignItems:'center',gap:6,marginTop:8,padding:'6px 12px',borderRadius:8,background:'#25D366',color:'#fff',fontSize:12,fontWeight:700,textDecoration:'none'}}>
+                      📲 Enviar por WhatsApp
+                    </a>
+                  </div>}
+                </div>;
+              })}
+            </div>}
+          </div>;
+        }):pendientesPorVendedor.map(({m,pendientes})=>{
           const key=m.numEmp||m.nombre;
           const isExp=expandedPendienteVendedor===key;
           return <div key={key} style={{marginBottom:6}}>
@@ -2061,9 +2257,25 @@ function DashboardTab({data,team,coaches,session,setTab}){
         {sinPagarPorPlanOrdenado.map(([p,b])=>{
           const totalPlan=instaladoPorPlan2m[p]||b.n;
           const pct=Math.round(b.n/totalPlan*100);
-          return <div key={p} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:12,padding:'6px 0',borderBottom:'1px solid var(--border)'}}>
-            <span>{p}</span>
-            <span><b>{b.n}</b> cta{b.n!==1?'s':''} · {pct}% de {totalPlan} inst. · <b style={{color:'var(--red)'}}>{fmtMoney(b.importe)}</b></span>
+          const isExp=esLider&&expandedPlanSinPagar===p;
+          const coachesPlan=esLider?Object.values(porCoachLider).map(c=>({coach:c.coach,b:c.sinPagarPorPlan[p]})).filter(x=>x.b&&x.b.n>0).sort((a,b2)=>b2.b.n-a.b.n):[];
+          return <div key={p} style={{marginBottom:isExp?4:0}}>
+            <div onClick={esLider?()=>setExpandedPlanSinPagar(isExp?null:p):undefined} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:12,padding:'6px 0',borderBottom:isExp?'none':'1px solid var(--border)',cursor:esLider?'pointer':'default'}}>
+              <span>{p}</span>
+              <span style={{display:'flex',alignItems:'center',gap:6}}>
+                <span><b>{b.n}</b> cta{b.n!==1?'s':''} · {pct}% de {totalPlan} inst. · <b style={{color:'var(--red)'}}>{fmtMoney(b.importe)}</b></span>
+                {esLider&&<span style={{fontSize:11,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>}
+              </span>
+            </div>
+            {isExp&&<div style={{background:'var(--bg)',borderRadius:6,padding:'6px 8px',marginBottom:6}}>
+              {coachesPlan.length===0?<p style={{fontSize:11,color:'var(--dim)'}}>Sin desglose por coach.</p>:
+              coachesPlan.map(({coach,b:bc})=>
+                <div key={coach.nombre} style={{fontSize:11,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:'1px solid var(--border)'}}>
+                  <span>{coach.nombre.split(' ').slice(0,3).join(' ')}</span>
+                  <span><b>{bc.n}</b> cta{bc.n!==1?'s':''} · <b style={{color:'var(--red)'}}>{fmtMoney(bc.importe)}</b></span>
+                </div>
+              )}
+            </div>}
           </div>;
         })}
       </PanelAcordeon>
@@ -2076,54 +2288,41 @@ function DashboardTab({data,team,coaches,session,setTab}){
       </div>
     </Card>
 
-    <Card title={`👥 Equipo (${vendedores.length}) — toca para ver detalle`}>
-      {vendedores.map(m=>{
-        const sem=semaforoMap[m.nombre];
-        const isExp=expanded===m.nombre;
-        const lastFb=recs.filter(r=>r.type==='feedback'&&r.vendedor===m.nombre).sort((a,b)=>b.savedAt.localeCompare(a.savedAt))[0];
-        const sinPagarN=cuentasSinPagar(m.cuentasCom,now).length;
-        const sinPagarPct=sinPagarN?Math.round(sinPagarN/cuentasDelPeriodo(m.cuentasCom,now).length*100):0;
-        return <div key={m.numEmp||m.nombre}>
-          <div onClick={()=>setExpanded(isExp?null:m.nombre)} style={{
+    <Card title={esLider?`👥 Equipo por Coach (${(coaches||[]).length}) — toca para ver detalle`:`👥 Equipo (${vendedores.length}) — toca para ver detalle`}>
+      {esLider?(coaches||[]).map(c=>{
+        const vendCoach=vendedoresPorCoach[c.nombre]||[];
+        const key=c.nombre;
+        const isExp=expandedCoachEquipo===key;
+        const v=vendCoach.filter(m=>semaforoMap[m.nombre]==='verde').length;
+        const a=vendCoach.filter(m=>semaforoMap[m.nombre]==='amarillo').length;
+        const r=vendCoach.filter(m=>semaforoMap[m.nombre]==='rojo').length;
+        const sinEv2=vendCoach.length-v-a-r;
+        const instSemana=vendCoach.reduce((s,m)=>s+funnelPeriodo(m.ventas,semanaIni,semanaFin).instaladas,0);
+        const metaSemanaCoach=vendCoach.reduce((s,m)=>s+metaSemanal(m.badge),0);
+        const instMes=vendCoach.reduce((s,m)=>s+funnelPeriodo(m.ventas,mesIni,mesFin).instaladas,0);
+        const metaMesCoach=vendCoach.reduce((s,m)=>s+metaMensual(m.badge),0);
+        return <div key={key}>
+          <div onClick={()=>setExpandedCoachEquipo(isExp?null:key)} style={{
             display:'flex',alignItems:'center',justifyContent:'space-between',
             padding:'8px 10px',borderRadius:isExp?'8px 8px 0 0':8,marginBottom:isExp?0:4,cursor:'pointer',
-            background:sem==='rojo'?'var(--rbg)':sem==='amarillo'?'var(--ybg)':'transparent',
-            border:`1px solid ${sem==='rojo'?'var(--red)':sem==='amarillo'?'var(--yellow)':'var(--border)'}`,
+            background:r>0?'var(--rbg)':a>0?'var(--ybg)':'transparent',
+            border:`1px solid ${r>0?'var(--red)':a>0?'var(--yellow)':'var(--border)'}`,
             borderBottom:isExp?'none':undefined,
           }}>
             <div style={{flex:1}}>
-              <div style={{display:'flex',alignItems:'center',gap:4,flexWrap:'wrap'}}>
-                <span style={{fontSize:13,fontWeight:600}}>{m.nombre.split(' ').slice(0,3).join(' ')}</span>
-                <RankBadge badge={m.badge}/>
-                {m.obs&&<span style={{fontSize:10,fontWeight:600,color:'var(--yellow)'}}>⚠️ {m.obs}</span>}
-                {sinPagarN>0&&<span style={{fontSize:10,fontWeight:700,color:'var(--red)'}}>💰 {sinPagarN} sin pagar ({sinPagarPct}%)</span>}
-              </div>
-              {m.rankingMen&&<div style={{fontSize:10,color:'var(--dim)',marginTop:1}}>
-                Prom: {m.rankingMen.promedioMensual} ins/mes
-                {m.mesesEnRanking>0&&<span> · {m.mesesEnRanking}m en nivel</span>}
-              </div>}
-              {metaMensual(m.badge)>0&&<div style={{fontSize:10,color:'var(--dim)',marginTop:1}}>
-                🎯 {funnelPeriodo(m.ventas,mesIni,mesFin).instaladas}/{metaMensual(m.badge)} inst. del mes
-              </div>}
-              {metaSemanal(m.badge)>0&&<div style={{fontSize:10,color:'var(--dim)',marginTop:1}}>
-                🎯 {funnelPeriodo(m.ventas,semanaIni,semanaFin).instaladas}/{metaSemanal(m.badge)} inst. de la semana
-              </div>}
-              {m.rankingMen?.ventaSana&&<div style={{fontSize:10,color:'var(--dim)',marginTop:1}}>
-                % Venta sana ({m.rankingMen.ventaSana.mes}): <b>{m.rankingMen.ventaSana.valor}</b>
-              </div>}
-              {lastFb&&<div style={{fontSize:10,color:'var(--dim)',marginTop:1}}>Último: {fmt(lastFb.date)} · {lastFb.tipo}</div>}
-              {!lastFb&&<div style={{fontSize:10,color:'var(--yellow)',marginTop:1}}>Sin evaluación</div>}
+              <div style={{fontSize:13,fontWeight:700}}>{c.nombre.split(' ').slice(0,3).join(' ')}</div>
+              <div style={{fontSize:10,color:'var(--dim)',marginTop:1}}>{vendCoach.length} vendedor{vendCoach.length!==1?'es':''} · 🟢{v} 🟡{a} 🔴{r} ⚪{sinEv2}</div>
+              {metaSemanaCoach>0&&<div style={{fontSize:10,color:'var(--dim)',marginTop:1}}>🎯 {instSemana}/{metaSemanaCoach} inst. de la semana</div>}
+              {metaMesCoach>0&&<div style={{fontSize:10,color:'var(--dim)',marginTop:1}}>🎯 {instMes}/{metaMesCoach} inst. del mes</div>}
             </div>
-            <div style={{display:'flex',alignItems:'center',gap:4}}>
-              {sem?<StatusBadge status={sem} small/>:<span style={{fontSize:10,color:'#9ca3af'}}>⚪</span>}
-              <span style={{fontSize:12,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
-            </div>
+            <span style={{fontSize:12,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
           </div>
-          {isExp&&<div style={{border:'1px solid var(--border)',borderTop:'none',borderRadius:'0 0 8px 8px',marginBottom:4}}>
-            <ContextCard m={m}/>
+          {isExp&&<div style={{border:'1px solid var(--border)',borderTop:'none',borderRadius:'0 0 8px 8px',padding:'8px',marginBottom:4}}>
+            {vendCoach.length===0?<p style={{fontSize:12,color:'var(--dim)'}}>Sin vendedores asignados.</p>:
+            vendCoach.map(m=><VendedorRow key={m.numEmp||m.nombre} m={m}/>)}
           </div>}
         </div>;
-      })}
+      }):vendedores.map(m=><VendedorRow key={m.numEmp||m.nombre} m={m}/>)}
     </Card>
 
     {compPendientes.length>0&&
