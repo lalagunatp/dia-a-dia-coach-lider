@@ -1411,6 +1411,38 @@ function ZonaDia({label,dia,zonasData,onChange}){
   </div>;
 }
 
+// Para el líder: en vez de cluster/colonia, elige qué coach(es) va a priorizar/acompañar ese día
+// + un comentario. Reutiliza la misma forma de dato que ZonaDia ({entradas,direccion,comentarios})
+// guardando el nombre del coach en "cluster" — así zonasATexto/reporte/WhatsApp lo leen sin cambios.
+function CoachDiaSelector({label,dia,coachesDisponibles,onChange}){
+  const entradas=dia.entradas||[];
+  const[coachSel,setCoachSel]=useState('');
+  const agregar=()=>{
+    if(!coachSel||entradas.some(e=>e.cluster===coachSel))return;
+    onChange({...dia,entradas:[...entradas,{cluster:coachSel,colonia:null}]});
+    setCoachSel('');
+  };
+  const quitar=i=>onChange({...dia,entradas:entradas.filter((_,idx)=>idx!==i)});
+  return <div style={{marginBottom:10,padding:8,border:'1px solid var(--border)',borderRadius:8}}>
+    <div style={{fontWeight:700,fontSize:12,marginBottom:6}}>{label}</div>
+    {entradas.length>0&&<div style={{display:'flex',flexWrap:'wrap',gap:4,marginBottom:6}}>
+      {entradas.map((e,i)=><span key={i} style={{display:'inline-flex',alignItems:'center',gap:4,background:'var(--accent-light)',color:'var(--accent)',padding:'2px 8px',borderRadius:10,fontSize:11,fontWeight:600}}>
+        {e.cluster}
+        <span onClick={()=>quitar(i)} style={{cursor:'pointer',fontWeight:800}}>✕</span>
+      </span>)}
+    </div>}
+    <div style={{marginBottom:6}}>
+      <Autocomplete value={coachSel} onChange={setCoachSel} placeholder="Buscar coach..." options={coachesDisponibles.map(c=>({value:c.nombre,label:c.nombre}))}/>
+    </div>
+    <Btn variant="secondary" onClick={agregar} style={{width:'100%',fontSize:12,padding:'6px 10px'}}>+ Agregar</Btn>
+    <div style={{marginTop:8,paddingTop:8,borderTop:'1px dashed var(--border)'}}>
+      <Field label="💬 Comentario adicional">
+        <Textarea value={dia.comentarios||''} onChange={e=>onChange({...dia,comentarios:e.target.value})} placeholder="Notas para este día..." style={{minHeight:50,fontSize:13}}/>
+      </Field>
+    </div>
+  </div>;
+}
+
 // ─── Plan ───
 // Objetivo semanal (KPIs comprometidos vs. meta oficial calculada de las metas por ranking del
 // equipo) + resultado real de la semana pasada (precargado del sistema, editable) con % de cumplimiento.
@@ -1469,12 +1501,36 @@ function PlanTab({data,setData,team,toast,session}){
     setCargandoPlanesEquipo(true);
     fetchHistorialEquipo('PLAN').then(regs=>{setPlanesEquipo(regs);setCargandoPlanesEquipo(false);});
   },[esLider]);
-  const coachesPlanEstado=esLider?(session.coaches||[]).map(c=>{
+  // Datos completos (no solo % de completitud) del plan de cada coach — alimenta la tarjeta de
+  // estatus, el Objetivo/Prioridades/Acompañamientos agregados, y lo que se guarda al final.
+  const coachesPlanDatos=esLider?(session.coaches||[]).map(c=>{
     const row=planesEquipo.find(r=>r['Registrado por']===c.nombre&&r['Semana inicio']===semanaIniStr);
-    if(!row)return{coach:c,estado:'sin',pct:0};
+    if(!row)return{coach:c,row:null,estado:'sin',pct:0,objetivos:{oportunidades:0,ventas:0,instalaciones:0,cuentasRecuperadas:0,arpu:0},prioridades:'',acompanamientos:''};
     const pct=completitudPlanFila(row);
-    return{coach:c,estado:pct>=100?'completo':'parcial',pct};
+    return{
+      coach:c,row,estado:pct>=100?'completo':'parcial',pct,
+      objetivos:{
+        oportunidades:Number(row['Obj. Oportunidades'])||0,
+        ventas:Number(row['Obj. Ventas'])||0,
+        instalaciones:Number(row['Obj. Instalaciones'])||0,
+        cuentasRecuperadas:Number(row['Obj. Cuentas recuperadas NPPF'])||0,
+        arpu:Number(row['Obj. ARPU'])||0,
+      },
+      prioridades:String(row['Prioridades']||'').trim(),
+      acompanamientos:String(row['Acompañamientos']||'').trim(),
+    };
   }):[];
+  const coachesPlanEstado=coachesPlanDatos; // alias: la tarjeta de estatus usa {coach,estado,pct}
+  // Totales agregados del equipo — se guardan en el plan del líder al final de la semana.
+  const objetivosEquipo={
+    oportunidades:coachesPlanDatos.reduce((s,c)=>s+c.objetivos.oportunidades,0),
+    ventas:coachesPlanDatos.reduce((s,c)=>s+c.objetivos.ventas,0),
+    instalaciones:coachesPlanDatos.reduce((s,c)=>s+c.objetivos.instalaciones,0),
+    cuentasRecuperadas:coachesPlanDatos.reduce((s,c)=>s+c.objetivos.cuentasRecuperadas,0),
+    arpu:(()=>{const conArpu=coachesPlanDatos.filter(c=>c.objetivos.arpu>0);return conArpu.length?Math.round(conArpu.reduce((s,c)=>s+c.objetivos.arpu,0)/conArpu.length*100)/100:0;})(),
+  };
+  const prioridadesEquipoTexto=coachesPlanDatos.map(c=>`${c.coach.nombre.split(' ').slice(0,3).join(' ')}: ${c.prioridades||'(sin capturar)'}`).join('\n');
+  const acompanamientosEquipoTexto=coachesPlanDatos.map(c=>`${c.coach.nombre.split(' ').slice(0,3).join(' ')}: ${c.acompanamientos||'(sin capturar)'}`).join('\n');
 
   const emptyZonas=()=>Object.fromEntries(DIAS_SEMANA.map(d=>[d,{entradas:[],direccion:'',comentarios:''}]));
   const[form,setForm]=useState({objetivos:{oportunidades:'',ventas:'',instalaciones:'',cuentasRecuperadas:'',arpu:''},prioridades:'',vendedores_acompanar:'',zonas:emptyZonas(),resultado_esperado:'',notas:''});
@@ -1483,9 +1539,11 @@ function PlanTab({data,setData,team,toast,session}){
   const guardarPlan=async()=>{
     const rec={id:uid(),type:'plan',date:today(),
       semanaInicio:semanaIniStr,semanaFin:semanaFinStr,semanaLabel,
-      objetivos:form.objetivos,
+      objetivos:esLider?objetivosEquipo:form.objetivos,
+      ...(esLider?{objetivosPorCoach:coachesPlanDatos.map(c=>({coach:c.coach.nombre,objetivos:c.objetivos}))}:{}),
       metaOficial:{oportunidades:metaOportOficial,ventas:metaVentasOficial,instalaciones:metaInstalOficial},
-      prioridades:form.prioridades,vendedores_acompanar:form.vendedores_acompanar,
+      prioridades:esLider?prioridadesEquipoTexto:form.prioridades,
+      vendedores_acompanar:esLider?acompanamientosEquipoTexto:form.vendedores_acompanar,
       zonas:form.zonas,resultado_esperado:form.resultado_esperado,notas:form.notas,
       registradoPor:session.user.nombre,savedAt:new Date().toISOString()};
     const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast);toast('✅ Plan guardado');
@@ -1593,31 +1651,87 @@ function PlanTab({data,setData,team,toast,session}){
         </div>
       </Card>
     :<>
-      <Card title="🎯 Objetivo de la semana">
-        <p style={{fontSize:11,color:'var(--dim)',marginBottom:8}}>Semana {semanaLabel} (lunes a domingo). Compromiso del equipo al cierre de la semana (domingo).</p>
-        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
-          {KPIS.map(kpi=>{
-            const val=form.objetivos[kpi.k];
-            const color=colorVsMeta(val,kpi.meta);
-            return <Field key={kpi.k} label={kpi.label}>
-              <Input type="number" value={val} onChange={e=>updObjetivo(kpi.k,e.target.value)} style={{color,fontWeight:700}}/>
-              <p style={{fontSize:10,color:'var(--dim)',margin:'2px 0 0'}}>Meta: <b>{kpi.meta}</b> — <span style={{color}}>{color==='var(--red)'?'debajo':color==='var(--green)'?'arriba':'igual'}</span></p>
-            </Field>;
-          })}
-          <Field label="Cuentas recuperadas (NPPF)"><Input type="number" value={form.objetivos.cuentasRecuperadas} onChange={e=>updObjetivo('cuentasRecuperadas',e.target.value)}/></Field>
-          <Field label="ARPU"><InputMoney value={form.objetivos.arpu} onChange={e=>updObjetivo('arpu',e.target.value)}/></Field>
-        </div>
-      </Card>
-      <Card title="Prioridades">
-        <Textarea value={form.prioridades} onChange={e=>setForm({...form,prioridades:e.target.value})} placeholder="Amarillo/rojo, calidad, incidencias..."/>
-      </Card>
-      <Card title="Acompañamientos">
-        <Textarea value={form.vendedores_acompanar} onChange={e=>setForm({...form,vendedores_acompanar:e.target.value})} placeholder="Quién y por qué..." style={{minHeight:50}}/>
-      </Card>
-      <Card title="🗺️ Zonas a trabajar en la semana">
-        {zonasData.clusters.length===0?<p style={{color:'var(--dim)',fontSize:12}}>Cargando clusters/colonias…</p>:
-        DIAS_SEMANA.map(d=><ZonaDia key={d} label={DIAS_SEMANA_LABEL[d]} dia={form.zonas[d]} zonasData={zonasData} onChange={nuevoDia=>setForm(f=>({...f,zonas:{...f.zonas,[d]:nuevoDia}}))}/>)}
-      </Card>
+      {esLider?<>
+        <Card title="🎯 Objetivo de la semana (de tus coaches)">
+          <p style={{fontSize:11,color:'var(--dim)',marginBottom:8}}>Semana {semanaLabel}. Se llena solo con lo que cada coach ya capturó en su propio plan.</p>
+          {(session.coaches||[]).length===0?<p style={{fontSize:12,color:'var(--dim)'}}>Sin coaches asignados.</p>:
+          <div style={{overflowX:'auto'}}>
+            <table style={{width:'100%',borderCollapse:'collapse',fontSize:11}}>
+              <thead><tr style={{borderBottom:'2px solid var(--border)'}}>
+                <th style={{textAlign:'left',padding:'4px'}}>Coach</th>
+                <th style={{textAlign:'right',padding:'4px'}}>Op.</th>
+                <th style={{textAlign:'right',padding:'4px'}}>Val.</th>
+                <th style={{textAlign:'right',padding:'4px'}}>Inst.</th>
+                <th style={{textAlign:'right',padding:'4px'}}>NPPF</th>
+                <th style={{textAlign:'right',padding:'4px'}}>ARPU</th>
+              </tr></thead>
+              <tbody>
+                {coachesPlanDatos.map(c=><tr key={c.coach.nombre} style={{borderBottom:'1px solid var(--border)'}}>
+                  <td style={{padding:'4px'}}>{c.coach.nombre.split(' ').slice(0,2).join(' ')}</td>
+                  <td style={{textAlign:'right',padding:'4px'}}>{c.objetivos.oportunidades}</td>
+                  <td style={{textAlign:'right',padding:'4px'}}>{c.objetivos.ventas}</td>
+                  <td style={{textAlign:'right',padding:'4px'}}>{c.objetivos.instalaciones}</td>
+                  <td style={{textAlign:'right',padding:'4px'}}>{c.objetivos.cuentasRecuperadas}</td>
+                  <td style={{textAlign:'right',padding:'4px'}}>{fmtMoney(c.objetivos.arpu)}</td>
+                </tr>)}
+                <tr style={{fontWeight:800,borderTop:'2px solid var(--border)'}}>
+                  <td style={{padding:'4px'}}>Total</td>
+                  <td style={{textAlign:'right',padding:'4px',color:colorVsMeta(objetivosEquipo.oportunidades,metaOportOficial)}}>{objetivosEquipo.oportunidades}</td>
+                  <td style={{textAlign:'right',padding:'4px',color:colorVsMeta(objetivosEquipo.ventas,metaVentasOficial)}}>{objetivosEquipo.ventas}</td>
+                  <td style={{textAlign:'right',padding:'4px',color:colorVsMeta(objetivosEquipo.instalaciones,metaInstalOficial)}}>{objetivosEquipo.instalaciones}</td>
+                  <td style={{textAlign:'right',padding:'4px'}}>{objetivosEquipo.cuentasRecuperadas}</td>
+                  <td style={{textAlign:'right',padding:'4px'}}>{fmtMoney(objetivosEquipo.arpu)}</td>
+                </tr>
+                <tr style={{fontSize:10,color:'var(--dim)'}}>
+                  <td style={{padding:'2px 4px'}}>Meta</td>
+                  <td style={{textAlign:'right',padding:'2px 4px'}}>{metaOportOficial}</td>
+                  <td style={{textAlign:'right',padding:'2px 4px'}}>{metaVentasOficial}</td>
+                  <td style={{textAlign:'right',padding:'2px 4px'}}>{metaInstalOficial}</td>
+                  <td/><td/>
+                </tr>
+              </tbody>
+            </table>
+          </div>}
+        </Card>
+        <Card title="Prioridades (de tus coaches)">
+          {(session.coaches||[]).length===0?<p style={{fontSize:12,color:'var(--dim)'}}>Sin coaches asignados.</p>:
+          coachesPlanDatos.map(c=><p key={c.coach.nombre} style={{fontSize:12,margin:'4px 0'}}>• <b>{c.coach.nombre.split(' ').slice(0,2).join(' ')}:</b> {c.prioridades||<span style={{color:'var(--dim)',fontStyle:'italic'}}>sin capturar</span>}</p>)}
+        </Card>
+        <Card title="Acompañamientos (de tus coaches)">
+          {(session.coaches||[]).length===0?<p style={{fontSize:12,color:'var(--dim)'}}>Sin coaches asignados.</p>:
+          coachesPlanDatos.map(c=><p key={c.coach.nombre} style={{fontSize:12,margin:'4px 0'}}>• <b>{c.coach.nombre.split(' ').slice(0,2).join(' ')}:</b> {c.acompanamientos||<span style={{color:'var(--dim)',fontStyle:'italic'}}>sin capturar</span>}</p>)}
+        </Card>
+        <Card title="🤝 Coach a priorizar en la semana">
+          <p style={{fontSize:11,color:'var(--dim)',marginBottom:8}}>Elige con qué coach vas a trabajar cada día, y agrega un comentario si hace falta.</p>
+          {DIAS_SEMANA.map(d=><CoachDiaSelector key={d} label={DIAS_SEMANA_LABEL[d]} dia={form.zonas[d]} coachesDisponibles={session.coaches||[]} onChange={nuevoDia=>setForm(f=>({...f,zonas:{...f.zonas,[d]:nuevoDia}}))}/>)}
+        </Card>
+      </>:<>
+        <Card title="🎯 Objetivo de la semana">
+          <p style={{fontSize:11,color:'var(--dim)',marginBottom:8}}>Semana {semanaLabel} (lunes a domingo). Compromiso del equipo al cierre de la semana (domingo).</p>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+            {KPIS.map(kpi=>{
+              const val=form.objetivos[kpi.k];
+              const color=colorVsMeta(val,kpi.meta);
+              return <Field key={kpi.k} label={kpi.label}>
+                <Input type="number" value={val} onChange={e=>updObjetivo(kpi.k,e.target.value)} style={{color,fontWeight:700}}/>
+                <p style={{fontSize:10,color:'var(--dim)',margin:'2px 0 0'}}>Meta: <b>{kpi.meta}</b> — <span style={{color}}>{color==='var(--red)'?'debajo':color==='var(--green)'?'arriba':'igual'}</span></p>
+              </Field>;
+            })}
+            <Field label="Cuentas recuperadas (NPPF)"><Input type="number" value={form.objetivos.cuentasRecuperadas} onChange={e=>updObjetivo('cuentasRecuperadas',e.target.value)}/></Field>
+            <Field label="ARPU"><InputMoney value={form.objetivos.arpu} onChange={e=>updObjetivo('arpu',e.target.value)}/></Field>
+          </div>
+        </Card>
+        <Card title="Prioridades">
+          <Textarea value={form.prioridades} onChange={e=>setForm({...form,prioridades:e.target.value})} placeholder="Amarillo/rojo, calidad, incidencias..."/>
+        </Card>
+        <Card title="Acompañamientos">
+          <Textarea value={form.vendedores_acompanar} onChange={e=>setForm({...form,vendedores_acompanar:e.target.value})} placeholder="Quién y por qué..." style={{minHeight:50}}/>
+        </Card>
+        <Card title="🗺️ Zonas a trabajar en la semana">
+          {zonasData.clusters.length===0?<p style={{color:'var(--dim)',fontSize:12}}>Cargando clusters/colonias…</p>:
+          DIAS_SEMANA.map(d=><ZonaDia key={d} label={DIAS_SEMANA_LABEL[d]} dia={form.zonas[d]} zonasData={zonasData} onChange={nuevoDia=>setForm(f=>({...f,zonas:{...f.zonas,[d]:nuevoDia}}))}/>)}
+        </Card>
+      </>}
       <Card title="Resultado esperado">
         <Textarea value={form.resultado_esperado} onChange={e=>setForm({...form,resultado_esperado:e.target.value})} style={{minHeight:50}}/>
       </Card>
