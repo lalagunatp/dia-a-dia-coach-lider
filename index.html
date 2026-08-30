@@ -18,7 +18,7 @@
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:#f0f2f8;color:#1a1d29;-webkit-font-smoothing:antialiased}
-:root{--bg:#f0f2f8;--card:#fff;--text:#1a1d29;--dim:#6b7086;--border:#e2e4ec;--accent:#1e40af;--accent2:#3b82f6;--accent-light:#dbeafe;--input:#f8f9fc;--green:#16a34a;--yellow:#ca8a04;--red:#dc2626;--gbg:#f0fdf4;--ybg:#fefce8;--rbg:#fef2f2}
+:root{--bg:#f0f2f8;--card:#fff;--text:#1a1d29;--dim:#6b7086;--border:#e2e4ec;--accent:#1e40af;--accent2:#3b82f6;--accent-light:#dbeafe;--input:#f8f9fc;--green:#16a34a;--yellow:#ca8a04;--red:#dc2626;--gbg:#f0fdf4;--ybg:#fefce8;--rbg:#fef2f2;--nest-bg:#f7f3ec;--nest-border:#d9c9a8}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
 @keyframes spin{to{transform:rotate(360deg)}}
 @keyframes fadeIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
@@ -1825,6 +1825,7 @@ function DashboardTab({data,team,coaches,session,setTab}){
   const coachesOrdenadosRechazos=esLider?Object.values(porCoachLider).filter(c=>c.rechazosTotal>0).sort((a,b)=>b.rechazosTotal-a.rechazosTotal):[];
   const coachesOrdenadosPlanes=esLider?Object.values(porCoachLider).filter(c=>c.planesTotal>0).sort((a,b)=>b.planesTotal-a.planesTotal):[];
   const coachesOrdenadosPendientes=esLider?Object.values(porCoachLider).filter(c=>c.pendientesTotal>0).sort((a,b)=>b.pendientesTotal-a.pendientesTotal):[];
+  const coachesOrdenadosSinPagar=esLider?Object.values(porCoachLider).filter(c=>c.sinPagarTotal>0).sort((a,b)=>b.sinPagarTotal-a.sinPagarTotal):[];
 
   const semaforoMap={};
   recs.filter(r=>r.type==='feedback').sort((a,b)=>a.savedAt.localeCompare(b.savedAt)).forEach(r=>{
@@ -1968,7 +1969,9 @@ function DashboardTab({data,team,coaches,session,setTab}){
 
   // Fila de un vendedor con su semáforo/meta/último feedback — se usa tanto en el listado plano
   // (coach/director) como anidada dentro de un coach expandido (líder).
-  const VendedorRow=({m})=>{
+  // nested=true: esta fila se muestra dentro de un coach expandido (vista líder) — usa un tono
+  // cálido/orgánico distinto al de la tarjeta del coach, para que se note el cambio de nivel.
+  const VendedorRow=({m,nested})=>{
     const sem=semaforoMap[m.nombre];
     const isExp=expanded===m.nombre;
     const lastFb=recs.filter(r=>r.type==='feedback'&&r.vendedor===m.nombre).sort((a,b)=>b.savedAt.localeCompare(a.savedAt))[0];
@@ -1978,8 +1981,8 @@ function DashboardTab({data,team,coaches,session,setTab}){
       <div onClick={()=>setExpanded(isExp?null:m.nombre)} style={{
         display:'flex',alignItems:'center',justifyContent:'space-between',
         padding:'8px 10px',borderRadius:isExp?'8px 8px 0 0':8,marginBottom:isExp?0:4,cursor:'pointer',
-        background:sem==='rojo'?'var(--rbg)':sem==='amarillo'?'var(--ybg)':'transparent',
-        border:`1px solid ${sem==='rojo'?'var(--red)':sem==='amarillo'?'var(--yellow)':'var(--border)'}`,
+        background:sem==='rojo'?'var(--rbg)':sem==='amarillo'?'var(--ybg)':nested?'var(--nest-bg)':'transparent',
+        border:`1px solid ${sem==='rojo'?'var(--red)':sem==='amarillo'?'var(--yellow)':nested?'var(--nest-border)':'var(--border)'}`,
         borderBottom:isExp?'none':undefined,
       }}>
         <div style={{flex:1}}>
@@ -2114,29 +2117,37 @@ function DashboardTab({data,team,coaches,session,setTab}){
 
     {planesOrdenados.length>0&&
       <PanelAcordeon title={`📦 Instalaciones por plan — ${periodoVentas}`} abierto={abrirPlanes} onToggle={()=>setAbrirPlanes(!abrirPlanes)}>
-        {esLider?coachesOrdenadosPlanes.map(c=>{
-          const key=c.coach.nombre;
-          const isExp=expandedCoachPlan===key;
-          const planesCoach=Object.entries(c.planes).sort((a,b)=>b[1].length-a[1].length);
-          return <div key={key}>
-            <div onClick={()=>setExpandedCoachPlan(isExp?null:key)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:12,padding:'6px 2px',borderBottom:isExp?'none':'1px solid var(--border)',cursor:'pointer'}}>
-              <span style={{fontWeight:600}}>{c.coach.nombre.split(' ').slice(0,3).join(' ')}</span>
+        {esLider?planesOrdenados.map(([p,n])=>{
+          const isExp=expandedPlan===p;
+          const coachesPlan=Object.values(porCoachLider).map(c=>({coach:c.coach,items:c.planes[p]||[]})).filter(x=>x.items.length>0).sort((a,b)=>b.items.length-a.items.length);
+          return <div key={p}>
+            <div onClick={()=>setExpandedPlan(isExp?null:p)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:12,padding:'6px 2px',borderBottom:isExp?'none':'1px solid var(--border)',cursor:'pointer'}}>
+              <span>{p}</span>
               <span style={{display:'flex',alignItems:'center',gap:6}}>
-                <b>{c.planesTotal}</b>
-                <span style={{color:'var(--dim)'}}>({ventasTotal.instaladas?Math.round(c.planesTotal/ventasTotal.instaladas*100):0}%)</span>
+                <b>{n}</b>
+                <span style={{color:'var(--dim)'}}>({ventasTotal.instaladas?Math.round(n/ventasTotal.instaladas*100):0}%)</span>
                 <span style={{fontSize:11,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
               </span>
             </div>
             {isExp&&<div style={{background:'var(--bg)',borderRadius:6,padding:'6px 8px',marginBottom:6}}>
-              {planesCoach.map(([p,items])=><div key={p} style={{marginBottom:6}}>
-                <div style={{fontSize:11,fontWeight:700,color:'var(--dim)',marginBottom:2}}>{p} ({items.length})</div>
-                {items.map((it,i)=>
-                  <div key={i} style={{fontSize:11,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:i<items.length-1?'1px solid var(--border)':'none'}}>
-                    <span>{it.nombre}</span>
-                    <span>Cta. {it.cuenta||'—'} · {fmtDateObj(it.fecha)}</span>
+              {coachesPlan.map(({coach,items})=>{
+                const keyC=coach.nombre;
+                const isExpC=expandedCoachPlan===keyC;
+                return <div key={keyC} style={{marginBottom:6}}>
+                  <div onClick={()=>setExpandedCoachPlan(isExpC?null:keyC)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:12,padding:'6px 8px',borderRadius:isExpC?'6px 6px 0 0':6,border:'1px solid var(--border)',borderBottom:isExpC?'none':undefined,background:'var(--card)',cursor:'pointer'}}>
+                    <span style={{fontWeight:600}}>{coach.nombre.split(' ').slice(0,3).join(' ')}</span>
+                    <span style={{display:'flex',alignItems:'center',gap:6}}><b>{items.length}</b><span style={{fontSize:11,color:'var(--dim)'}}>{isExpC?'▲':'▼'}</span></span>
                   </div>
-                )}
-              </div>)}
+                  {isExpC&&<div style={{background:'var(--nest-bg)',border:'1px solid var(--nest-border)',borderTop:'none',borderRadius:'0 0 6px 6px',padding:'6px 8px'}}>
+                    {items.map((it,i)=>
+                      <div key={i} style={{fontSize:11,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:i<items.length-1?'1px solid var(--nest-border)':'none'}}>
+                        <span>{it.nombre}</span>
+                        <span>Cta. {it.cuenta||'—'} · {fmtDateObj(it.fecha)}</span>
+                      </div>
+                    )}
+                  </div>}
+                </div>;
+              })}
             </div>}
           </div>;
         }):planesOrdenados.map(([p,n])=>{
@@ -2190,8 +2201,8 @@ function DashboardTab({data,team,coaches,session,setTab}){
                   <div onClick={()=>setExpandedPendienteVendedorLider(isExpV?null:keyV)} style={{
                     display:'flex',justifyContent:'space-between',alignItems:'center',cursor:'pointer',
                     padding:'6px 8px',borderRadius:isExpV?'8px 8px 0 0':8,
-                    border:'1px solid var(--border)',borderBottom:isExpV?'none':undefined,
-                    background:'var(--card)',
+                    border:'1px solid var(--nest-border)',borderBottom:isExpV?'none':undefined,
+                    background:'var(--nest-bg)',
                   }}>
                     <span style={{fontWeight:600,fontSize:11}}>{m.nombre.split(' ').slice(0,3).join(' ')}</span>
                     <div style={{display:'flex',alignItems:'center',gap:6}}>
@@ -2254,28 +2265,36 @@ function DashboardTab({data,team,coaches,session,setTab}){
 
     {sinPagarPorPlanOrdenado.length>0&&
       <PanelAcordeon title={`💰 Cuentas sin pagar por plan (${sinPagarPorPlanTotales.n} · ${sinPagarPorPlanPctTotal}% de ${instaladoPorPlan2mTotal} inst. · ${fmtMoney(sinPagarPorPlanTotales.importe)})`} abierto={abrirSinPagarPlan} onToggle={()=>setAbrirSinPagarPlan(!abrirSinPagarPlan)}>
-        {sinPagarPorPlanOrdenado.map(([p,b])=>{
-          const totalPlan=instaladoPorPlan2m[p]||b.n;
-          const pct=Math.round(b.n/totalPlan*100);
-          const isExp=esLider&&expandedPlanSinPagar===p;
-          const coachesPlan=esLider?Object.values(porCoachLider).map(c=>({coach:c.coach,b:c.sinPagarPorPlan[p]})).filter(x=>x.b&&x.b.n>0).sort((a,b2)=>b2.b.n-a.b.n):[];
-          return <div key={p} style={{marginBottom:isExp?4:0}}>
-            <div onClick={esLider?()=>setExpandedPlanSinPagar(isExp?null:p):undefined} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:12,padding:'6px 0',borderBottom:isExp?'none':'1px solid var(--border)',cursor:esLider?'pointer':'default'}}>
-              <span>{p}</span>
+        {esLider?coachesOrdenadosSinPagar.map(c=>{
+          const key=c.coach.nombre;
+          const isExp=expandedPlanSinPagar===key;
+          const importeCoach=Object.values(c.sinPagarPorPlan).reduce((s,b)=>s+b.importe,0);
+          const planesCoach=Object.entries(c.sinPagarPorPlan).sort((a,b)=>b[1].n-a[1].n);
+          return <div key={key} style={{marginBottom:isExp?4:0}}>
+            <div onClick={()=>setExpandedPlanSinPagar(isExp?null:key)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:12,padding:'6px 0',borderBottom:isExp?'none':'1px solid var(--border)',cursor:'pointer'}}>
+              <span style={{fontWeight:600}}>{c.coach.nombre.split(' ').slice(0,3).join(' ')}</span>
               <span style={{display:'flex',alignItems:'center',gap:6}}>
-                <span><b>{b.n}</b> cta{b.n!==1?'s':''} · {pct}% de {totalPlan} inst. · <b style={{color:'var(--red)'}}>{fmtMoney(b.importe)}</b></span>
-                {esLider&&<span style={{fontSize:11,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>}
+                <span><b>{c.sinPagarTotal}</b> cta{c.sinPagarTotal!==1?'s':''} · <b style={{color:'var(--red)'}}>{fmtMoney(importeCoach)}</b></span>
+                <span style={{fontSize:11,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
               </span>
             </div>
             {isExp&&<div style={{background:'var(--bg)',borderRadius:6,padding:'6px 8px',marginBottom:6}}>
-              {coachesPlan.length===0?<p style={{fontSize:11,color:'var(--dim)'}}>Sin desglose por coach.</p>:
-              coachesPlan.map(({coach,b:bc})=>
-                <div key={coach.nombre} style={{fontSize:11,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:'1px solid var(--border)'}}>
-                  <span>{coach.nombre.split(' ').slice(0,3).join(' ')}</span>
-                  <span><b>{bc.n}</b> cta{bc.n!==1?'s':''} · <b style={{color:'var(--red)'}}>{fmtMoney(bc.importe)}</b></span>
-                </div>
-              )}
+              {planesCoach.map(([p,b])=>{
+                const totalPlan=instaladoPorPlan2m[p]||b.n;
+                const pct=Math.round(b.n/totalPlan*100);
+                return <div key={p} style={{fontSize:11,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:'1px solid var(--border)'}}>
+                  <span>{p}</span>
+                  <span><b>{b.n}</b> cta{b.n!==1?'s':''} · {pct}% de {totalPlan} inst. · <b style={{color:'var(--red)'}}>{fmtMoney(b.importe)}</b></span>
+                </div>;
+              })}
             </div>}
+          </div>;
+        }):sinPagarPorPlanOrdenado.map(([p,b])=>{
+          const totalPlan=instaladoPorPlan2m[p]||b.n;
+          const pct=Math.round(b.n/totalPlan*100);
+          return <div key={p} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:12,padding:'6px 0',borderBottom:'1px solid var(--border)'}}>
+            <span>{p}</span>
+            <span><b>{b.n}</b> cta{b.n!==1?'s':''} · {pct}% de {totalPlan} inst. · <b style={{color:'var(--red)'}}>{fmtMoney(b.importe)}</b></span>
           </div>;
         })}
       </PanelAcordeon>
@@ -2297,10 +2316,16 @@ function DashboardTab({data,team,coaches,session,setTab}){
         const a=vendCoach.filter(m=>semaforoMap[m.nombre]==='amarillo').length;
         const r=vendCoach.filter(m=>semaforoMap[m.nombre]==='rojo').length;
         const sinEv2=vendCoach.length-v-a-r;
-        const instSemana=vendCoach.reduce((s,m)=>s+funnelPeriodo(m.ventas,semanaIni,semanaFin).instaladas,0);
-        const metaSemanaCoach=vendCoach.reduce((s,m)=>s+metaSemanal(m.badge),0);
-        const instMes=vendCoach.reduce((s,m)=>s+funnelPeriodo(m.ventas,mesIni,mesFin).instaladas,0);
-        const metaMesCoach=vendCoach.reduce((s,m)=>s+metaMensual(m.badge),0);
+        // Mismos totales que la caja "🛒 Ventas" de cada vendedor (ContextCard), pero sumados entre
+        // todos los vendedores del coach.
+        let opSemana=0,valSemana=0,instSemana=0,opMes=0,valMes=0,instMes=0,metaMesCoach=0;
+        vendCoach.forEach(m=>{
+          const fSem=funnelPeriodo(m.ventas,semanaIni,semanaFin);
+          const fMes=funnelPeriodo(m.ventas,mesIni,mesFin);
+          opSemana+=fSem.oportunidades;valSemana+=fSem.validadas;instSemana+=fSem.instaladas;
+          opMes+=fMes.oportunidades;valMes+=fMes.validadas;instMes+=fMes.instaladas;
+          metaMesCoach+=metaMensual(m.badge);
+        });
         return <div key={key}>
           <div onClick={()=>setExpandedCoachEquipo(isExp?null:key)} style={{
             display:'flex',alignItems:'center',justifyContent:'space-between',
@@ -2312,14 +2337,15 @@ function DashboardTab({data,team,coaches,session,setTab}){
             <div style={{flex:1}}>
               <div style={{fontSize:13,fontWeight:700}}>{c.nombre.split(' ').slice(0,3).join(' ')}</div>
               <div style={{fontSize:10,color:'var(--dim)',marginTop:1}}>{vendCoach.length} vendedor{vendCoach.length!==1?'es':''} · 🟢{v} 🟡{a} 🔴{r} ⚪{sinEv2}</div>
-              {metaSemanaCoach>0&&<div style={{fontSize:10,color:'var(--dim)',marginTop:1}}>🎯 {instSemana}/{metaSemanaCoach} inst. de la semana</div>}
-              {metaMesCoach>0&&<div style={{fontSize:10,color:'var(--dim)',marginTop:1}}>🎯 {instMes}/{metaMesCoach} inst. del mes</div>}
+              <div style={{fontSize:10,color:'var(--dim)',marginTop:2}}>Semana: {opSemana} op · {valSemana} val · {instSemana} inst</div>
+              <div style={{fontSize:10,color:'var(--dim)',marginTop:1}}>Mes: {opMes} op · {valMes} val · {instMes} inst</div>
+              {metaMesCoach>0&&<div style={{fontSize:10,color:'var(--dim)',marginTop:1}}>🎯 Meta del mes: <b>{instMes}/{metaMesCoach}</b></div>}
             </div>
             <span style={{fontSize:12,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
           </div>
           {isExp&&<div style={{border:'1px solid var(--border)',borderTop:'none',borderRadius:'0 0 8px 8px',padding:'8px',marginBottom:4}}>
             {vendCoach.length===0?<p style={{fontSize:12,color:'var(--dim)'}}>Sin vendedores asignados.</p>:
-            vendCoach.map(m=><VendedorRow key={m.numEmp||m.nombre} m={m}/>)}
+            vendCoach.map(m=><VendedorRow key={m.numEmp||m.nombre} m={m} nested/>)}
           </div>}
         </div>;
       }):vendedores.map(m=><VendedorRow key={m.numEmp||m.nombre} m={m}/>)}
