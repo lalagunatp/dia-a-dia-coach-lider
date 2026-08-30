@@ -1414,7 +1414,23 @@ function ZonaDia({label,dia,zonasData,onChange}){
 // ─── Plan ───
 // Objetivo semanal (KPIs comprometidos vs. meta oficial calculada de las metas por ranking del
 // equipo) + resultado real de la semana pasada (precargado del sistema, editable) con % de cumplimiento.
+// Porcentaje de qué tan lleno está un plan (fila cruda del Sheet, headers de SHEET_CONFIG.PLAN):
+// los 5 KPI del objetivo + los 7 días de Zonas + Prioridades/Acompañamientos/Resultado esperado/Notas.
+function completitudPlanFila(row){
+  let total=0,llenos=0;
+  ['Obj. Oportunidades','Obj. Ventas','Obj. Instalaciones','Obj. Cuentas recuperadas NPPF','Obj. ARPU'].forEach(k=>{
+    total++;if(Number(row[k])>0)llenos++;
+  });
+  const zonasTxt=String(row['Zonas']||'');
+  DIAS_SEMANA.forEach(d=>{total++;if(zonasTxt.includes(DIAS_SEMANA_LABEL[d]+':'))llenos++;});
+  ['Prioridades','Acompañamientos','Resultado esperado','Notas'].forEach(k=>{
+    total++;if(String(row[k]||'').trim())llenos++;
+  });
+  return Math.round(llenos/total*100);
+}
+
 function PlanTab({data,setData,team,toast,session}){
+  const esLider=session.role==='lider';
   const vendedoresPlan=(team||[]).filter(m=>isVendedor(m.posicion));
   // Meta oficial del equipo: instalaciones = suma de meta semanal por ranking; ventas/validaciones
   // 15% mayor que instalaciones; oportunidades 15% mayor que ventas/validaciones.
@@ -1443,6 +1459,22 @@ function PlanTab({data,setData,team,toast,session}){
 
   const[zonasData,setZonasData]=useState({clusterToColonias:{},coloniaToCluster:{},clusters:[]});
   useEffect(()=>{fetchClustersColonias().then(list=>setZonasData(buildClusterMap(list)));},[]);
+
+  // Líder: estado del plan de esta semana de cada uno de sus coaches (leído del Sheet, no del
+  // dispositivo local — cada coach lo captura en su propio teléfono).
+  const[planesEquipo,setPlanesEquipo]=useState([]);
+  const[cargandoPlanesEquipo,setCargandoPlanesEquipo]=useState(false);
+  useEffect(()=>{
+    if(!esLider)return;
+    setCargandoPlanesEquipo(true);
+    fetchHistorialEquipo('PLAN').then(regs=>{setPlanesEquipo(regs);setCargandoPlanesEquipo(false);});
+  },[esLider]);
+  const coachesPlanEstado=esLider?(session.coaches||[]).map(c=>{
+    const row=planesEquipo.find(r=>r['Registrado por']===c.nombre&&r['Semana inicio']===semanaIniStr);
+    if(!row)return{coach:c,estado:'sin',pct:0};
+    const pct=completitudPlanFila(row);
+    return{coach:c,estado:pct>=100?'completo':'parcial',pct};
+  }):[];
 
   const emptyZonas=()=>Object.fromEntries(DIAS_SEMANA.map(d=>[d,{entradas:[],direccion:'',comentarios:''}]));
   const[form,setForm]=useState({objetivos:{oportunidades:'',ventas:'',instalaciones:'',cuentasRecuperadas:'',arpu:''},prioridades:'',vendedores_acompanar:'',zonas:emptyZonas(),resultado_esperado:'',notas:''});
@@ -1484,6 +1516,22 @@ function PlanTab({data,setData,team,toast,session}){
   };
 
   return <div>
+    {esLider&&
+      <Card title={`📊 Planes del equipo — Semana ${semanaLabel}`}>
+        {cargandoPlanesEquipo?<div style={{textAlign:'center',padding:20}}><Spinner/></div>:
+        (session.coaches||[]).length===0?<p style={{fontSize:12,color:'var(--dim)'}}>Sin coaches asignados.</p>:
+        coachesPlanEstado.map(({coach,estado,pct})=>{
+          const color=estado==='completo'?'var(--green)':estado==='parcial'?'var(--yellow)':'var(--red)';
+          const bg=estado==='completo'?'var(--gbg)':estado==='parcial'?'var(--ybg)':'var(--rbg)';
+          const texto=estado==='sin'?'Sin capturar':`${pct}%`;
+          return <div key={coach.nombre} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 10px',borderRadius:8,marginBottom:6,background:bg,border:`1px solid ${color}`}}>
+            <span style={{fontSize:13,fontWeight:600}}>{coach.nombre.split(' ').slice(0,3).join(' ')}</span>
+            <span style={{fontSize:12,fontWeight:700,color}}>{texto}</span>
+          </div>;
+        })}
+        <p style={{fontSize:10,color:'var(--dim)',marginTop:4}}>🟢 100% capturado · 🟡 capturado parcial · 🔴 sin capturar</p>
+      </Card>
+    }
     {retraso&&<Card style={{borderLeft:'4px solid var(--red)'}}>
       <p style={{fontSize:13,fontWeight:700,color:'var(--red)',margin:0}}>⚠️ Aún no se ha capturado el plan de esta semana — debía quedar listo el lunes.</p>
     </Card>}
