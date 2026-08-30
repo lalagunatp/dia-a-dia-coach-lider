@@ -385,6 +385,29 @@ function buildTeam(user,allEmployees){
   return{team,coaches,role};
 }
 
+// Re-ejecuta el mismo pipeline de datos del login (roster, ranking, ventas, cuentas, asignaciones)
+// para un usuario ya autenticado — usado por el botón flotante "Actualizar información".
+async function refrescarDatosSesion(numEmp){
+  const[all,rankEnt,rankMen]=await Promise.all([fetchPlantilla(),fetchRankingEntrenamiento(),fetchRankingMensual()]);
+  const user=all.find(e=>e.numEmp===numEmp);
+  if(!user)throw new Error('Usuario no encontrado al actualizar');
+  const role=getRoleType(user.posicion);
+  let{team,coaches}=buildTeam(user,all);
+  const allIds=[...new Set([...team,...coaches].flatMap(m=>[m.numEmp,m.numEmpB]).filter(Boolean))];
+  const[ventasByVendedor,cuentasByHomologado]=await Promise.all([fetchVentas(allIds),fetchCuentasComisiones(allIds)]);
+  const todasLasVentas=Object.values(ventasByVendedor).flat();
+  const osCandidatos=[...new Set(pendientesInstalar30d(todasLasVentas,new Date()).map(v=>v.os).filter(Boolean))];
+  const asignacionesPorOS=await fetchAsignacionesPorOS(osCandidatos);
+  const attachVentas=m=>({...m,
+    ventas:ventasByVendedor[m.numEmp]||ventasByVendedor[m.numEmpB]||[],
+    cuentasCom:cuentasByHomologado[m.numEmp]||cuentasByHomologado[m.numEmpB]||[],
+    asignacionesPorOS,
+  });
+  team=sortByRanking(enrichTeam(team,rankEnt,rankMen).map(attachVentas));
+  coaches=sortByRanking(enrichTeam(coaches,rankEnt,rankMen).map(attachVentas));
+  return{user,team,coaches,role,allEmployees:all};
+}
+
 // ═══ FETCH RANKING DATA ═══
 async function fetchRankingEntrenamiento(){
   try{
@@ -1133,7 +1156,7 @@ function LoginScreen({onLogin}){
 // ═══════════════════════════════════════
 
 // ─── Arranque ───
-function ArranqueTab({data,setData,team,toast,session}){
+function ArranqueTab({data,setData,team,toast,session,refreshKey}){
   const esLider=session.role==='lider';
   const[form,setForm]=useState({date:today(),time:now(),photo:null,presentes:[],ausentes:[],notas:''});
   useEffect(()=>{setForm(f=>({...f,presentes:team.map(m=>m.nombre),ausentes:[]}));},[team]);
@@ -1149,7 +1172,7 @@ function ArranqueTab({data,setData,team,toast,session}){
     if(!esLider)return;
     setCargandoArranquesEquipo(true);
     fetchHistorialEquipo('ARRANQUE').then(regs=>{setArranquesEquipo(regs);setCargandoArranquesEquipo(false);});
-  },[esLider]);
+  },[esLider,refreshKey]);
   const coachesArranqueHoy=esLider?(session.coaches||[]).map(c=>({coach:c,row:arranquesEquipo.find(r=>r['Registrado por']===c.nombre&&r['Fecha']===hoyStr)||null})):[];
   const diaHoyKey=DIAS_SEMANA[(new Date().getDay()+6)%7];
   const semanaIniHoy=ymdLocal(startOfWeek(new Date()));
@@ -1227,7 +1250,7 @@ function ArranqueTab({data,setData,team,toast,session}){
 }
 
 // ─── Permisos ───
-function PermisosTab({data,setData,team,toast,session}){
+function PermisosTab({data,setData,team,toast,session,refreshKey}){
   const esLider=session.role==='lider';
   const[form,setForm]=useState({date:today(),vendedor:'',tipo:'Trabajo fuera de ruta',motivo:'',compromiso:{cuentas:'',ventas:'',instalaciones:''},colonia:'',autorizado_por:session.user.nombre,notas:'',photo:null});
   const[zonasData,setZonasData]=useState({clusterToColonias:{},coloniaToCluster:{},clusters:[]});
@@ -1240,7 +1263,7 @@ function PermisosTab({data,setData,team,toast,session}){
     if(!esLider)return;
     setCargandoPermisosEquipo(true);
     fetchHistorialEquipo('PERMISO').then(regs=>{setPermisosEquipo(regs);setCargandoPermisosEquipo(false);});
-  },[esLider]);
+  },[esLider,refreshKey]);
   const mesActual=today().slice(0,7);
   const permisosPorCoach=esLider?(session.coaches||[]).map(c=>({
     coach:c,
@@ -1282,6 +1305,7 @@ function PermisosTab({data,setData,team,toast,session}){
         </div>
       )}
     </Card>}
+    {!esLider&&<>
     <Card title="📋 Documentar permiso">
       <Field label="Fecha"><Input type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})}/></Field>
       <Field label="Integrante"><Select value={form.vendedor} onChange={v=>setForm({...form,vendedor:v})} options={[{value:'',label:'— Seleccionar —'},...team.map(m=>({value:m.nombre,label:m.nombre+(isCoach(m.posicion)?' (Coach)':'')}))]}/></Field>
@@ -1303,6 +1327,7 @@ function PermisosTab({data,setData,team,toast,session}){
       <Field label="Notas"><Textarea value={form.notas} onChange={e=>setForm({...form,notas:e.target.value})} placeholder="Observaciones..." style={{minHeight:50}}/></Field>
     </Card>
     <Btn onClick={guardar} style={{width:'100%'}}>💾 Guardar permiso</Btn>
+    </>}
   </div>;
 }
 
@@ -1549,7 +1574,7 @@ function completitudPlanFila(row){
   return Math.round(llenos/total*100);
 }
 
-function PlanTab({data,setData,team,toast,session}){
+function PlanTab({data,setData,team,toast,session,refreshKey}){
   const esLider=session.role==='lider';
   const vendedoresPlan=(team||[]).filter(m=>isVendedor(m.posicion));
   // Meta oficial del equipo: instalaciones = suma de meta semanal por ranking; ventas/validaciones
@@ -1588,7 +1613,7 @@ function PlanTab({data,setData,team,toast,session}){
     if(!esLider)return;
     setCargandoPlanesEquipo(true);
     fetchHistorialEquipo('PLAN').then(regs=>{setPlanesEquipo(regs);setCargandoPlanesEquipo(false);});
-  },[esLider]);
+  },[esLider,refreshKey]);
   // Datos completos (no solo % de completitud) del plan de cada coach — alimenta la tarjeta de
   // estatus, el Objetivo/Prioridades/Acompañamientos agregados, y lo que se guarda al final.
   const coachesPlanDatos=esLider?(session.coaches||[]).map(c=>{
@@ -2897,7 +2922,7 @@ ${cuerpo||'<p style="text-align:center;color:#6b7086;padding:40px">Sin registros
 // ═══════════════════════════════════════
 // MAIN APP
 // ═══════════════════════════════════════
-function MainApp({session,onLogout}){
+function MainApp({session,setSession,onLogout}){
   const[data,setData]=useState(loadData());
   const[tab,setTab]=useState('dashboard');
   const[toastMsg,setToastMsg]=useState('');
@@ -2909,6 +2934,27 @@ function MainApp({session,onLogout}){
   const hasArr=todayRecs.some(r=>r.type==='arranque');
   const hasCie=todayRecs.some(r=>r.type==='cierre');
   const roleLabels={coach:'🏅 Coach',lider:'⭐ Líder',director:'👔 Director',gestor:'🧑‍💼 Gestor CH'};
+
+  // Botón flotante "Actualizar información" (solo líder): re-trae ranking/ventas/cuentas del
+  // equipo y fuerza a Arranque/Plan/Permisos a releer el historial del Sheet sin recargar la app.
+  const[refreshKey,setRefreshKey]=useState(0);
+  const[refreshing,setRefreshing]=useState(false);
+  const actualizarInfo=async()=>{
+    if(refreshing)return;
+    setRefreshing(true);
+    try{
+      const nuevo=await refrescarDatosSesion(user.numEmp);
+      const nuevaSesion={...session,...nuevo,loginTime:new Date().toISOString()};
+      sessionStorage.setItem('sv2-session',JSON.stringify(nuevaSesion));
+      setSession(nuevaSesion);
+      setRefreshKey(k=>k+1);
+      toast('🔄 Información actualizada');
+    }catch(e){
+      console.error(e);
+      toast('⚠️ No se pudo actualizar, intenta de nuevo');
+    }
+    setRefreshing(false);
+  };
 
   const exportReporte=()=>{
     const html=generarReporteHTML(data,user,roleLabels[role]);
@@ -2958,13 +3004,21 @@ function MainApp({session,onLogout}){
     {/* Content */}
     <div style={{padding:14,paddingBottom:30}}>
       {tab==='dashboard'&&<DashboardTab data={data} team={allTeam} coaches={coaches} session={session} setTab={setTab}/>}
-      {tab==='arranque'&&<ArranqueTab data={data} setData={setData} team={allTeam} toast={toast} session={session}/>}
-      {tab==='permisos'&&<PermisosTab data={data} setData={setData} team={allTeam} toast={toast} session={session}/>}
+      {tab==='arranque'&&<ArranqueTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
+      {tab==='permisos'&&<PermisosTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
       {tab==='cierre'&&<CierreTab data={data} setData={setData} team={allTeam} toast={toast} session={session}/>}
-      {tab==='plan'&&<PlanTab data={data} setData={setData} team={allTeam} toast={toast} session={session}/>}
+      {tab==='plan'&&<PlanTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
       {tab==='feedback'&&<FeedbackTab data={data} setData={setData} team={allTeam} toast={toast} session={session}/>}
       {tab==='historial'&&<HistorialTab data={data} setData={setData} toast={toast} session={session}/>}
     </div>
+    {role==='lider'&&
+      <button onClick={actualizarInfo} disabled={refreshing} title="Actualizar información"
+        style={{position:'fixed',bottom:20,right:16,zIndex:50,width:52,height:52,borderRadius:'50%',
+          background:'var(--accent)',color:'#fff',border:'none',boxShadow:'0 4px 14px rgba(0,0,0,.3)',
+          fontSize:22,cursor:refreshing?'default':'pointer',display:'flex',alignItems:'center',justifyContent:'center'}}>
+        {refreshing?<span style={{display:'inline-block',width:20,height:20,border:'2.5px solid rgba(255,255,255,.4)',borderTop:'2.5px solid #fff',borderRadius:'50%',animation:'spin .8s linear infinite'}}/>:'🔄'}
+      </button>
+    }
     {toastMsg&&<Toast msg={toastMsg} onClose={()=>setToastMsg('')}/>}
   </div>;
 }
@@ -2975,7 +3029,7 @@ function App(){
   useEffect(()=>{try{const s=sessionStorage.getItem('sv2-session');if(s)setSession(JSON.parse(s));}catch{}},[]);
   const logout=()=>{sessionStorage.removeItem('sv2-session');setSession(null);};
   if(!session)return <LoginScreen onLogin={setSession}/>;
-  return <MainApp session={session} onLogout={logout}/>;
+  return <MainApp session={session} setSession={setSession} onLogout={logout}/>;
 }
 ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
 </script>
