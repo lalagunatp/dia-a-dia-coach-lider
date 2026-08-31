@@ -1901,11 +1901,23 @@ function PlanTab({data,setData,team,toast,session,refreshKey}){
 }
 
 // ─── Feedback ───
-function FeedbackTab({data,setData,team,toast,session}){
+function FeedbackTab({data,setData,team,toast,session,refreshKey}){
+  const esLider=session.role==='lider';
   const[form,setForm]=useState({date:today(),vendedor:'',tipo:'Acompañamiento',hallazgos:'',fortalezas:'',areas_oportunidad:'',compromisos:'',fecha_revision:'',semaforo:'verde',grabado:false,transcript:'',notas:'',photo:null,fotos:[]});
   const[consent,setConsent]=useState(false);
   const esAcompanamiento=form.tipo==='Acompañamiento';
   const esEvidenciaExterna=form.tipo==='Evidencia de asignación externa';
+
+  // Líder: hallazgos/feedback que cada coach ya cargó hoy (leído del Sheet).
+  const hoyStr=today();
+  const[feedbackEquipo,setFeedbackEquipo]=useState([]);
+  const[cargandoFeedbackEquipo,setCargandoFeedbackEquipo]=useState(false);
+  useEffect(()=>{
+    if(!esLider)return;
+    setCargandoFeedbackEquipo(true);
+    fetchHistorialEquipo('FEEDBACK').then(regs=>{setFeedbackEquipo(regs);setCargandoFeedbackEquipo(false);});
+  },[esLider,refreshKey]);
+  const coachesFeedbackHoy=esLider?(session.coaches||[]).map(c=>({coach:c,rows:feedbackEquipo.filter(r=>r['Registrado por']===c.nombre&&r['Fecha']===hoyStr)})):[];
   const guardar=async()=>{
     if(!form.vendedor){alert('Selecciona un integrante');return;}
     if(esAcompanamiento&&!form.photo){alert('Agrega una foto (con sello) — es obligatoria para este tipo de hallazgo');return;}
@@ -1917,6 +1929,29 @@ function FeedbackTab({data,setData,team,toast,session}){
   };
   const selectedMember=form.vendedor?team.find(m=>m.nombre===form.vendedor):null;
   return <div>
+    {esLider&&<Card title="💬 Hallazgos y feedback por coach — hoy">
+      {cargandoFeedbackEquipo?<div style={{textAlign:'center',padding:20}}><Spinner/></div>:
+      (session.coaches||[]).length===0?<p style={{color:'var(--dim)',fontSize:14}}>Sin coaches asignados.</p>:
+      coachesFeedbackHoy.map(({coach,rows})=>
+        <div key={coach.nombre} style={{marginBottom:8,padding:10,borderRadius:8,border:`1.5px solid ${rows.length?'var(--green)':'var(--red)'}`,background:rows.length?'var(--gbg)':'var(--rbg)'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <span style={{fontWeight:700,fontSize:13}}>{coach.nombre}</span>
+            <span style={{fontWeight:800,fontSize:15,color:rows.length?'var(--green)':'var(--red)'}}>{rows.length?`✓ (${rows.length})`:'✗'}</span>
+          </div>
+          {rows.length===0?<p style={{fontSize:11,color:'var(--dim)',margin:'4px 0 0'}}>Aún no ha cargado hallazgos hoy.</p>:
+          rows.map((r,i)=>
+            <div key={i} style={{marginTop:6,padding:8,border:'1px solid var(--nest-border)',background:'var(--nest-bg)',borderRadius:8}}>
+              <div style={{display:'flex',justifyContent:'space-between',fontSize:12,fontWeight:600}}>
+                <span>{r['Integrante']} · {r['Tipo']}</span>
+                <span style={{color:r['Semáforo']==='rojo'?'var(--red)':r['Semáforo']==='amarillo'?'var(--yellow)':'var(--green)'}}>●</span>
+              </div>
+              {r['Hallazgos']&&<p style={{fontSize:11,margin:'2px 0'}}>{r['Hallazgos']}</p>}
+              {r['Compromisos']&&<p style={{fontSize:11,color:'var(--dim)',margin:'2px 0'}}>✅ {r['Compromisos']}</p>}
+            </div>
+          )}
+        </div>
+      )}
+    </Card>}
     <Card title="💬 Hallazgos y feedback">
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:12}}>
         <Field label="Fecha"><Input type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})}/></Field>
@@ -3054,7 +3089,7 @@ function MainApp({session,setSession,onLogout}){
       {tab==='permisos'&&<PermisosTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
       {tab==='cierre'&&<CierreTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
       {tab==='plan'&&<PlanTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
-      {tab==='feedback'&&<FeedbackTab data={data} setData={setData} team={allTeam} toast={toast} session={session}/>}
+      {tab==='feedback'&&<FeedbackTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
       {tab==='historial'&&<HistorialTab data={data} setData={setData} toast={toast} session={session}/>}
     </div>
     {role==='lider'&&
