@@ -1332,12 +1332,25 @@ function PermisosTab({data,setData,team,toast,session,refreshKey}){
 }
 
 // ─── Cierre ───
-function CierreTab({data,setData,team,toast,session}){
+function CierreTab({data,setData,team,toast,session,refreshKey}){
+  const esLider=session.role==='lider';
   const vendedores=team.filter(m=>isVendedor(m.posicion));
   const nowDate=new Date();
   const semanaIni=startOfWeek(nowDate),semanaFin=endOfWeek(nowDate);
   const[form,setForm]=useState({date:today(),time:now(),resultados:[],incidencias:'',seguimiento:[],notas:''});
   const[ultimoGuardado,setUltimoGuardado]=useState(null);
+
+  // Líder: cierre de hoy de cada coach (leído del Sheet) — quién ya lo cargó y qué reportó.
+  const hoyStr=today();
+  const[cierresEquipo,setCierresEquipo]=useState([]);
+  const[cargandoCierresEquipo,setCargandoCierresEquipo]=useState(false);
+  useEffect(()=>{
+    if(!esLider)return;
+    setCargandoCierresEquipo(true);
+    fetchHistorialEquipo('CIERRE').then(regs=>{setCierresEquipo(regs);setCargandoCierresEquipo(false);});
+  },[esLider,refreshKey]);
+  const coachesCierreHoy=esLider?(session.coaches||[]).map(c=>({coach:c,row:cierresEquipo.find(r=>r['Registrado por']===c.nombre&&r['Fecha']===hoyStr)||null})):[];
+
   useEffect(()=>{
     const hoyIni=new Date();hoyIni.setHours(0,0,0,0);
     const hoyFin=new Date();hoyFin.setHours(23,59,59,999);
@@ -1372,6 +1385,24 @@ function CierreTab({data,setData,team,toast,session}){
         <Field label="Hora"><Input value={form.time} readOnly style={{background:'var(--bg)'}}/></Field>
       </div>
     </Card>
+    {esLider?
+    <Card title="📊 Resultado del día por coach">
+      {cargandoCierresEquipo?<div style={{textAlign:'center',padding:20}}><Spinner/></div>:
+      (session.coaches||[]).length===0?<p style={{color:'var(--dim)',fontSize:14}}>Sin coaches asignados.</p>:
+      coachesCierreHoy.map(({coach,row})=>
+        <div key={coach.nombre} style={{marginBottom:8,padding:10,borderRadius:8,border:`1.5px solid ${row?'var(--green)':'var(--red)'}`,background:row?'var(--gbg)':'var(--rbg)'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <span style={{fontWeight:700,fontSize:13}}>{coach.nombre}</span>
+            <span style={{fontWeight:800,fontSize:15,color:row?'var(--green)':'var(--red)'}}>{row?'✓':'✗'}</span>
+          </div>
+          {row?<>
+            {row['Resultados por vendedor']&&<p style={{fontSize:11,margin:'4px 0 0'}}>{row['Resultados por vendedor']}</p>}
+            {row['Incidencias']&&<p style={{fontSize:11,color:'var(--red)',margin:'2px 0 0'}}>⚠️ {row['Incidencias']}</p>}
+          </>:<p style={{fontSize:11,color:'var(--dim)',margin:'4px 0 0'}}>Aún no ha cargado el cierre de hoy.</p>}
+        </div>
+      )}
+    </Card>
+    :
     <Card title={`📊 Resultado del día por vendedor (${vendedores.length})`}>
       {vendedores.length===0?<p style={{color:'var(--dim)',fontSize:14}}>Sin integrantes asignados.</p>:
       form.resultados.map(r=>
@@ -1388,9 +1419,23 @@ function CierreTab({data,setData,team,toast,session}){
       )}
       <p style={{fontSize:11,color:'var(--dim)'}}>Oportunidades, validaciones e instalaciones se precargan del día — ajústalas si hace falta. "Pagadas hoy" son cuentas que hoy se confirmaron como ya pagadas (dejaron de estar en NPPF).</p>
     </Card>
+    }
     <Card title="Incidencias">
       <Textarea value={form.incidencias} onChange={e=>setForm({...form,incidencias:e.target.value})} placeholder="Rechazos, desviaciones..."/>
     </Card>
+    {esLider?
+    <Card title="Seguimiento mañana — por coach">
+      {cargandoCierresEquipo?<div style={{textAlign:'center',padding:20}}><Spinner/></div>:
+      (session.coaches||[]).length===0?<p style={{color:'var(--dim)',fontSize:14}}>Sin coaches asignados.</p>:
+      coachesCierreHoy.map(({coach,row})=>
+        <div key={coach.nombre} style={{marginBottom:10,padding:8,border:'1px solid var(--border)',borderRadius:8}}>
+          <div style={{fontWeight:700,fontSize:13,marginBottom:4}}>{coach.nombre}</div>
+          {row&&row['Seguimiento mañana']?<p style={{fontSize:12}}>{row['Seguimiento mañana']}</p>:
+          <p style={{fontSize:12,color:'var(--dim)'}}>{row?'Sin vendedores señalados para seguimiento.':'Aún no ha cargado el cierre de hoy.'}</p>}
+        </div>
+      )}
+    </Card>
+    :
     <Card title="Seguimiento mañana">
       {vendedores.length===0?<p style={{color:'var(--dim)',fontSize:14}}>Sin integrantes asignados.</p>:<>
       {vendedores.map(m=>{
@@ -1416,6 +1461,7 @@ function CierreTab({data,setData,team,toast,session}){
       <p style={{fontSize:11,color:'var(--dim)',marginTop:4}}>Resumen de la semana en curso: lo que ya está en sistema + lo capturado arriba en "Resultado del día". Es solo informativo (referencia de cómo van), no se usa para ninguna métrica oficial.</p>
       </>}
     </Card>
+    }
     <Card title="Notas"><Textarea value={form.notas} onChange={e=>setForm({...form,notas:e.target.value})} style={{minHeight:50}}/></Card>
     <Btn onClick={guardar} style={{width:'100%'}}>💾 Guardar cierre</Btn>
   </div>;
@@ -3006,7 +3052,7 @@ function MainApp({session,setSession,onLogout}){
       {tab==='dashboard'&&<DashboardTab data={data} team={allTeam} coaches={coaches} session={session} setTab={setTab}/>}
       {tab==='arranque'&&<ArranqueTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
       {tab==='permisos'&&<PermisosTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
-      {tab==='cierre'&&<CierreTab data={data} setData={setData} team={allTeam} toast={toast} session={session}/>}
+      {tab==='cierre'&&<CierreTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
       {tab==='plan'&&<PlanTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
       {tab==='feedback'&&<FeedbackTab data={data} setData={setData} team={allTeam} toast={toast} session={session}/>}
       {tab==='historial'&&<HistorialTab data={data} setData={setData} toast={toast} session={session}/>}
