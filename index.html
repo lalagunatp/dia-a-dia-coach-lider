@@ -1928,6 +1928,9 @@ function FeedbackTab({data,setData,team,toast,session,refreshKey}){
     setConsent(false);
   };
   const selectedMember=form.vendedor?team.find(m=>m.nombre===form.vendedor):null;
+  // Líder: el hallazgo/feedback lo documenta sobre coaches, no directamente sobre vendedores
+  // (eso le toca a cada coach) — la lista de integrantes se limita a sus coaches.
+  const integrantesDisponibles=esLider?team.filter(m=>isCoach(m.posicion)):team;
   return <div>
     {esLider&&<Card title="💬 Hallazgos y feedback por coach — hoy">
       {cargandoFeedbackEquipo?<div style={{textAlign:'center',padding:20}}><Spinner/></div>:
@@ -1957,7 +1960,7 @@ function FeedbackTab({data,setData,team,toast,session,refreshKey}){
         <Field label="Fecha"><Input type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})}/></Field>
         <Field label="Tipo"><Select value={form.tipo} onChange={v=>setForm({...form,tipo:v})} options={FEEDBACK_TIPOS}/></Field>
       </div>
-      <Field label="Integrante"><Select value={form.vendedor} onChange={v=>setForm({...form,vendedor:v})} options={[{value:'',label:'— Seleccionar —'},...team.map(m=>({value:m.nombre,label:m.nombre+(isCoach(m.posicion)?' (Coach)':'')+(m.badge?' — '+m.badge:'')}))]}/></Field>
+      <Field label="Integrante"><Select value={form.vendedor} onChange={v=>setForm({...form,vendedor:v})} options={[{value:'',label:'— Seleccionar —'},...integrantesDisponibles.map(m=>({value:m.nombre,label:m.nombre+(isCoach(m.posicion)?' (Coach)':'')+(m.badge?' — '+m.badge:'')}))]}/></Field>
       {selectedMember&&(selectedMember.rankingEnt||selectedMember.rankingMen)&&
         <div style={{background:'var(--bg)',borderRadius:10,padding:12,marginBottom:12,border:'1px solid var(--border)'}}>
           <div style={{fontSize:12,fontWeight:700,color:'var(--dim)',marginBottom:6}}>📊 CONTEXTO DEL INTEGRANTE</div>
