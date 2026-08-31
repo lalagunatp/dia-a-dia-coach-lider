@@ -53,6 +53,25 @@
 // tener acceso de lectura a BASE LA LAGUNA 2026 (SPREADSHEET_ID_PLANTILLA abajo) —
 // es un archivo distinto al de este Sheet del Director.
 //
+// SEGURIDAD (login y "historial" ahora se validan aquí, no en el navegador): antes
+// ?accion=plantilla regresaba el roster COMPLETO (con el PIN de cada empleado) a
+// quien fuera que llamara la URL, sin autenticación — y ?accion=historial regresaba
+// TODO el historial de TODOS los coaches/líderes de la empresa, también sin
+// autenticación, confiando en que la app filtrara del lado del cliente lo que le
+// corresponde ver a cada quien. Como el despliegue del Web App está en "Cualquier
+// usuario" (así tiene que estar para que la PWA funcione sin pedir cuenta de
+// Google), cualquiera que copiara la URL de esta app (visible en el código fuente)
+// podía traerse el PIN de todos los empleados y el historial completo de la
+// compañía. Ahora:
+//   - ?accion=login valida numEmp+PIN AQUÍ (nunca se manda el roster completo al
+//     navegador) y regresa un token firmado (HMAC, ver emitirToken/verificarToken).
+//   - ?accion=perfil refresca team/coaches usando ese token (sin volver a mandar el PIN).
+//   - ?accion=historial y doPost ahora EXIGEN un token válido, y el historial se
+//     filtra AQUÍ por la jerarquía real del usuario (su propio nombre + sus coaches/
+//     equipo) antes de regresarlo — ya no se manda todo y se confía en el cliente.
+//   - doPost ignora el "registradoPor" que mande el cliente y usa el nombre real
+//     del token, para que no se puedan falsificar registros a nombre de otra persona.
+//
 // ══════════════════════════════════════════════════════════════
 
 const SPREADSHEET_ID = '1jMrhZMQRqXQRD6VrEUJ0JcWT5dK599BwLYzAOBnmPv4';
@@ -66,6 +85,179 @@ function getSpreadsheet() {
   }
   // Fallback si está vinculado a un Sheet
   return SpreadsheetApp.getActiveSpreadsheet();
+}
+
+// ─── Autenticación: PIN validado aquí + token firmado (sin sesiones en servidor) ───
+
+const POSITIONS_ALLOWED = ['COACH VENTAS', 'LIDER VENTAS', 'COACH PROMOVENDEDOR PUNTO DE VENTA', 'DIRECTOR DISTRITAL', 'GESTOR DE CAPITAL HUMANO'];
+
+function getRoleType(pos) {
+  const p = (pos || '').toUpperCase().trim();
+  if (p === 'GESTOR DE CAPITAL HUMANO') return 'gestor';
+  if (p.indexOf('DIRECTOR') !== -1) return 'director';
+  if (p.indexOf('LIDER') !== -1) return 'lider';
+  if (p.indexOf('COACH') !== -1) return 'coach';
+  return 'vendedor';
+}
+function isVendedorPos(p) { p = (p || '').toUpperCase(); return p.indexOf('VENDEDOR') !== -1 || (p.indexOf('PROMOVENDEDOR') !== -1 && p.indexOf('COACH') === -1); }
+function isCoachPos(p) { return (p || '').toUpperCase().indexOf('COACH') !== -1; }
+function isLiderPos(p) { return (p || '').toUpperCase().indexOf('LIDER') !== -1; }
+
+// Mismo criterio de jerarquía que antes vivía en index.html (buildTeam): coach ve a
+// sus vendedores, líder ve a sus coaches y a los vendedores de esos coaches, etc.
+// Ahora corre aquí para poder filtrar el historial en el servidor, no en el navegador.
+function construirEquipo(user, allEmployees) {
+  const activos = allEmployees.filter(function (e) { return e.activo === 'ACTIVO'; });
+  const role = getRoleType(user.posicion);
+  let team = [], coaches = [];
+  if (role === 'coach') {
+    team = activos.filter(function (e) { return e.reportaA === user.nombre && isVendedorPos(e.posicion); });
+  } else if (role === 'lider') {
+    coaches = activos.filter(function (e) { return e.reportaA === user.nombre && isCoachPos(e.posicion); });
+    const coachNames = coaches.map(function (c) { return c.nombre; });
+    team = activos.filter(function (e) { return coachNames.indexOf(e.reportaA) !== -1 && isVendedorPos(e.posicion); });
+  } else if (role === 'director') {
+    const lideres = activos.filter(function (e) { return e.reportaA === user.nombre && isLiderPos(e.posicion); });
+    coaches = lideres;
+    const liderNames = lideres.map(function (l) { return l.nombre; });
+    team = activos.filter(function (e) { return liderNames.indexOf(e.reportaA) !== -1 && isCoachPos(e.posicion); });
+  } else if (role === 'gestor') {
+    // Gestor de Capital Humano: visibilidad amplia por diseño (todos los coaches, para Historial).
+    coaches = activos.filter(function (e) { return isCoachPos(e.posicion); });
+    const coachNames = coaches.map(function (c) { return c.nombre; });
+    team = activos.filter(function (e) { return coachNames.indexOf(e.reportaA) !== -1 && isVendedorPos(e.posicion); });
+    activos.filter(function (e) { return e.reportaA === user.nombre; }).forEach(function (p) {
+      if (isCoachPos(p.posicion)) { if (!coaches.some(function (c) { return c.nombre === p.nombre; })) coaches.push(p); }
+      else if (!team.some(function (t) { return t.nombre === p.nombre; })) team.push(p);
+    });
+  }
+  return { team: team, coaches: coaches, role: role };
+}
+
+// Lee PLANTILLA de BASE LA LAGUNA 2026 ya parseada a objetos (getValues ignora el
+// inmovilizado, a diferencia de gviz — ver nota arriba). Incluye el PIN: por eso esta
+// función NUNCA debe usarse para construir una respuesta que salga tal cual al cliente
+// — siempre pasar cada empleado por sinPin() antes de regresarlo.
+function leerRosterCompleto() {
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID_PLANTILLA);
+  const sheet = ss.getSheetByName(PLANTILLA_SHEET_NAME);
+  if (!sheet) throw new Error('Hoja no encontrada: ' + PLANTILLA_SHEET_NAME);
+  const values = sheet.getDataRange().getValues();
+  return values.map(function (r) {
+    return {
+      numEmp: String(r[3] || '').trim(),
+      numEmpB: String(r[1] || '').trim(),
+      numEmpC: String(r[2] || '').trim(),
+      nombre: String(r[4] || '').trim(),
+      posicion: String(r[5] || '').trim(),
+      fechaAlta: (r[6] instanceof Date) ? Utilities.formatDate(r[6], Session.getScriptTimeZone(), 'dd/MM/yyyy') : String(r[6] || ''),
+      distrito: String(r[7] || ''),
+      reportaA: String(r[10] || '').trim(),
+      puestoLR: String(r[11] || '').trim(),
+      segundaLR: String(r[25] || '').trim(),
+      activo: String(r[26] || '').trim(),
+      pin: String(r[27] || '').trim(),
+    };
+  }).filter(function (e) { return e.nombre && e.nombre !== 'VACANTE' && e.nombre !== 'NOMBRE DEL EMPLEADO'; });
+}
+
+function sinPin(e) {
+  if (!e) return e;
+  const copia = {};
+  Object.keys(e).forEach(function (k) { if (k !== 'pin') copia[k] = e[k]; });
+  return copia;
+}
+
+// El secreto vive solo en Propiedades del Script (nunca en el código ni en el
+// cliente) y se genera solo la primera vez que hace falta — no requiere configurarlo
+// a mano. Firma los tokens de sesión (HMAC), así que perderlo invalida todas las
+// sesiones activas (no es grave: cada quien vuelve a iniciar sesión con su PIN).
+function getTokenSecret() {
+  const props = PropertiesService.getScriptProperties();
+  let secret = props.getProperty('TOKEN_SECRET');
+  if (!secret) {
+    secret = Utilities.getUuid() + Utilities.getUuid();
+    props.setProperty('TOKEN_SECRET', secret);
+  }
+  return secret;
+}
+
+const TOKEN_VIGENCIA_MS = 24 * 60 * 60 * 1000; // 24 horas
+
+function firmar(payload) {
+  const bytes = Utilities.computeHmacSha256Signature(payload, getTokenSecret());
+  return bytes.map(function (b) { return ((b < 0 ? b + 256 : b)).toString(16).padStart(2, '0'); }).join('');
+}
+
+// token = "numEmp.expiraEnMs.firma" — verificable sin guardar nada en el servidor:
+// basta con recalcular la firma y compararla, y checar que no haya expirado.
+function emitirToken(numEmp) {
+  const exp = Date.now() + TOKEN_VIGENCIA_MS;
+  const payload = numEmp + '.' + exp;
+  return payload + '.' + firmar(payload);
+}
+
+// Regresa el numEmp si el token es válido y vigente, o null si no.
+function verificarToken(token) {
+  if (!token) return null;
+  const partes = String(token).split('.');
+  if (partes.length !== 3) return null;
+  const numEmp = partes[0], expStr = partes[1], sig = partes[2];
+  const exp = Number(expStr);
+  if (!exp || Date.now() > exp) return null;
+  if (firmar(numEmp + '.' + expStr) !== sig) return null;
+  return numEmp;
+}
+
+// {user,team,coaches,role} listos para mandar al cliente (sin PIN de nadie).
+function armarSesion(user, all) {
+  const built = construirEquipo(user, all);
+  return {
+    ok: true,
+    user: sinPin(user),
+    team: built.team.map(sinPin),
+    coaches: built.coaches.map(sinPin),
+    role: built.role,
+  };
+}
+
+// accion=login: valida numEmp+PIN en el servidor y regresa la sesión + un token
+// firmado para las siguientes llamadas (historial, doPost, perfil) — el PIN nunca
+// vuelve a viajar después de este paso, y el roster completo nunca sale de aquí.
+function iniciarSesion(params) {
+  try {
+    const numEmp = String((params && params.numEmp) || '').trim();
+    const pin = String((params && params.pin) || '').trim();
+    if (!numEmp || !pin) return { ok: false, error: 'Ingresa número de empleado y PIN' };
+    const all = leerRosterCompleto();
+    const user = all.find(function (e) { return e.numEmp === numEmp; });
+    if (!user) return { ok: false, error: 'Número de empleado no encontrado' };
+    if (String(user.pin) !== pin) return { ok: false, error: 'PIN incorrecto' };
+    if (POSITIONS_ALLOWED.indexOf((user.posicion || '').trim().toUpperCase()) === -1) {
+      return { ok: false, error: 'Acceso solo para Coach Ventas, Líder Ventas, Coach Promovendedor Punto de Venta, Director Distrital o Gestor de Capital Humano' };
+    }
+    const sesion = armarSesion(user, all);
+    sesion.token = emitirToken(numEmp);
+    return sesion;
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
+// accion=perfil: como iniciarSesion pero autenticado con el token (no con el PIN) —
+// lo usa el botón "Actualizar información" para refrescar team/coaches sin volver a
+// pedir el PIN.
+function refrescarPerfil(params) {
+  try {
+    const numEmp = verificarToken(params && params.token);
+    if (!numEmp) return { ok: false, error: 'Sesión inválida o expirada, vuelve a iniciar sesión' };
+    const all = leerRosterCompleto();
+    const user = all.find(function (e) { return e.numEmp === numEmp; });
+    if (!user) return { ok: false, error: 'Usuario no encontrado' };
+    return armarSesion(user, all);
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
 }
 
 // ─── Subida de fotos a Drive ───
@@ -253,6 +445,16 @@ function doPost(e) {
       return jsonResponse({ ok: false, error: 'Tipo no válido: ' + type });
     }
 
+    // Exige un token de sesión válido (emitido por accion=login) y usa el nombre real
+    // que hay detrás de ese token — no el "registradoPor" que mande el cliente — para
+    // que nadie pueda escribir registros a nombre de otra persona ni de forma anónima.
+    const numEmp = verificarToken(data.token);
+    if (!numEmp) return jsonResponse({ ok: false, error: 'Sesión inválida o expirada, vuelve a iniciar sesión' });
+    const autor = leerRosterCompleto().find(function (e2) { return e2.numEmp === numEmp; });
+    if (!autor) return jsonResponse({ ok: false, error: 'Usuario no encontrado' });
+    data.registradoPor = autor.nombre;
+    data.rolRegistro = getRoleType(autor.posicion);
+
     const ss = getSpreadsheet();
     const sheetName = SHEET_CONFIG[type.toUpperCase()].name;
     const sheet = ss.getSheetByName(sheetName);
@@ -409,8 +611,11 @@ function doGet(e) {
   if (accion === 'historial') {
     return jsonResponse(obtenerHistorial(e.parameter));
   }
-  if (accion === 'plantilla') {
-    return jsonResponse(obtenerPlantilla());
+  if (accion === 'login') {
+    return jsonResponse(iniciarSesion(e.parameter));
+  }
+  if (accion === 'perfil') {
+    return jsonResponse(refrescarPerfil(e.parameter));
   }
   return jsonResponse({
     ok: true,
@@ -420,28 +625,25 @@ function doGet(e) {
   });
 }
 
-// Lee PLANTILLA de BASE LA LAGUNA 2026 tal cual (todas las filas, sin importar el
-// inmovilizado) — a diferencia de gviz, getValues() no trata ninguna fila como "encabezado".
-function obtenerPlantilla() {
-  try {
-    const ss = SpreadsheetApp.openById(SPREADSHEET_ID_PLANTILLA);
-    const sheet = ss.getSheetByName(PLANTILLA_SHEET_NAME);
-    if (!sheet) return { ok: false, error: 'Hoja no encontrada: ' + PLANTILLA_SHEET_NAME };
-    const values = sheet.getDataRange().getValues();
-    const filas = values.map(row => row.map(v =>
-      (v instanceof Date) ? Utilities.formatDate(v, Session.getScriptTimeZone(), 'dd/MM/yyyy') : v
-    ));
-    return { ok: true, filas: filas };
-  } catch (err) {
-    return { ok: false, error: err.message };
-  }
-}
-
-// Devuelve las filas de una hoja como arreglo de objetos {header: valor},
-// usando la fila 1 como encabezados. Los más recientes primero.
+// Devuelve las filas de una hoja como arreglo de objetos {header: valor}, PERO solo
+// las que corresponden a quien está pidiéndolas (su propio nombre + sus coaches/
+// equipo, según construirEquipo) — exige un token válido de accion=login. Antes esto
+// regresaba TODAS las filas de TODOS los coaches de la empresa sin ninguna
+// autenticación (ver nota de seguridad al inicio del archivo).
 // hoja: clave de SHEET_CONFIG, p.ej. 'ARRANQUE', 'PLAN', 'PLAN_RESULTADO'.
 function obtenerHistorial(params) {
   try {
+    const numEmp = verificarToken(params && params.token);
+    if (!numEmp) return { ok: false, error: 'Sesión inválida o expirada, vuelve a iniciar sesión' };
+    const all = leerRosterCompleto();
+    const user = all.find(function (e) { return e.numEmp === numEmp; });
+    if (!user) return { ok: false, error: 'Usuario no encontrado' };
+    const built = construirEquipo(user, all);
+    const nombresPermitidos = {};
+    nombresPermitidos[user.nombre] = true;
+    built.team.forEach(function (m) { nombresPermitidos[m.nombre] = true; });
+    built.coaches.forEach(function (m) { nombresPermitidos[m.nombre] = true; });
+
     const hojaNombre = ((params && params.hoja) || 'ARRANQUE').toUpperCase();
     const cfg = SHEET_CONFIG[hojaNombre];
     if (!cfg) return { ok: false, error: 'Hoja no válida: ' + hojaNombre };
@@ -462,7 +664,7 @@ function obtenerHistorial(params) {
         obj[h] = (v instanceof Date) ? Utilities.formatDate(v, Session.getScriptTimeZone(), 'yyyy-MM-dd') : v;
       });
       return obj;
-    }).reverse();
+    }).filter(function (r) { return nombresPermitidos[r['Registrado por']]; }).reverse();
 
     return { ok: true, registros: registros };
   } catch (err) {

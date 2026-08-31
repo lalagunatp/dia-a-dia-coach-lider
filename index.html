@@ -35,7 +35,8 @@ const{useState,useEffect,useRef,useCallback}=React;
 
 // ═══ CONFIG ═══
 const SHEET_ID='1Ph5T-m-Lkbdw1LBq-9wIIMW6C8bljOG1t5GfZQhNZ2o';
-// PLANTILLA ya no se lee por gid/gviz — ver fetchPlantilla() (usa Apps Script, evita el bug de filas inmovilizadas).
+// PLANTILLA ya no se lee por gid/gviz ni se descarga completa al navegador — login/roster
+// se resuelven en el servidor (ver fetchLogin/fetchPerfil y apps-script.gs: iniciarSesion).
 const RANKING_ENT_GID='1643927631';
 const RANKING_GID='1495976066';
 const BASEDATOS_SHEET='Base de Datos y Comisiones'; // oportunidades: creación/validación/activación, rechazos, asignación
@@ -45,8 +46,6 @@ const DOPOST_URL='https://script.google.com/macros/s/AKfycbx7DYc01sJV7QJsA9kVdtg
 // Cuántos meses atrás trae fetchVentas() del Sheet. El navegador de "Ventas del equipo" en el
 // Dashboard limita su rango exactamente a esta misma ventana, para no dejar navegar a periodos sin datos.
 const VENTAS_LOOKBACK_MESES=3;
-// Únicos puestos con acceso a la app (comparación exacta, no por palabra contenida).
-const POSITIONS_ALLOWED=['COACH VENTAS','LIDER VENTAS','COACH PROMOVENDEDOR PUNTO DE VENTA','DIRECTOR DISTRITAL','GESTOR DE CAPITAL HUMANO'];
 // Meta semanal de instalaciones por ranking (misma convención que informeseguimiento/avancecomisiones).
 const META_SEMANAL_RANKING={ENTRENAMIENTO:3,CONDICIONADO:3,BRONCE:3,PLATA:4,ORO:5,PLATINO:6,DIAMANTE:6};
 const metaSemanal=badge=>META_SEMANAL_RANKING[badge]||0;
@@ -173,10 +172,12 @@ async function retryPending(toast,setData){
   if(still.length===0&&pending.length>0)toast?.('✅ Registros pendientes sincronizados');
 }
 // Historial del equipo leído del Sheet del Director (no solo lo capturado en este teléfono).
-async function fetchHistorialEquipo(hoja){
-  if(!DOPOST_URL)return[];
+// `token` (emitido por fetchLogin) es obligatorio: el servidor valida la sesión y filtra
+// el historial por jerarquía ahí mismo, ya no confía en que el cliente se autolimite.
+async function fetchHistorialEquipo(hoja,token){
+  if(!DOPOST_URL||!token)return[];
   try{
-    const res=await fetch(`${DOPOST_URL}?accion=historial&hoja=${encodeURIComponent(hoja||'ARRANQUE')}`);
+    const res=await fetch(`${DOPOST_URL}?accion=historial&hoja=${encodeURIComponent(hoja||'ARRANQUE')}&token=${encodeURIComponent(token)}`);
     const json=await res.json();
     if(!json.ok)return[];
     return json.registros||[];
@@ -323,84 +324,29 @@ function textoCierre(rec){
   return lineas.join('\n');
 }
 
-// Se lee vía Apps Script (SpreadsheetApp.getValues, del lado del servidor) y no por gviz:
-// gviz trata las filas inmovilizadas como "encabezado" y las excluye — si BASE LA LAGUNA 2026
-// tiene más de 1 fila inmovilizada en PLANTILLA (Director/Líderes/Coaches arriba), esas personas
-// nunca llegaban a la app ("Número de empleado no encontrado"). getValues() ignora el inmovilizado.
-async function fetchPlantilla(){
+// Login y refresco de sesión ahora se validan del lado del servidor (ver apps-script.gs:
+// iniciarSesion/refrescarPerfil) — la app ya NO descarga el roster completo ni el PIN de
+// nadie al navegador, ni decide aquí a quién le toca ver qué equipo. El servidor regresa
+// solo lo que corresponde a este usuario, más un token firmado para las siguientes llamadas
+// (historial, doPost) — así ya no hace falta reenviar el PIN después de este primer paso.
+async function fetchLogin(numEmp,pin){
   try{
-    const res=await fetch(`${DOPOST_URL}?accion=plantilla`);
-    const json=await res.json();
-    if(!json.ok){console.error('Plantilla fetch error:',json.error);return[];}
-    const rows=json.filas;
-    // cols: 0=A(TGS),1=B(SF),2=C(ID),3=D(NumEmp),4=E(Nombre),5=F(Posicion),
-    // 6=G(FechaAlta),7=H(Distrito),8=I(NumLR),9=J(PosLR),
-    // 10=K(NombreLR),11=L(PuestoLR),12=M,13=N,...
-    // 25=Z(SegundaLR),26=AA(Activo),27=AB(PIN)
-    return rows.map(r=>({
-      numEmp:String(r[3]||'').trim(),      // D - primary key
-      numEmpB:String(r[1]||'').trim(),     // B - NUMERO EMPLEADO SF
-      numEmpC:String(r[2]||'').trim(),     // C - ID POSICIONES
-      nombre:String(r[4]||'').trim(),
-      posicion:String(r[5]||'').trim(),
-      fechaAlta:String(r[6]||''),
-      distrito:String(r[7]||''),
-      reportaA:String(r[10]||'').trim(),
-      puestoLR:String(r[11]||'').trim(),
-      segundaLR:String(r[25]||'').trim(),
-      activo:String(r[26]||'').trim(),
-      pin:String(r[27]||'').trim(),
-    })).filter(e=>e.nombre&&e.nombre!=='VACANTE'&&e.nombre!=='NOMBRE DEL EMPLEADO');
-  }catch(e){console.error('Plantilla fetch error:',e);return[];}
+    const res=await fetch(`${DOPOST_URL}?accion=login&numEmp=${encodeURIComponent(numEmp)}&pin=${encodeURIComponent(pin)}`);
+    return await res.json();
+  }catch(e){return{ok:false,error:'Error de conexión, intenta de nuevo'};}
+}
+// Re-trae team/coaches/role con el token (sin volver a pedir el PIN) — botón "Actualizar información".
+async function fetchPerfil(token){
+  try{
+    const res=await fetch(`${DOPOST_URL}?accion=perfil&token=${encodeURIComponent(token)}`);
+    return await res.json();
+  }catch(e){return{ok:false,error:'Error de conexión, intenta de nuevo'};}
 }
 
-// El PIN de acceso solo hace falta una vez, para validar el login contra `all` (el roster completo
-// recién descargado) — nunca debe persistir en la sesión del cliente ni guardarse en sessionStorage,
-// o cualquier usuario podría leerlo ahí (DevTools) y suplantar a cualquier otro empleado.
-const stripPin=e=>{if(!e)return e;const{pin,...rest}=e;return rest;};
-
-// ═══ BUILD TEAM ═══
-function buildTeam(user,allEmployees){
-  const activos=allEmployees.filter(e=>e.activo==='ACTIVO');
-  const role=getRoleType(user.posicion);
-  let team=[];
-  let coaches=[];
-
-  if(role==='coach'){
-    team=activos.filter(e=>e.reportaA===user.nombre&&isVendedor(e.posicion));
-  }else if(role==='lider'){
-    coaches=activos.filter(e=>e.reportaA===user.nombre&&isCoach(e.posicion));
-    const coachNames=coaches.map(c=>c.nombre);
-    team=activos.filter(e=>coachNames.includes(e.reportaA)&&isVendedor(e.posicion));
-  }else if(role==='director'){
-    const lideres=activos.filter(e=>e.reportaA===user.nombre&&isLider(e.posicion));
-    coaches=lideres;
-    const liderNames=lideres.map(l=>l.nombre);
-    const allCoaches=activos.filter(e=>liderNames.includes(e.reportaA)&&isCoach(e.posicion));
-    team=allCoaches;
-  }else if(role==='gestor'){
-    // Gestor de Capital Humano: visibilidad amplia — todos los coaches del distrito (para ver
-    // sus Arranques/Permisos/Hallazgos en Historial), más su propia gente si tiene reportes directos.
-    coaches=activos.filter(e=>isCoach(e.posicion));
-    const coachNames=coaches.map(c=>c.nombre);
-    team=activos.filter(e=>coachNames.includes(e.reportaA)&&isVendedor(e.posicion));
-    activos.filter(e=>e.reportaA===user.nombre).forEach(p=>{
-      if(isCoach(p.posicion)){if(!coaches.some(c=>c.nombre===p.nombre))coaches.push(p);}
-      else if(!team.some(t=>t.nombre===p.nombre))team.push(p);
-    });
-  }
-
-  return{team,coaches,role};
-}
-
-// Re-ejecuta el mismo pipeline de datos del login (roster, ranking, ventas, cuentas, asignaciones)
-// para un usuario ya autenticado — usado por el botón flotante "Actualizar información".
-async function refrescarDatosSesion(numEmp){
-  const[all,rankEnt,rankMen]=await Promise.all([fetchPlantilla(),fetchRankingEntrenamiento(),fetchRankingMensual()]);
-  const user=all.find(e=>e.numEmp===numEmp);
-  if(!user)throw new Error('Usuario no encontrado al actualizar');
-  const role=getRoleType(user.posicion);
-  let{team,coaches}=buildTeam(user,all);
+// Ranking, ventas/comisiones y asignaciones se siguen consultando aquí (gviz), igual que antes —
+// solo el roster/login se movió al servidor. Comparte el mismo pipeline entre login y refresco.
+async function enriquecerSesion({user,team,coaches,role}){
+  const[rankEnt,rankMen]=await Promise.all([fetchRankingEntrenamiento(),fetchRankingMensual()]);
   const allIds=[...new Set([...team,...coaches].flatMap(m=>[m.numEmp,m.numEmpB]).filter(Boolean))];
   const[ventasByVendedor,cuentasByHomologado]=await Promise.all([fetchVentas(allIds),fetchCuentasComisiones(allIds)]);
   const todasLasVentas=Object.values(ventasByVendedor).flat();
@@ -411,11 +357,20 @@ async function refrescarDatosSesion(numEmp){
     cuentasCom:cuentasByHomologado[m.numEmp]||cuentasByHomologado[m.numEmpB]||[],
     asignacionesPorOS,
   });
-  team=sortByRanking(enrichTeam(team,rankEnt,rankMen).map(attachVentas));
-  coaches=sortByRanking(enrichTeam(coaches,rankEnt,rankMen).map(attachVentas));
-  // No se incluye `allEmployees` (el roster completo, con PIN de cada quien) — la sesión persistida
-  // solo debe llevar lo que corresponde al alcance de este usuario (ver stripPin arriba).
-  return{user:stripPin(user),team:team.map(stripPin),coaches:coaches.map(stripPin),role};
+  return{
+    user,
+    team:sortByRanking(enrichTeam(team,rankEnt,rankMen).map(attachVentas)),
+    coaches:sortByRanking(enrichTeam(coaches,rankEnt,rankMen).map(attachVentas)),
+    role,
+  };
+}
+
+// Re-ejecuta el pipeline de datos (ranking/ventas/cuentas/asignaciones) para la sesión ya
+// autenticada — usado por el botón flotante "Actualizar información".
+async function refrescarDatosSesion(token){
+  const perfil=await fetchPerfil(token);
+  if(!perfil.ok)throw new Error(perfil.error||'No se pudo actualizar la sesión');
+  return enriquecerSesion(perfil);
 }
 
 // ═══ FETCH RANKING DATA ═══
@@ -820,17 +775,11 @@ const RANK_COLORS={
   'DIAMANTE':{bg:'#DBEAFE',color:'#1D4ED8',icon:'💎'},
 };
 
-function getRoleType(pos){
-  const p=(pos||'').toUpperCase().trim();
-  if(p==='GESTOR DE CAPITAL HUMANO')return'gestor';
-  if(p.includes('DIRECTOR'))return'director';
-  if(p.includes('LIDER'))return'lider';
-  if(p.includes('COACH'))return'coach';
-  return'vendedor';
-}
+// getRoleType/isLider ahora solo existen del lado del servidor (apps-script.gs) — el rol de la
+// sesión ya llega calculado desde ahí. isVendedor/isCoach se quedan: se siguen usando para
+// filtrar listas de `team` ya cargadas (vendedores vs. coaches dentro del equipo visible).
 function isVendedor(p){return(p||'').toUpperCase().includes('VENDEDOR')||((p||'').toUpperCase().includes('PROMOVENDEDOR')&&!(p||'').toUpperCase().includes('COACH'));}
 function isCoach(p){return(p||'').toUpperCase().includes('COACH');}
-function isLider(p){return(p||'').toUpperCase().includes('LIDER');}
 
 // ═══ UI COMPONENTS ═══
 function StatusBadge({status,onClick,small}){
@@ -1098,34 +1047,15 @@ function LoginScreen({onLogin}){
     if(!numEmp.trim()||!pin.trim()){setError('Ingresa número de empleado y PIN');return;}
     setLoading(true);setError('');
     try{
-      const[all,rankEnt,rankMen]=await Promise.all([fetchPlantilla(),fetchRankingEntrenamiento(),fetchRankingMensual()]);
-      const user=all.find(e=>e.numEmp===numEmp.trim());
-      if(!user){setError('Número de empleado no encontrado');setLoading(false);return;}
-      if(String(user.pin)!==pin.trim()){setError('PIN incorrecto');setLoading(false);return;}
-      if(!POSITIONS_ALLOWED.includes((user.posicion||'').trim().toUpperCase())){setError('Acceso solo para Coach Ventas, Líder Ventas, Coach Promovendedor Punto de Venta, Director Distrital o Gestor de Capital Humano');setLoading(false);return;}
-      const role=getRoleType(user.posicion);
-      let{team,coaches}=buildTeam(user,all);
+      // numEmp+PIN se validan en el servidor (apps-script.gs: iniciarSesion) — nunca se descarga
+      // el roster completo ni el PIN de nadie a este navegador, solo lo que le toca ver a este usuario.
+      const login=await fetchLogin(numEmp.trim(),pin.trim());
+      if(!login.ok){setError(login.error||'No se pudo iniciar sesión');setLoading(false);return;}
       // Ventas y comisiones del equipo (semana/mes en curso, rechazos, asignaciones, cuentas sin pagar)
       // Base de Datos y Comisiones no siempre etiqueta "Num Vendedor" con la misma columna de ID
       // (a veces D/numEmp, a veces B/numEmpB según la persona) — se consultan ambas y se cruzan las dos al final.
-      const allIds=[...new Set([...team,...coaches].flatMap(m=>[m.numEmp,m.numEmpB]).filter(Boolean))];
-      const[ventasByVendedor,cuentasByHomologado]=await Promise.all([fetchVentas(allIds),fetchCuentasComisiones(allIds)]);
-      // Cuántas veces se ha reasignado cada OS que sigue validada sin instalar (OS POR INSTALAR).
-      const todasLasVentas=Object.values(ventasByVendedor).flat();
-      const osCandidatos=[...new Set(pendientesInstalar30d(todasLasVentas,new Date()).map(v=>v.os).filter(Boolean))];
-      const asignacionesPorOS=await fetchAsignacionesPorOS(osCandidatos);
-      const attachVentas=m=>({...m,
-        ventas:ventasByVendedor[m.numEmp]||ventasByVendedor[m.numEmpB]||[],
-        cuentasCom:cuentasByHomologado[m.numEmp]||cuentasByHomologado[m.numEmpB]||[],
-        asignacionesPorOS,
-      });
-      // Enrich with ranking data
-      team=sortByRanking(enrichTeam(team,rankEnt,rankMen).map(attachVentas));
-      coaches=sortByRanking(enrichTeam(coaches,rankEnt,rankMen).map(attachVentas));
-      // No se guarda `allEmployees` (roster completo con PIN de todos) ni los PIN individuales —
-      // sessionStorage es legible por el propio usuario vía DevTools, y esto le daría acceso a las
-      // credenciales de gente que no tiene a cargo (otros líderes, director, RH, etc.).
-      const session={user:stripPin(user),team:team.map(stripPin),coaches:coaches.map(stripPin),role,loginTime:new Date().toISOString()};
+      const{user,team,coaches,role}=await enriquecerSesion(login);
+      const session={user,team,coaches,role,token:login.token,loginTime:new Date().toISOString()};
       sessionStorage.setItem('sv2-session',JSON.stringify(session));
       onLogin(session);
     }catch(e){
@@ -1184,7 +1114,7 @@ function ArranqueTab({data,setData,team,toast,session,refreshKey}){
   useEffect(()=>{
     if(!esLider)return;
     setCargandoArranquesEquipo(true);
-    fetchHistorialEquipo('ARRANQUE').then(regs=>{setArranquesEquipo(regs);setCargandoArranquesEquipo(false);});
+    fetchHistorialEquipo('ARRANQUE',session.token).then(regs=>{setArranquesEquipo(regs);setCargandoArranquesEquipo(false);});
   },[esLider,refreshKey]);
   const coachesArranqueHoy=esLider?(session.coaches||[]).map(c=>({coach:c,row:arranquesEquipo.find(r=>r['Registrado por']===c.nombre&&r['Fecha']===hoyStr)||null})):[];
   const diaHoyKey=DIAS_SEMANA[(new Date().getDay()+6)%7];
@@ -1194,7 +1124,7 @@ function ArranqueTab({data,setData,team,toast,session,refreshKey}){
 
   const guardar=async()=>{
     if(!form.photo){alert(esLider?'Agrega la foto con el coach prioridad del día para poder guardar el arranque':'Agrega la foto de grupo para poder guardar el arranque');return;}
-    const rec={id:uid(),type:'arranque',...form,registradoPor:session.user.nombre,rolRegistro:session.role,savedAt:new Date().toISOString()};
+    const rec={id:uid(),type:'arranque',...form,registradoPor:session.user.nombre,rolRegistro:session.role,token:session.token,savedAt:new Date().toISOString()};
     const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast,setData);toast('✅ Arranque guardado');
     setForm({date:today(),time:now(),photo:null,presentes:team.map(m=>m.nombre),ausentes:[],notas:''});
   };
@@ -1275,7 +1205,7 @@ function PermisosTab({data,setData,team,toast,session,refreshKey}){
   useEffect(()=>{
     if(!esLider)return;
     setCargandoPermisosEquipo(true);
-    fetchHistorialEquipo('PERMISO').then(regs=>{setPermisosEquipo(regs);setCargandoPermisosEquipo(false);});
+    fetchHistorialEquipo('PERMISO',session.token).then(regs=>{setPermisosEquipo(regs);setCargandoPermisosEquipo(false);});
   },[esLider,refreshKey]);
   const mesActual=today().slice(0,7);
   const permisosPorCoach=esLider?(session.coaches||[]).map(c=>({
@@ -1287,7 +1217,7 @@ function PermisosTab({data,setData,team,toast,session,refreshKey}){
   const guardar=async()=>{
     if(!form.vendedor){alert('Selecciona un integrante');return;}
     if(!form.photo){alert('Agrega una foto de evidencia (foto o conversación del motivo) para poder guardar el permiso');return;}
-    const rec={id:uid(),type:'permiso',...form,registradoPor:session.user.nombre,savedAt:new Date().toISOString()};
+    const rec={id:uid(),type:'permiso',...form,registradoPor:session.user.nombre,token:session.token,savedAt:new Date().toISOString()};
     const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast,setData);toast('✅ Permiso documentado');
     setForm({date:today(),vendedor:'',tipo:'Trabajo fuera de ruta',motivo:'',compromiso:{cuentas:'',ventas:'',instalaciones:''},colonia:'',autorizado_por:session.user.nombre,notas:'',photo:null});
   };
@@ -1360,7 +1290,7 @@ function CierreTab({data,setData,team,toast,session,refreshKey}){
   useEffect(()=>{
     if(!esLider)return;
     setCargandoCierresEquipo(true);
-    fetchHistorialEquipo('CIERRE').then(regs=>{setCierresEquipo(regs);setCargandoCierresEquipo(false);});
+    fetchHistorialEquipo('CIERRE',session.token).then(regs=>{setCierresEquipo(regs);setCargandoCierresEquipo(false);});
   },[esLider,refreshKey]);
   const coachesCierreHoy=esLider?(session.coaches||[]).map(c=>({coach:c,row:cierresEquipo.find(r=>r['Registrado por']===c.nombre&&r['Fecha']===hoyStr)||null})):[];
 
@@ -1379,7 +1309,7 @@ function CierreTab({data,setData,team,toast,session,refreshKey}){
   });
   const updSeguimiento=(nombre,motivo)=>setForm(f=>({...f,seguimiento:f.seguimiento.map(s=>s.name===nombre?{...s,motivo}:s)}));
   const guardar=async()=>{
-    const rec={id:uid(),type:'cierre',...form,registradoPor:session.user.nombre,savedAt:new Date().toISOString()};
+    const rec={id:uid(),type:'cierre',...form,registradoPor:session.user.nombre,token:session.token,savedAt:new Date().toISOString()};
     const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast);toast('✅ Cierre guardado');
     setUltimoGuardado(rec);
     setForm(f=>({date:today(),time:now(),resultados:f.resultados.map(r=>({...r,oportunidades:0,validadas:0,instaladas:0,pendiente:'',pagadasHoy:0})),incidencias:'',seguimiento:[],notas:''}));
@@ -1671,7 +1601,7 @@ function PlanTab({data,setData,team,toast,session,refreshKey}){
   useEffect(()=>{
     if(!esLider)return;
     setCargandoPlanesEquipo(true);
-    fetchHistorialEquipo('PLAN').then(regs=>{setPlanesEquipo(regs);setCargandoPlanesEquipo(false);});
+    fetchHistorialEquipo('PLAN',session.token).then(regs=>{setPlanesEquipo(regs);setCargandoPlanesEquipo(false);});
   },[esLider,refreshKey]);
   // Datos completos (no solo % de completitud) del plan de cada coach — alimenta la tarjeta de
   // estatus, el Objetivo/Prioridades/Acompañamientos agregados, y lo que se guarda al final.
@@ -1717,7 +1647,7 @@ function PlanTab({data,setData,team,toast,session,refreshKey}){
       prioridades:esLider?prioridadesEquipoTexto:form.prioridades,
       vendedores_acompanar:esLider?acompanamientosEquipoTexto:form.vendedores_acompanar,
       zonas:form.zonas,resultado_esperado:form.resultado_esperado,notas:form.notas,
-      registradoPor:session.user.nombre,savedAt:new Date().toISOString()};
+      registradoPor:session.user.nombre,token:session.token,savedAt:new Date().toISOString()};
     const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast);toast('✅ Plan guardado');
     setForm({objetivos:{oportunidades:'',ventas:'',instalaciones:'',cuentasRecuperadas:'',arpu:''},prioridades:'',vendedores_acompanar:'',zonas:emptyZonas(),resultado_esperado:'',notas:''});
   };
@@ -1741,7 +1671,7 @@ function PlanTab({data,setData,team,toast,session,refreshKey}){
     const rec={id:uid(),type:'plan_resultado',planId:planPendiente.id,date:today(),
       semanaInicio:planPendiente.semanaInicio,semanaFin:planPendiente.semanaFin,semanaLabel:planPendiente.semanaLabel,
       objetivos:planPendiente.objetivos,resultados:resForm,
-      registradoPor:session.user.nombre,savedAt:new Date().toISOString()};
+      registradoPor:session.user.nombre,token:session.token,savedAt:new Date().toISOString()};
     const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast);toast('✅ Resultado guardado');
   };
 
@@ -1928,14 +1858,14 @@ function FeedbackTab({data,setData,team,toast,session,refreshKey}){
   useEffect(()=>{
     if(!esLider)return;
     setCargandoFeedbackEquipo(true);
-    fetchHistorialEquipo('FEEDBACK').then(regs=>{setFeedbackEquipo(regs);setCargandoFeedbackEquipo(false);});
+    fetchHistorialEquipo('FEEDBACK',session.token).then(regs=>{setFeedbackEquipo(regs);setCargandoFeedbackEquipo(false);});
   },[esLider,refreshKey]);
   const coachesFeedbackHoy=esLider?(session.coaches||[]).map(c=>({coach:c,rows:feedbackEquipo.filter(r=>r['Registrado por']===c.nombre&&r['Fecha']===hoyStr)})):[];
   const guardar=async()=>{
     if(!form.vendedor){alert('Selecciona un integrante');return;}
     if(esAcompanamiento&&!form.photo){alert('Agrega una foto (con sello) — es obligatoria para este tipo de hallazgo');return;}
     if(esEvidenciaExterna&&!form.fotos.length){alert('Agrega al menos una foto (persona en campo y conversación del avance) — es obligatoria para este tipo de hallazgo');return;}
-    const rec={id:uid(),type:'feedback',...form,registradoPor:session.user.nombre,savedAt:new Date().toISOString()};
+    const rec={id:uid(),type:'feedback',...form,registradoPor:session.user.nombre,token:session.token,savedAt:new Date().toISOString()};
     const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast,setData);toast('✅ Hallazgo guardado');
     setForm({date:today(),vendedor:'',tipo:'Acompañamiento',hallazgos:'',fortalezas:'',areas_oportunidad:'',compromisos:'',fecha_revision:'',semaforo:'verde',grabado:false,transcript:'',notas:'',photo:null,fotos:[]});
     setConsent(false);
@@ -2799,7 +2729,7 @@ function HistorialTab({data,setData,toast,session}){
     if(vista!=='equipo')return;
     setCargandoEquipo(true);
     const hojas=filter==='todos'?HOJAS_EQUIPO:[filter];
-    Promise.all(hojas.map(tipo=>fetchHistorialEquipo(TIPO_A_HOJA[tipo]).then(regs=>regs.map(r=>({...r,_tipo:tipo})))))
+    Promise.all(hojas.map(tipo=>fetchHistorialEquipo(TIPO_A_HOJA[tipo],session.token).then(regs=>regs.map(r=>({...r,_tipo:tipo})))))
       .then(resultados=>{
         const todos=resultados.flat().filter(r=>nombresEquipo.has(r['Registrado por']));
         todos.sort((a,b)=>String(b['Timestamp']||'').localeCompare(String(a['Timestamp']||'')));
@@ -3081,11 +3011,13 @@ function MainApp({session,setSession,onLogout}){
     if(refreshing)return;
     setRefreshing(true);
     try{
-      const nuevo=await refrescarDatosSesion(user.numEmp);
+      const nuevo=await refrescarDatosSesion(session.token);
       const nuevaSesion={...session,...nuevo,loginTime:new Date().toISOString()};
-      // Descarta cualquier `allEmployees` que pudiera venir de una sesión guardada antes de este
-      // cambio (roster completo con PIN de todos) — no se vuelve a persistir.
+      // Descarta cualquier `allEmployees`/PIN que pudiera venir de una sesión guardada antes de
+      // este cambio (el servidor ya nunca los manda, pero una sesión vieja en sessionStorage sí
+      // podría traerlos) — no se vuelven a persistir.
       delete nuevaSesion.allEmployees;
+      if(nuevaSesion.user)delete nuevaSesion.user.pin;
       sessionStorage.setItem('sv2-session',JSON.stringify(nuevaSesion));
       setSession(nuevaSesion);
       setRefreshKey(k=>k+1);
