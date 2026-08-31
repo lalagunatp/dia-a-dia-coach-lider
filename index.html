@@ -2062,6 +2062,7 @@ function DashboardTab({data,team,coaches,session,setTab}){
   const now=new Date();
   const mesActual=now.getMonth();const anioActual=now.getFullYear();
   const MESES=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+  const MESES_LARGO=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
   const mesEvaluado=mesActual===0?MESES[11]+' '+(anioActual-1):MESES[mesActual-1]+' '+anioActual;
   const thisMonth=r=>{const d=new Date(r.date);return d.getMonth()===mesActual&&d.getFullYear()===anioActual;};
   const recs=data.records;
@@ -2094,7 +2095,28 @@ function DashboardTab({data,team,coaches,session,setTab}){
   const semanaIni=startOfWeek(now),semanaFin=endOfWeek(now);
   const mesIni=startOfMonth(now),mesFin=endOfMonth(now);
   const[periodoVentas,setPeriodoVentas]=useState('semana');
-  const[rangoIni,rangoFin]=periodoVentas==='semana'?[semanaIni,semanaFin]:[mesIni,mesFin];
+  // offsetVentas: 0 = periodo actual, 1 = el anterior, 2 = dos atrás... permite hojear semanas/meses previos
+  // sin perder el resto de las tarjetas (sin pagar, pendientes), que siempre reflejan el estado de "hoy".
+  const[offsetVentas,setOffsetVentas]=useState(0);
+  const MAX_OFFSET_VENTAS=periodoVentas==='semana'?12:11;
+  const cambiarPeriodoVentas=p=>{setPeriodoVentas(p);setOffsetVentas(0);};
+  const fechaRefVentas=(()=>{
+    const d=new Date(now);
+    if(periodoVentas==='semana'){d.setDate(d.getDate()-offsetVentas*7);}
+    else{d.setDate(1);d.setMonth(d.getMonth()-offsetVentas);} // día 1 primero: evita que setMonth se desborde al restar desde un día 29-31
+    return d;
+  })();
+  const[rangoIni,rangoFin]=periodoVentas==='semana'?[startOfWeek(fechaRefVentas),endOfWeek(fechaRefVentas)]:[startOfMonth(fechaRefVentas),endOfMonth(fechaRefVentas)];
+  const labelPeriodoVentas=(()=>{
+    if(periodoVentas==='semana'){
+      const mismoMes=rangoIni.getMonth()===rangoFin.getMonth();
+      const ini=mismoMes?`${rangoIni.getDate()}`:`${rangoIni.getDate()} ${MESES[rangoIni.getMonth()]}`;
+      const anio=rangoFin.getFullYear()!==anioActual?` ${rangoFin.getFullYear()}`:'';
+      return `${ini} – ${rangoFin.getDate()} ${MESES[rangoFin.getMonth()]}${anio}`;
+    }
+    const anio=rangoIni.getFullYear()!==anioActual?` ${rangoIni.getFullYear()}`:'';
+    return `${MESES_LARGO[rangoIni.getMonth()]}${anio}`;
+  })();
   const ventasTotal={oportunidades:0,validadas:0,instaladas:0};
   let metaInstalTotal=0;
   const rechazosMotivos={};let rechazosTotalN=0; // motivo -> [{nombre,oportunidad,cuenta}]
@@ -2405,9 +2427,23 @@ function DashboardTab({data,team,coaches,session,setTab}){
 
     <Card title="🛒 Ventas del equipo" actions={
       <div style={{display:'flex',gap:4}}>
-        {['semana','mes'].map(p=><button key={p} onClick={()=>setPeriodoVentas(p)} style={{fontSize:11,fontWeight:700,padding:'4px 10px',borderRadius:20,border:'1px solid var(--border)',background:periodoVentas===p?'var(--accent)':'var(--card)',color:periodoVentas===p?'#fff':'var(--dim)',cursor:'pointer',textTransform:'capitalize'}}>{p}</button>)}
+        {['semana','mes'].map(p=><button key={p} onClick={()=>cambiarPeriodoVentas(p)} style={{fontSize:11,fontWeight:700,padding:'4px 10px',borderRadius:20,border:'1px solid var(--border)',background:periodoVentas===p?'var(--accent)':'var(--card)',color:periodoVentas===p?'#fff':'var(--dim)',cursor:'pointer',textTransform:'capitalize'}}>{p}</button>)}
       </div>
     }>
+      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:12,background:'var(--bg)',borderRadius:12,padding:'6px 8px'}}>
+        <button onClick={()=>setOffsetVentas(o=>Math.min(MAX_OFFSET_VENTAS,o+1))} disabled={offsetVentas>=MAX_OFFSET_VENTAS}
+          aria-label={`${periodoVentas==='semana'?'Semana':'Mes'} anterior`}
+          style={{width:30,height:30,flexShrink:0,borderRadius:9,border:'1px solid var(--border)',background:'var(--card)',color:offsetVentas>=MAX_OFFSET_VENTAS?'var(--border)':'var(--accent)',fontSize:15,fontWeight:700,cursor:offsetVentas>=MAX_OFFSET_VENTAS?'default':'pointer',lineHeight:1}}>‹</button>
+        <div style={{flex:1,textAlign:'center',minWidth:0}}>
+          <div style={{fontSize:13,fontWeight:700,textTransform:'capitalize'}}>{labelPeriodoVentas}</div>
+          {offsetVentas===0
+            ?<div style={{fontSize:9,color:'var(--accent)',fontWeight:700,marginTop:1}}>● {periodoVentas==='semana'?'Semana actual':'Mes actual'}</div>
+            :<button onClick={()=>setOffsetVentas(0)} style={{fontSize:9,color:'var(--dim)',fontWeight:600,background:'none',border:'none',padding:0,marginTop:1,cursor:'pointer',textDecoration:'underline'}}>Volver {periodoVentas==='semana'?'a esta semana':'a este mes'}</button>}
+        </div>
+        <button onClick={()=>setOffsetVentas(o=>Math.max(0,o-1))} disabled={offsetVentas===0}
+          aria-label={`${periodoVentas==='semana'?'Semana':'Mes'} siguiente`}
+          style={{width:30,height:30,flexShrink:0,borderRadius:9,border:'1px solid var(--border)',background:'var(--card)',color:offsetVentas===0?'var(--border)':'var(--accent)',fontSize:15,fontWeight:700,cursor:offsetVentas===0?'default':'pointer',lineHeight:1}}>›</button>
+      </div>
       <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:10}}>
         {[
           {l:'Oportunidades',v:ventasTotal.oportunidades,icon:'🆕',sub:null},
@@ -2426,7 +2462,7 @@ function DashboardTab({data,team,coaches,session,setTab}){
     </Card>
 
     {rechazosTotalN>0&&
-      <PanelAcordeon title={`❌ Motivos de rechazo OPORTUNIDADES — ${periodoVentas} (${rechazosTotalN})`} abierto={abrirRechazos} onToggle={()=>setAbrirRechazos(!abrirRechazos)}>
+      <PanelAcordeon title={`❌ Motivos de rechazo OPORTUNIDADES — ${labelPeriodoVentas} (${rechazosTotalN})`} abierto={abrirRechazos} onToggle={()=>setAbrirRechazos(!abrirRechazos)}>
         {esLider?coachesOrdenadosRechazos.map(c=>{
           const key=c.coach.nombre;
           const isExp=expandedCoachRechazo===key;
@@ -2475,7 +2511,7 @@ function DashboardTab({data,team,coaches,session,setTab}){
     }
 
     {planesOrdenados.length>0&&
-      <PanelAcordeon title={`📦 Instalaciones por plan — ${periodoVentas}`} abierto={abrirPlanes} onToggle={()=>setAbrirPlanes(!abrirPlanes)}>
+      <PanelAcordeon title={`📦 Instalaciones por plan — ${labelPeriodoVentas}`} abierto={abrirPlanes} onToggle={()=>setAbrirPlanes(!abrirPlanes)}>
         {esLider?planesOrdenados.map(([p,n])=>{
           const isExp=expandedPlan===p;
           const coachesPlan=Object.values(porCoachLider).map(c=>({coach:c.coach,items:c.planes[p]||[]})).filter(x=>x.items.length>0).sort((a,b)=>b.items.length-a.items.length);
