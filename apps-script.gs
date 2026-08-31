@@ -72,6 +72,16 @@
 //   - doPost ignora el "registradoPor" que mande el cliente y usa el nombre real
 //     del token, para que no se puedan falsificar registros a nombre de otra persona.
 //
+// SEGURIDAD pt.2 (ventas/comisiones/ranking, mismo problema por otra puerta): esos
+// datos los seguía leyendo el navegador DIRECTO de Google Sheets (gviz), lo que
+// obligaba a compartir "BASE LA LAGUNA 2026" ampliamente para que la app funcionara
+// — y cualquiera con ACCESO LEGÍTIMO a ese Sheet (no necesariamente a la app) podía
+// abrirlo y ver las ventas/comisiones de TODA la empresa sin ningún filtro, porque
+// el permiso de Sheets es por archivo completo, no por fila ni por pestaña. Ahora
+// ?accion=ventas y ?accion=ranking exigen el mismo token y filtran aquí por la
+// jerarquía real del usuario, igual que el historial — así "BASE LA LAGUNA 2026" ya
+// puede restringirse a solo esta cuenta (Ejecutar como) sin romper nada en la app.
+//
 // ══════════════════════════════════════════════════════════════
 
 const SPREADSHEET_ID = '1jMrhZMQRqXQRD6VrEUJ0JcWT5dK599BwLYzAOBnmPv4';
@@ -255,6 +265,327 @@ function refrescarPerfil(params) {
     const user = all.find(function (e) { return e.numEmp === numEmp; });
     if (!user) return { ok: false, error: 'Usuario no encontrado' };
     return armarSesion(user, all);
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
+// ─── Ventas / Comisiones / Asignaciones / Ranking (antes gviz directo del navegador) ───
+// Todo vive en el mismo archivo que PLANTILLA ("BASE LA LAGUNA 2026"): las hojas por
+// nombre y los tabs de ranking por gid (mismos nombres/ids que usaba el cliente).
+
+const BASEDATOS_SHEET = 'Base de Datos y Comisiones'; // oportunidades: creación/validación/activación, rechazos, asignación
+const COMISIONES_SHEET = 'COMISIONES'; // cuentas: estatus de pago por cuenta
+const OSPORINSTALAR_SHEET = 'OS POR INSTALAR'; // un renglón por intento de asignación de técnico a una OS
+const RANKING_ENT_GID = 1643927631;
+const RANKING_GID = 1495976066;
+// Debe coincidir con VENTAS_LOOKBACK_MESES en index.html — ahí solo controla hasta dónde
+// deja "hojear" semanas/meses el panel de Ventas del equipo; aquí es lo que de verdad se lee.
+const VENTAS_LOOKBACK_MESES = 3;
+
+function abrirBaseLaguna() {
+  return SpreadsheetApp.openById(SPREADSHEET_ID_PLANTILLA);
+}
+function hojaBaseLagunaPorNombre(nombre) {
+  const sheet = abrirBaseLaguna().getSheetByName(nombre);
+  if (!sheet) throw new Error('Hoja no encontrada: ' + nombre);
+  return sheet;
+}
+function hojaBaseLagunaPorGid(gid) {
+  const sheet = abrirBaseLaguna().getSheets().find(function (s) { return s.getSheetId() === gid; });
+  if (!sheet) throw new Error('Hoja no encontrada, gid: ' + gid);
+  return sheet;
+}
+
+// Acepta tanto Date (celda con formato fecha) como texto "dd/mm/yyyy" (celda de texto plano) —
+// a diferencia del cliente, aquí no hay un paso intermedio (gviz) que ya normalice todo a texto.
+function aFecha(v) {
+  if (v instanceof Date) {
+    const d = new Date(v.getFullYear(), v.getMonth(), v.getDate());
+    return isNaN(d) ? null : d;
+  }
+  if (!v) return null;
+  const p = String(v).trim().split('/');
+  if (p.length !== 3) return null;
+  const d = Number(p[0]), mo = Number(p[1]), y = Number(p[2]);
+  if (!d || !mo || !y) return null;
+  const dt = new Date(y, mo - 1, d);
+  return isNaN(dt) ? null : dt;
+}
+// Igual que parseGviz del lado del cliente: una celda de fecha se manda como texto simple.
+function normalizarCelda(v) {
+  return (v instanceof Date) ? Utilities.formatDate(v, Session.getScriptTimeZone(), 'dd/MM/yyyy') : v;
+}
+
+// numEmp + numEmpB de: el propio usuario, su equipo y sus coaches — el mismo criterio que ya
+// usa obtenerHistorial para nombres, aquí para IDs (así se filtran ventas/comisiones/ranking).
+function idsPermitidos(user, built) {
+  const ids = {};
+  [user].concat(built.team, built.coaches).forEach(function (m) {
+    if (m.numEmp) ids[m.numEmp] = true;
+    if (m.numEmpB) ids[m.numEmpB] = true;
+  });
+  return ids;
+}
+
+// accion=ventas: oportunidades (Base de Datos y Comisiones), cuentas/comisiones (COMISIONES) y
+// asignaciones (OS POR INSTALAR), las tres en un solo viaje — ya filtradas al equipo del token.
+// Las fechas viajan como ISO (JSON no tiene tipo Date); el cliente las reconstruye al recibirlas.
+function obtenerVentasComisiones(params) {
+  try {
+    const numEmp = verificarToken(params && params.token);
+    if (!numEmp) return { ok: false, error: 'Sesión inválida o expirada, vuelve a iniciar sesión' };
+    const all = leerRosterCompleto();
+    const user = all.find(function (e) { return e.numEmp === numEmp; });
+    if (!user) return { ok: false, error: 'Usuario no encontrado' };
+    const built = construirEquipo(user, all);
+    const permitidos = idsPermitidos(user, built);
+
+    const cutoff = new Date();
+    cutoff.setDate(1); cutoff.setHours(0, 0, 0, 0);
+    cutoff.setMonth(cutoff.getMonth() - VENTAS_LOOKBACK_MESES);
+
+    // Base de Datos y Comisiones: columnas usadas A..V (22) — mismos campos que antes
+    // seleccionaba la query gviz (A,D,E,F,K,L,N,O,P,Q,V), leídos aquí por posición directa.
+    const ventasByVendedor = {};
+    const hojaVentas = hojaBaseLagunaPorNombre(BASEDATOS_SHEET);
+    const lastRowVentas = hojaVentas.getLastRow();
+    if (lastRowVentas >= 2) {
+      const values = hojaVentas.getRange(2, 1, lastRowVentas - 1, 22).getValues();
+      values.forEach(function (r) {
+        const numVendedor = String(r[21] || '').trim(); // V
+        if (!numVendedor || !permitidos[numVendedor]) return;
+        const creacion = aFecha(r[3]), validacion = aFecha(r[4]), activacion = aFecha(r[5]); // D,E,F
+        const enVentana = (creacion && creacion >= cutoff) || (validacion && validacion >= cutoff) || (activacion && activacion >= cutoff);
+        if (!enVentana) return;
+        (ventasByVendedor[numVendedor] = ventasByVendedor[numVendedor] || []).push({
+          os: String(r[0] || '').trim(), // A
+          creacion: creacion, validacion: validacion, activacion: activacion,
+          estatus: String(r[10] || '').trim(), // K
+          motivoRechazo: String(r[11] || '').trim(), // L
+          estatusII: String(r[13] || '').trim(), // N
+          cuenta: String(r[14] || '').trim(), // O
+          plan: String(r[15] || '').trim(), // P
+          oportunidad: String(r[16] || '').trim(), // Q
+        });
+      });
+    }
+
+    // COMISIONES: columnas usadas A..U (21) — antes select B,C,H,K,L,T,U.
+    const cuentasByHomologado = {};
+    const hojaCom = hojaBaseLagunaPorNombre(COMISIONES_SHEET);
+    const lastRowCom = hojaCom.getLastRow();
+    if (lastRowCom >= 2) {
+      const values = hojaCom.getRange(2, 1, lastRowCom - 1, 21).getValues();
+      values.forEach(function (r) {
+        const numHom = String(r[2] || '').trim(); // C
+        if (!numHom || !permitidos[numHom]) return;
+        (cuentasByHomologado[numHom] = cuentasByHomologado[numHom] || []).push({
+          cuenta: String(r[1] || '').trim(), // B
+          cliente: String(r[7] || '').trim(), // H
+          fechaInstalacion: aFecha(r[10]), // K
+          plan: String(r[11] || '').trim(), // L
+          importe: Number(r[19]) || 0, // T
+          estatusPago: String(r[20] || '').trim(), // U
+        });
+      });
+    }
+
+    // OS por instalar: solo se cuenta para las OS "pendientes por instalar en los últimos 30
+    // días" que resultaron de las ventas de arriba — mismo criterio que pendientesInstalar30d()
+    // del cliente, ya no hace falta que el cliente mande la lista de OS a buscar.
+    const ahora = new Date();
+    const desde30 = new Date(ahora); desde30.setDate(desde30.getDate() - 30); desde30.setHours(0, 0, 0, 0);
+    const osCandidatos = {};
+    Object.values(ventasByVendedor).forEach(function (lista) {
+      lista.forEach(function (v) {
+        if (v.estatus !== 'Rechazada' && v.validacion && !v.activacion && v.validacion >= desde30 && v.validacion <= ahora && v.os) {
+          osCandidatos[v.os] = true;
+        }
+      });
+    });
+    const asignacionesPorOS = {};
+    if (Object.keys(osCandidatos).length) {
+      const hojaOS = hojaBaseLagunaPorNombre(OSPORINSTALAR_SHEET);
+      const lastRowOS = hojaOS.getLastRow();
+      if (lastRowOS >= 2) {
+        const colB = hojaOS.getRange(2, 2, lastRowOS - 1, 1).getValues(); // B
+        colB.forEach(function (r) {
+          const os = String(r[0] || '').trim();
+          if (os && osCandidatos[os]) asignacionesPorOS[os] = (asignacionesPorOS[os] || 0) + 1;
+        });
+      }
+    }
+
+    return { ok: true, ventasByVendedor: ventasByVendedor, cuentasByHomologado: cuentasByHomologado, asignacionesPorOS: asignacionesPorOS };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
+// Lee la pestaña de Ranking de Entrenamiento tal cual (sin `select`, mismo orden de columnas
+// que ya usaba gviz) — misma lógica de parseo que el cliente tenía en fetchRankingEntrenamiento.
+function leerRankingEntrenamiento() {
+  const sheet = hojaBaseLagunaPorGid(RANKING_ENT_GID);
+  const lastRow = sheet.getLastRow();
+  const map = {};
+  if (lastRow < 1) return map;
+  const rows = sheet.getRange(1, 1, lastRow, 51).getValues().map(function (row) { return row.map(normalizarCelda); });
+  rows.forEach(function (r) {
+    const num = String(r[0] || '').trim();
+    if (!num || num === 'Número de Empleado') return;
+    map[num] = {
+      _nombre: String(r[3] || '').trim(),
+      ranking: String(r[43] || '').trim(),
+      obs: String(r[44] || '').trim(),
+      insUlt4: r[33] || 0,
+      ingUlt4: r[35] || 0,
+      evalMes1: String(r[15] || '').trim(),
+      evalMes2: String(r[16] || '').trim(),
+      certActitud: String(r[46] || '').trim(),
+      certSist1: String(r[47] || '').trim(),
+      certSist2: String(r[48] || '').trim(),
+      certSist3: String(r[49] || '').trim(),
+      totalCert: r[50] || 0,
+      semIngreso: r[14] || '',
+    };
+  });
+  return map;
+}
+
+// Ranking mensual: mismo algoritmo de detección dinámica de columnas que ya tenía el cliente
+// (los meses de "RANKING <mes>"/"VENTA SANA <mes>" se van agregando en el Sheet cada mes, así
+// que no se puede asumir un índice fijo) — se porta literal, solo cambia de dónde vienen `rows`.
+function leerRankingMensual() {
+  const sheet = hojaBaseLagunaPorGid(RANKING_GID);
+  const lastRow = sheet.getLastRow();
+  const lastCol = sheet.getLastColumn();
+  const map = {};
+  if (lastRow < 2) return map;
+  const rows = sheet.getRange(1, 1, lastRow, lastCol).getValues().map(function (row) { return row.map(normalizarCelda); });
+  const h1 = rows[0] || [];
+  const h2 = rows[1] || [];
+
+  const rankingCols = [];
+  h2.forEach(function (v, i) { if (String(v || '').trim().toUpperCase().indexOf('RANKING ') === 0) rankingCols.push(i); });
+  const idxRankingActual = rankingCols.length ? rankingCols[rankingCols.length - 1] : null;
+  const idxObs = (idxRankingActual != null && String(h2[idxRankingActual + 1] || '').trim().toUpperCase() === 'OBSERVACIONES') ? idxRankingActual + 1 : null;
+  const installsEnd = rankingCols.length ? rankingCols[0] : undefined;
+
+  const ventaSanaCols = [];
+  h2.forEach(function (v, i) { if (String(v || '').trim().toUpperCase().indexOf('VENTA SANA ') === 0) ventaSanaCols.push(i); });
+  const idxVentaSana = ventaSanaCols.length ? ventaSanaCols[ventaSanaCols.length - 1] : null;
+  const ventaSanaMatch = idxVentaSana != null ? String(h2[idxVentaSana]).match(/^VENTA SANA\s+(\S+)/i) : null;
+  const ventaSanaMes = ventaSanaMatch ? ventaSanaMatch[1] : '';
+
+  const totalCols = [];
+  h2.forEach(function (v, i) { if (String(v || '').trim().toUpperCase() === 'TOTAL CERTIFICACIONES COMPLETAS') totalCols.push(i); });
+  const blocks = {};
+  totalCols.forEach(function (totalIdx) {
+    let start = totalIdx;
+    while (start > 0 && String(h2[start - 1] || '').trim() !== '' && String(h2[start - 1] || '').trim().toUpperCase() !== 'TOTAL CERTIFICACIONES COMPLETAS') start--;
+    let tierTitle = '';
+    for (let k = start; k <= totalIdx; k++) if (h1[k]) tierTitle = String(h1[k]).toUpperCase();
+    let tier = null;
+    if (tierTitle.indexOf('ENTRENAMIENTO') !== -1) tier = 'ENTRENAMIENTO';
+    else if (tierTitle.indexOf('BRONCE') !== -1) tier = 'BRONCE';
+    else if (tierTitle.indexOf('PLATA') !== -1) tier = 'PLATA';
+    else if (tierTitle.indexOf('ORO') !== -1) tier = 'ORO';
+    if (!tier) return;
+    const courses = [];
+    for (let k = start; k < totalIdx; k++) courses.push({ idx: k, label: String(h2[k] || '').trim() });
+    blocks[tier] = { courses: courses, totalIdx: totalIdx };
+  });
+
+  rows.forEach(function (r, ri) {
+    if (ri < 2) return;
+    const numA = String(r[0] || '').trim();
+    const numB = String(r[1] || '').trim();
+    const numC = String(r[2] || '').trim();
+    const nombre = String(r[3] || '').trim();
+    if (!nombre || nombre === 'EMPLEADO' || nombre === 'VACANTE') return;
+    const vals = r.slice(14, installsEnd);
+    const installs = [];
+    for (let i = 0; i < vals.length; i += 2) {
+      const v = Number(vals[i]);
+      if (!isNaN(v)) installs.push(v);
+    }
+    let lastNonZero = installs.length - 1;
+    while (lastNonZero >= 0 && installs[lastNonZero] === 0) lastNonZero--;
+    const relevant = installs.slice(0, lastNonZero + 1);
+    const last3 = relevant.slice(-3);
+
+    const badgeOficial = idxRankingActual != null ? String(r[idxRankingActual] || '').trim().toUpperCase() : '';
+    const obsOficial = idxObs != null ? String(r[idxObs] || '').trim() : '';
+
+    let certTier = ['BRONCE', 'PLATA', 'ORO', 'ENTRENAMIENTO'].indexOf(badgeOficial) !== -1 ? badgeOficial : null;
+    if (!certTier) {
+      let best = null, bestTotal = 0;
+      Object.keys(blocks).forEach(function (tier) {
+        const b = blocks[tier];
+        const t = Number(r[b.totalIdx]) || 0;
+        if (t > bestTotal) { bestTotal = t; best = tier; }
+      });
+      certTier = best;
+    }
+    let certFaltantes = [], certTotal = null;
+    if (certTier && blocks[certTier]) {
+      const b = blocks[certTier];
+      certTotal = Number(r[b.totalIdx]) || 0;
+      certFaltantes = b.courses.filter(function (c) { return String(r[c.idx] || '').trim().toUpperCase() !== 'APROBADO'; }).map(function (c) { return c.label; });
+    }
+
+    const ventaSanaVal = idxVentaSana != null ? String(r[idxVentaSana] || '').trim() : '';
+    const mesCap = ventaSanaMes ? ventaSanaMes.charAt(0) + ventaSanaMes.slice(1).toLowerCase() : '';
+    const ventaSana = (ventaSanaVal && ventaSanaVal !== '-') ? { mes: mesCap, valor: ventaSanaVal } : null;
+
+    const entry = {
+      nombre: nombre,
+      ultimos3meses: last3,
+      promedioMensual: last3.length ? Math.round(last3.reduce(function (a, b) { return a + b; }, 0) / last3.length) : 0,
+      badgeOficial: badgeOficial || null,
+      obsOficial: obsOficial,
+      certTier: certTier,
+      certFaltantes: certFaltantes,
+      certTotal: certTotal,
+      ventaSana: ventaSana,
+    };
+    [numA, numB, numC].forEach(function (k) {
+      if (k && k !== 'INTERNO' && k !== 'EXTERNO' && k !== 'VACANTE') map[k] = entry;
+    });
+  });
+  return map;
+}
+
+// accion=ranking: igual que ventas, filtrado al equipo del token — antes cualquiera con acceso
+// al Sheet veía el ranking/certificaciones de TODA la empresa sin ningún filtro.
+function obtenerRanking(params) {
+  try {
+    const numEmp = verificarToken(params && params.token);
+    if (!numEmp) return { ok: false, error: 'Sesión inválida o expirada, vuelve a iniciar sesión' };
+    const all = leerRosterCompleto();
+    const user = all.find(function (e) { return e.numEmp === numEmp; });
+    if (!user) return { ok: false, error: 'Usuario no encontrado' };
+    const built = construirEquipo(user, all);
+    const permitidos = idsPermitidos(user, built);
+    const nombresPermitidos = {};
+    [user].concat(built.team, built.coaches).forEach(function (m) { nombresPermitidos[m.nombre] = true; });
+
+    const rankEnt = {};
+    const rankEntFull = leerRankingEntrenamiento();
+    Object.keys(rankEntFull).forEach(function (k) {
+      const v = rankEntFull[k];
+      if (permitidos[k] || (v._nombre && nombresPermitidos[v._nombre])) rankEnt[k] = v;
+    });
+
+    const rankMen = {};
+    const rankMenFull = leerRankingMensual();
+    Object.keys(rankMenFull).forEach(function (k) {
+      const v = rankMenFull[k];
+      if (permitidos[k] || (v.nombre && nombresPermitidos[v.nombre])) rankMen[k] = v;
+    });
+
+    return { ok: true, rankEnt: rankEnt, rankMen: rankMen };
   } catch (err) {
     return { ok: false, error: err.message };
   }
@@ -616,6 +947,12 @@ function doGet(e) {
   }
   if (accion === 'perfil') {
     return jsonResponse(refrescarPerfil(e.parameter));
+  }
+  if (accion === 'ventas') {
+    return jsonResponse(obtenerVentasComisiones(e.parameter));
+  }
+  if (accion === 'ranking') {
+    return jsonResponse(obtenerRanking(e.parameter));
   }
   return jsonResponse({
     ok: true,

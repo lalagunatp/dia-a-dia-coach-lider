@@ -34,17 +34,13 @@ textarea{resize:vertical}
 const{useState,useEffect,useRef,useCallback}=React;
 
 // ═══ CONFIG ═══
+// SHEET_ID solo lo sigue usando fetchClustersColonias (catálogo de zonas, no sensible) — todo lo
+// demás (PLANTILLA, ranking, ventas/comisiones) se resuelve en el servidor, ver apps-script.gs.
 const SHEET_ID='1Ph5T-m-Lkbdw1LBq-9wIIMW6C8bljOG1t5GfZQhNZ2o';
-// PLANTILLA ya no se lee por gid/gviz ni se descarga completa al navegador — login/roster
-// se resuelven en el servidor (ver fetchLogin/fetchPerfil y apps-script.gs: iniciarSesion).
-const RANKING_ENT_GID='1643927631';
-const RANKING_GID='1495976066';
-const BASEDATOS_SHEET='Base de Datos y Comisiones'; // oportunidades: creación/validación/activación, rechazos, asignación
-const COMISIONES_SHEET='COMISIONES'; // cuentas: estatus de pago por cuenta
-const OSPORINSTALAR_SHEET='OS POR INSTALAR'; // un renglón por intento de asignación de técnico a una OS
 const DOPOST_URL='https://script.google.com/macros/s/AKfycbx7DYc01sJV7QJsA9kVdtgW0JOZdyySjLqqHzszA9qsDE3xt8kpr7SfrdF2KqseVTr0/exec';
-// Cuántos meses atrás trae fetchVentas() del Sheet. El navegador de "Ventas del equipo" en el
-// Dashboard limita su rango exactamente a esta misma ventana, para no dejar navegar a periodos sin datos.
+// Debe coincidir con VENTAS_LOOKBACK_MESES en apps-script.gs, que es donde de verdad se aplica
+// el filtro ahora (obtenerVentasComisiones) — aquí solo se usa para que el navegador de "Ventas
+// del equipo" en el Dashboard no deje hojear a un periodo más viejo del que el servidor trae.
 const VENTAS_LOOKBACK_MESES=3;
 // Meta semanal de instalaciones por ranking (misma convención que informeseguimiento/avancecomisiones).
 const META_SEMANAL_RANKING={ENTRENAMIENTO:3,CONDICIONADO:3,BRONCE:3,PLATA:4,ORO:5,PLATINO:6,DIAMANTE:6};
@@ -193,11 +189,6 @@ function parseFotosAusentes(txt){
 }
 
 // ═══ GVIZ FETCH ═══
-function gvizUrl(gid,query){
-  let u=`https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&gid=${gid}`;
-  if(query)u+=`&tq=${encodeURIComponent(query)}`;
-  return u;
-}
 function gvizUrlSheet(sheetName,query){
   let u=`https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(sheetName)}`;
   if(query)u+=`&tq=${encodeURIComponent(query)}`;
@@ -220,16 +211,6 @@ function parseGviz(text){
   }));
 }
 
-// dd/mm/yyyy (formato que deja parseGviz para fechas, y el que ya trae COMISIONES como texto) → Date
-function parseFechaDMY(s){
-  if(!s)return null;
-  const p=String(s).trim().split('/');
-  if(p.length!==3)return null;
-  const d=Number(p[0]),mo=Number(p[1]),y=Number(p[2]);
-  if(!d||!mo||!y)return null;
-  const dt=new Date(y,mo-1,d);
-  return isNaN(dt)?null:dt;
-}
 function startOfWeek(date){ // lunes de la semana que contiene `date`
   const d=new Date(date);d.setHours(0,0,0,0);
   const diff=(d.getDay()+6)%7; // Mon=0..Sun=6
@@ -343,15 +324,10 @@ async function fetchPerfil(token){
   }catch(e){return{ok:false,error:'Error de conexión, intenta de nuevo'};}
 }
 
-// Ranking, ventas/comisiones y asignaciones se siguen consultando aquí (gviz), igual que antes —
-// solo el roster/login se movió al servidor. Comparte el mismo pipeline entre login y refresco.
-async function enriquecerSesion({user,team,coaches,role}){
-  const[rankEnt,rankMen]=await Promise.all([fetchRankingEntrenamiento(),fetchRankingMensual()]);
-  const allIds=[...new Set([...team,...coaches].flatMap(m=>[m.numEmp,m.numEmpB]).filter(Boolean))];
-  const[ventasByVendedor,cuentasByHomologado]=await Promise.all([fetchVentas(allIds),fetchCuentasComisiones(allIds)]);
-  const todasLasVentas=Object.values(ventasByVendedor).flat();
-  const osCandidatos=[...new Set(pendientesInstalar30d(todasLasVentas,new Date()).map(v=>v.os).filter(Boolean))];
-  const asignacionesPorOS=await fetchAsignacionesPorOS(osCandidatos);
+// Ranking, ventas/comisiones y asignaciones ahora también se piden al servidor con el token
+// (ver fetchVentasComisiones/fetchRanking) — comparte el mismo pipeline entre login y refresco.
+async function enriquecerSesion({user,team,coaches,role},token){
+  const[{rankEnt,rankMen},{ventasByVendedor,cuentasByHomologado,asignacionesPorOS}]=await Promise.all([fetchRanking(token),fetchVentasComisiones(token)]);
   const attachVentas=m=>({...m,
     ventas:ventasByVendedor[m.numEmp]||ventasByVendedor[m.numEmpB]||[],
     cuentasCom:cuentasByHomologado[m.numEmp]||cuentasByHomologado[m.numEmpB]||[],
@@ -370,246 +346,46 @@ async function enriquecerSesion({user,team,coaches,role}){
 async function refrescarDatosSesion(token){
   const perfil=await fetchPerfil(token);
   if(!perfil.ok)throw new Error(perfil.error||'No se pudo actualizar la sesión');
-  return enriquecerSesion(perfil);
+  return enriquecerSesion(perfil,token);
 }
 
-// ═══ FETCH RANKING DATA ═══
-async function fetchRankingEntrenamiento(){
+// ═══ VENTAS, COMISIONES, ASIGNACIONES Y RANKING ═══
+// Antes se leían directo de "BASE LA LAGUNA 2026" por gviz (obligaba a compartir ese Sheet
+// ampliamente) — ahora el servidor hace la misma lectura y el mismo parseo dinámico de columnas
+// de ranking (ver apps-script.gs: obtenerVentasComisiones/obtenerRanking), pero acotado por
+// token a lo que le toca ver a cada quien. El shape que regresan sigue siendo el mismo de
+// siempre, así que enrichTeam/attachVentas/funnelPeriodo/etc. no necesitaron ningún cambio.
+// Las fechas viajan como texto ISO (JSON no tiene tipo Date) y se reconstruyen aquí.
+const reviveFecha=s=>s?new Date(s):null;
+
+async function fetchVentasComisiones(token){
+  const vacio={ventasByVendedor:{},cuentasByHomologado:{},asignacionesPorOS:{}};
+  if(!token)return vacio;
   try{
-    const res=await fetch(gvizUrl(RANKING_ENT_GID));
-    const text=await res.text();
-    const rows=parseGviz(text);
-    // A=0(NumEmp),D=3(Nombre),E=4(Posición),L=11(Coach),O=14(SemIngreso),
-    // P=15(EvalMes1),Q=16(EvalMes2),AH=33(InsUlt4sem),AJ=35(IngresoUlt4),
-    // AR=43(Ranking),AS=44(Observaciones),
-    // AU=46(CertActitud),AV=47(CertSistI),AW=48(CertSistII),AX=49(CertSistIII),AY=50(TotalCert)
-    const map={};
-    rows.forEach(r=>{
-      const num=String(r[0]||'').trim();
-      if(!num||num==='Número de Empleado')return;
-      map[num]={
-        _nombre:String(r[3]||'').trim(),
-        ranking:String(r[43]||'').trim(),
-        obs:String(r[44]||'').trim(),
-        insUlt4:r[33]||0,
-        ingUlt4:r[35]||0,
-        evalMes1:String(r[15]||'').trim(),
-        evalMes2:String(r[16]||'').trim(),
-        certActitud:String(r[46]||'').trim(),
-        certSist1:String(r[47]||'').trim(),
-        certSist2:String(r[48]||'').trim(),
-        certSist3:String(r[49]||'').trim(),
-        totalCert:r[50]||0,
-        semIngreso:r[14]||'',
-      };
+    const res=await fetch(`${DOPOST_URL}?accion=ventas&token=${encodeURIComponent(token)}`);
+    const json=await res.json();
+    if(!json.ok){console.error('Ventas fetch error:',json.error);return vacio;}
+    const ventasByVendedor={};
+    Object.entries(json.ventasByVendedor||{}).forEach(([k,lista])=>{
+      ventasByVendedor[k]=lista.map(v=>({...v,creacion:reviveFecha(v.creacion),validacion:reviveFecha(v.validacion),activacion:reviveFecha(v.activacion)}));
     });
-    return map;
-  }catch(e){console.error('Ranking fetch error:',e);return{};}
-}
-
-async function fetchRankingMensual(){
-  try{
-    const res=await fetch(gvizUrl(RANKING_GID));
-    const text=await res.text();
-    const rows=parseGviz(text);
-    // Rows 0 and 1 are the sheet's own (merged) header rows — not stripped by gviz for this tab.
-    const h1=rows[0]||[]; // merged section titles (e.g. "CERTIFICACIÓN BRONCE")
-    const h2=rows[1]||[]; // individual column names
-
-    // Ranking columns are added monthly ("RANKING ENERO'22" ... "RANKING AGOSTO 26"),
-    // so find them dynamically instead of assuming a fixed index. The LAST one is the current month,
-    // immediately followed by OBSERVACIONES.
-    const rankingCols=[];
-    h2.forEach((v,i)=>{if(String(v||'').trim().toUpperCase().startsWith('RANKING '))rankingCols.push(i);});
-    const idxRankingActual=rankingCols.length?rankingCols[rankingCols.length-1]:null;
-    const idxObs=idxRankingActual!=null&&String(h2[idxRankingActual+1]||'').trim().toUpperCase()==='OBSERVACIONES'?idxRankingActual+1:null;
-    // Monthly install columns (pairs of Instalaciones/NPPF) run from col 14 up to the first ranking column.
-    const installsEnd=rankingCols.length?rankingCols[0]:undefined;
-
-    // "VENTA SANA <MES> (Instalaciones ...)" columns are also appended monthly; take the latest one.
-    const ventaSanaCols=[];
-    h2.forEach((v,i)=>{if(String(v||'').trim().toUpperCase().startsWith('VENTA SANA '))ventaSanaCols.push(i);});
-    const idxVentaSana=ventaSanaCols.length?ventaSanaCols[ventaSanaCols.length-1]:null;
-    const ventaSanaMes=idxVentaSana!=null?(String(h2[idxVentaSana]).match(/^VENTA SANA\s+(\S+)/i)?.[1]||''):'';
-
-    // Certification blocks (ENTRENAMIENTO / BRONCE / PLATA / ORO), each ending in a
-    // "TOTAL CERTIFICACIONES COMPLETAS" column. Located dynamically for the same reason.
-    const totalCols=[];
-    h2.forEach((v,i)=>{if(String(v||'').trim().toUpperCase()==='TOTAL CERTIFICACIONES COMPLETAS')totalCols.push(i);});
-    const blocks={};
-    totalCols.forEach(totalIdx=>{
-      let start=totalIdx;
-      while(start>0&&String(h2[start-1]||'').trim()!==''&&String(h2[start-1]||'').trim().toUpperCase()!=='TOTAL CERTIFICACIONES COMPLETAS')start--;
-      let tierTitle='';
-      for(let k=start;k<=totalIdx;k++)if(h1[k])tierTitle=String(h1[k]).toUpperCase();
-      let tier=null;
-      if(tierTitle.includes('ENTRENAMIENTO'))tier='ENTRENAMIENTO';
-      else if(tierTitle.includes('BRONCE'))tier='BRONCE';
-      else if(tierTitle.includes('PLATA'))tier='PLATA';
-      else if(tierTitle.includes('ORO'))tier='ORO';
-      if(!tier)return;
-      const courses=[];
-      for(let k=start;k<totalIdx;k++)courses.push({idx:k,label:String(h2[k]||'').trim()});
-      blocks[tier]={courses,totalIdx};
+    const cuentasByHomologado={};
+    Object.entries(json.cuentasByHomologado||{}).forEach(([k,lista])=>{
+      cuentasByHomologado[k]=lista.map(c=>({...c,fechaInstalacion:reviveFecha(c.fechaInstalacion)}));
     });
-
-    const map={};
-    rows.forEach((r,ri)=>{
-      if(ri<2)return; // skip the two header rows
-      const numA=String(r[0]||'').trim(); // Número de Empleado (old format)
-      const numB=String(r[1]||'').trim(); // Número de Empleado TGS
-      const numC=String(r[2]||'').trim(); // HOMOLOGADO
-      const nombre=String(r[3]||'').trim();
-      if(!nombre||nombre==='EMPLEADO'||nombre==='VACANTE')return;
-      const vals=r.slice(14,installsEnd);
-      const installs=[];
-      for(let i=0;i<vals.length;i+=2){
-        const v=Number(vals[i]);
-        if(!isNaN(v))installs.push(v);
-      }
-      let lastNonZero=installs.length-1;
-      while(lastNonZero>=0&&installs[lastNonZero]===0)lastNonZero--;
-      const relevant=installs.slice(0,lastNonZero+1);
-      const last3=relevant.slice(-3);
-
-      // Official ranking badge + observation, as set by the sheet itself (not recomputed here).
-      const badgeOficial=idxRankingActual!=null?String(r[idxRankingActual]||'').trim().toUpperCase():'';
-      const obsOficial=idxObs!=null?String(r[idxObs]||'').trim():'';
-
-      // Which certification block applies to this person: their current tier when it's
-      // BRONCE/PLATA/ORO/ENTRENAMIENTO, otherwise (e.g. CONDICIONADO) fall back to whichever
-      // block actually has progress recorded.
-      let certTier=['BRONCE','PLATA','ORO','ENTRENAMIENTO'].includes(badgeOficial)?badgeOficial:null;
-      if(!certTier){
-        let best=null,bestTotal=0;
-        Object.entries(blocks).forEach(([tier,b])=>{
-          const t=Number(r[b.totalIdx])||0;
-          if(t>bestTotal){bestTotal=t;best=tier;}
-        });
-        certTier=best;
-      }
-      let certFaltantes=[],certTotal=null;
-      if(certTier&&blocks[certTier]){
-        const b=blocks[certTier];
-        certTotal=Number(r[b.totalIdx])||0;
-        certFaltantes=b.courses.filter(c=>String(r[c.idx]||'').trim().toUpperCase()!=='APROBADO').map(c=>c.label);
-      }
-
-      const ventaSanaVal=idxVentaSana!=null?String(r[idxVentaSana]||'').trim():'';
-      const mesCap=ventaSanaMes?ventaSanaMes.charAt(0)+ventaSanaMes.slice(1).toLowerCase():'';
-      const ventaSana=ventaSanaVal&&ventaSanaVal!=='-'?{mes:mesCap,valor:ventaSanaVal}:null;
-
-      const entry={
-        nombre,
-        ultimos3meses:last3,
-        promedioMensual:last3.length?Math.round(last3.reduce((a,b)=>a+b,0)/last3.length):0,
-        badgeOficial:badgeOficial||null,
-        obsOficial,
-        certTier,
-        certFaltantes,
-        certTotal,
-        ventaSana,
-      };
-      // Store under ALL keys for cross-matching
-      [numA,numB,numC].forEach(k=>{if(k&&k!=='INTERNO'&&k!=='EXTERNO'&&k!=='VACANTE')map[k]=entry;});
-    });
-    return map;
-  }catch(e){console.error('Ranking mensual fetch error:',e);return{};}
+    return{ventasByVendedor,cuentasByHomologado,asignacionesPorOS:json.asignacionesPorOS||{}};
+  }catch(e){console.error('Ventas fetch error:',e);return vacio;}
 }
 
-// ═══ VENTAS (Base de Datos y Comisiones / COMISIONES) ═══
-// Oportunidades de venta por vendedor: creación, validación, activación, rechazo y etapa de asignación.
-// Se filtra por Num Vendedor (columna V = mismo numEmp de PLANTILLA/RANKING) para no bajar las ~35k filas completas,
-// y por fecha (columna D/E/F) para no traer historial viejo.
-// La query language de gviz no soporta "IN": hay que armar una cadena de "COL = valor OR COL = valor...".
-// Se trocea en lotes para no pasarnos de longitud de URL con equipos grandes (Director).
-function chunk(arr,size){const out=[];for(let i=0;i<arr.length;i+=size)out.push(arr.slice(i,i+size));return out;}
-
-async function fetchVentas(numEmps){
-  if(!numEmps||!numEmps.length)return{};
+async function fetchRanking(token){
+  const vacio={rankEnt:{},rankMen:{}};
+  if(!token)return vacio;
   try{
-    const cutoff=startOfMonth(new Date());cutoff.setMonth(cutoff.getMonth()-VENTAS_LOOKBACK_MESES); // desde VENTAS_LOOKBACK_MESES atrás
-    const cutoffStr=`${cutoff.getFullYear()}-${String(cutoff.getMonth()+1).padStart(2,'0')}-${String(cutoff.getDate()).padStart(2,'0')}`;
-    const byVendedor={};
-    const lotes=chunk(numEmps,40);
-    await Promise.all(lotes.map(async lote=>{
-      const cond=lote.map(n=>`V = ${n}`).join(' or ');
-      const q=`select A,D,E,F,K,L,N,O,P,Q,V where (${cond}) and (D >= date '${cutoffStr}' or E >= date '${cutoffStr}' or F >= date '${cutoffStr}')`;
-      const res=await fetch(gvizUrlSheet(BASEDATOS_SHEET,q));
-      const text=await res.text();
-      const rows=parseGviz(text);
-      rows.forEach(r=>{
-        const numVendedor=String(r[10]||'').trim();
-        if(!numVendedor)return;
-        const v={
-          os:String(r[0]||'').trim(),
-          creacion:parseFechaDMY(r[1]),
-          validacion:parseFechaDMY(r[2]),
-          activacion:parseFechaDMY(r[3]),
-          estatus:String(r[4]||'').trim(),
-          motivoRechazo:String(r[5]||'').trim(),
-          estatusII:String(r[6]||'').trim(),
-          cuenta:String(r[7]||'').trim(),
-          plan:String(r[8]||'').trim(),
-          oportunidad:String(r[9]||'').trim(),
-        };
-        (byVendedor[numVendedor]=byVendedor[numVendedor]||[]).push(v);
-      });
-    }));
-    return byVendedor;
-  }catch(e){console.error('Ventas fetch error:',e);return{};}
-}
-
-// Cuentas y su estatus de pago, por Número Homologado (= mismo numEmp de PLANTILLA/RANKING).
-async function fetchCuentasComisiones(numEmps){
-  if(!numEmps||!numEmps.length)return{};
-  try{
-    const byHomologado={};
-    const lotes=chunk(numEmps,40);
-    await Promise.all(lotes.map(async lote=>{
-      const cond=lote.map(n=>`C = '${n}'`).join(' or ');
-      const q=`select B,C,H,K,L,T,U where ${cond}`;
-      const res=await fetch(gvizUrlSheet(COMISIONES_SHEET,q));
-      const text=await res.text();
-      const rows=parseGviz(text);
-      rows.forEach(r=>{
-        const numHom=String(r[1]||'').trim();
-        if(!numHom)return;
-        const c={
-          cuenta:String(r[0]||'').trim(),
-          cliente:String(r[2]||'').trim(),
-          fechaInstalacion:parseFechaDMY(r[3]),
-          plan:String(r[4]||'').trim(),
-          importe:Number(r[5])||0,
-          estatusPago:String(r[6]||'').trim(),
-        };
-        (byHomologado[numHom]=byHomologado[numHom]||[]).push(c);
-      });
-    }));
-    return byHomologado;
-  }catch(e){console.error('Comisiones fetch error:',e);return{};}
-}
-
-// Cuántas veces se ha asignado un técnico a cada OS (un renglón por intento en OS POR INSTALAR).
-async function fetchAsignacionesPorOS(osList){
-  if(!osList||!osList.length)return{};
-  try{
-    const conteo={};
-    const lotes=chunk(osList,40);
-    await Promise.all(lotes.map(async lote=>{
-      const cond=lote.map(os=>`B = '${os}'`).join(' or ');
-      const q=`select B where ${cond}`;
-      const res=await fetch(gvizUrlSheet(OSPORINSTALAR_SHEET,q));
-      const text=await res.text();
-      const rows=parseGviz(text);
-      rows.forEach(r=>{
-        const os=String(r[0]||'').trim();
-        if(!os)return;
-        conteo[os]=(conteo[os]||0)+1;
-      });
-    }));
-    return conteo;
-  }catch(e){console.error('OS por instalar fetch error:',e);return{};}
+    const res=await fetch(`${DOPOST_URL}?accion=ranking&token=${encodeURIComponent(token)}`);
+    const json=await res.json();
+    if(!json.ok){console.error('Ranking fetch error:',json.error);return vacio;}
+    return{rankEnt:json.rankEnt||{},rankMen:json.rankMen||{}};
+  }catch(e){console.error('Ranking fetch error:',e);return vacio;}
 }
 
 // Catálogo de zonas para el Plan: hoja "Clusters Colonias" del mismo archivo base (Distrito La Laguna),
@@ -1054,7 +830,7 @@ function LoginScreen({onLogin}){
       // Ventas y comisiones del equipo (semana/mes en curso, rechazos, asignaciones, cuentas sin pagar)
       // Base de Datos y Comisiones no siempre etiqueta "Num Vendedor" con la misma columna de ID
       // (a veces D/numEmp, a veces B/numEmpB según la persona) — se consultan ambas y se cruzan las dos al final.
-      const{user,team,coaches,role}=await enriquecerSesion(login);
+      const{user,team,coaches,role}=await enriquecerSesion(login,login.token);
       const session={user,team,coaches,role,token:login.token,loginTime:new Date().toISOString()};
       sessionStorage.setItem('sv2-session',JSON.stringify(session));
       onLogin(session);
@@ -2041,8 +1817,8 @@ function DashboardTab({data,team,coaches,session,setTab}){
   // offsetVentas: 0 = periodo actual, 1 = el anterior, 2 = dos atrás... permite hojear semanas/meses previos
   // sin perder el resto de las tarjetas (sin pagar, pendientes), que siempre reflejan el estado de "hoy".
   const[offsetVentas,setOffsetVentas]=useState(0);
-  // fetchVentas() solo trae del Sheet los últimos VENTAS_LOOKBACK_MESES meses — el tope de navegación
-  // debe coincidir exactamente, o se podría "hojear" a un periodo cuyos datos nunca se cargaron.
+  // El servidor (obtenerVentasComisiones) solo trae los últimos VENTAS_LOOKBACK_MESES meses —
+  // el tope de navegación debe coincidir exactamente, o se podría "hojear" a un periodo sin datos.
   const cutoffVentas=(()=>{const d=startOfMonth(now);d.setMonth(d.getMonth()-VENTAS_LOOKBACK_MESES);return d;})();
   const MAX_OFFSET_VENTAS=periodoVentas==='semana'
     ?Math.max(0,Math.floor((startOfWeek(now)-cutoffVentas)/(7*86400000)))
