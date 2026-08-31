@@ -42,6 +42,9 @@ const BASEDATOS_SHEET='Base de Datos y Comisiones'; // oportunidades: creación/
 const COMISIONES_SHEET='COMISIONES'; // cuentas: estatus de pago por cuenta
 const OSPORINSTALAR_SHEET='OS POR INSTALAR'; // un renglón por intento de asignación de técnico a una OS
 const DOPOST_URL='https://script.google.com/macros/s/AKfycbx7DYc01sJV7QJsA9kVdtgW0JOZdyySjLqqHzszA9qsDE3xt8kpr7SfrdF2KqseVTr0/exec';
+// Cuántos meses atrás trae fetchVentas() del Sheet. El navegador de "Ventas del equipo" en el
+// Dashboard limita su rango exactamente a esta misma ventana, para no dejar navegar a periodos sin datos.
+const VENTAS_LOOKBACK_MESES=3;
 // Únicos puestos con acceso a la app (comparación exacta, no por palabra contenida).
 const POSITIONS_ALLOWED=['COACH VENTAS','LIDER VENTAS','COACH PROMOVENDEDOR PUNTO DE VENTA','DIRECTOR DISTRITAL','GESTOR DE CAPITAL HUMANO'];
 // Meta semanal de instalaciones por ranking (misma convención que informeseguimiento/avancecomisiones).
@@ -563,7 +566,7 @@ function chunk(arr,size){const out=[];for(let i=0;i<arr.length;i+=size)out.push(
 async function fetchVentas(numEmps){
   if(!numEmps||!numEmps.length)return{};
   try{
-    const cutoff=startOfMonth(new Date());cutoff.setMonth(cutoff.getMonth()-1); // desde el mes pasado
+    const cutoff=startOfMonth(new Date());cutoff.setMonth(cutoff.getMonth()-VENTAS_LOOKBACK_MESES); // desde VENTAS_LOOKBACK_MESES atrás
     const cutoffStr=`${cutoff.getFullYear()}-${String(cutoff.getMonth()+1).padStart(2,'0')}-${String(cutoff.getDate()).padStart(2,'0')}`;
     const byVendedor={};
     const lotes=chunk(numEmps,40);
@@ -2098,7 +2101,12 @@ function DashboardTab({data,team,coaches,session,setTab}){
   // offsetVentas: 0 = periodo actual, 1 = el anterior, 2 = dos atrás... permite hojear semanas/meses previos
   // sin perder el resto de las tarjetas (sin pagar, pendientes), que siempre reflejan el estado de "hoy".
   const[offsetVentas,setOffsetVentas]=useState(0);
-  const MAX_OFFSET_VENTAS=periodoVentas==='semana'?12:11;
+  // fetchVentas() solo trae del Sheet los últimos VENTAS_LOOKBACK_MESES meses — el tope de navegación
+  // debe coincidir exactamente, o se podría "hojear" a un periodo cuyos datos nunca se cargaron.
+  const cutoffVentas=(()=>{const d=startOfMonth(now);d.setMonth(d.getMonth()-VENTAS_LOOKBACK_MESES);return d;})();
+  const MAX_OFFSET_VENTAS=periodoVentas==='semana'
+    ?Math.max(0,Math.floor((startOfWeek(now)-cutoffVentas)/(7*86400000)))
+    :VENTAS_LOOKBACK_MESES;
   const cambiarPeriodoVentas=p=>{setPeriodoVentas(p);setOffsetVentas(0);};
   const fechaRefVentas=(()=>{
     const d=new Date(now);
