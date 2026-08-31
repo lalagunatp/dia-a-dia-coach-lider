@@ -354,6 +354,11 @@ async function fetchPlantilla(){
   }catch(e){console.error('Plantilla fetch error:',e);return[];}
 }
 
+// El PIN de acceso solo hace falta una vez, para validar el login contra `all` (el roster completo
+// recién descargado) — nunca debe persistir en la sesión del cliente ni guardarse en sessionStorage,
+// o cualquier usuario podría leerlo ahí (DevTools) y suplantar a cualquier otro empleado.
+const stripPin=e=>{if(!e)return e;const{pin,...rest}=e;return rest;};
+
 // ═══ BUILD TEAM ═══
 function buildTeam(user,allEmployees){
   const activos=allEmployees.filter(e=>e.activo==='ACTIVO');
@@ -408,7 +413,9 @@ async function refrescarDatosSesion(numEmp){
   });
   team=sortByRanking(enrichTeam(team,rankEnt,rankMen).map(attachVentas));
   coaches=sortByRanking(enrichTeam(coaches,rankEnt,rankMen).map(attachVentas));
-  return{user,team,coaches,role,allEmployees:all};
+  // No se incluye `allEmployees` (el roster completo, con PIN de cada quien) — la sesión persistida
+  // solo debe llevar lo que corresponde al alcance de este usuario (ver stripPin arriba).
+  return{user:stripPin(user),team:team.map(stripPin),coaches:coaches.map(stripPin),role};
 }
 
 // ═══ FETCH RANKING DATA ═══
@@ -1115,7 +1122,10 @@ function LoginScreen({onLogin}){
       // Enrich with ranking data
       team=sortByRanking(enrichTeam(team,rankEnt,rankMen).map(attachVentas));
       coaches=sortByRanking(enrichTeam(coaches,rankEnt,rankMen).map(attachVentas));
-      const session={user,team,coaches,role,allEmployees:all,loginTime:new Date().toISOString()};
+      // No se guarda `allEmployees` (roster completo con PIN de todos) ni los PIN individuales —
+      // sessionStorage es legible por el propio usuario vía DevTools, y esto le daría acceso a las
+      // credenciales de gente que no tiene a cargo (otros líderes, director, RH, etc.).
+      const session={user:stripPin(user),team:team.map(stripPin),coaches:coaches.map(stripPin),role,loginTime:new Date().toISOString()};
       sessionStorage.setItem('sv2-session',JSON.stringify(session));
       onLogin(session);
     }catch(e){
@@ -3073,6 +3083,9 @@ function MainApp({session,setSession,onLogout}){
     try{
       const nuevo=await refrescarDatosSesion(user.numEmp);
       const nuevaSesion={...session,...nuevo,loginTime:new Date().toISOString()};
+      // Descarta cualquier `allEmployees` que pudiera venir de una sesión guardada antes de este
+      // cambio (roster completo con PIN de todos) — no se vuelve a persistir.
+      delete nuevaSesion.allEmployees;
       sessionStorage.setItem('sv2-session',JSON.stringify(nuevaSesion));
       setSession(nuevaSesion);
       setRefreshKey(k=>k+1);
