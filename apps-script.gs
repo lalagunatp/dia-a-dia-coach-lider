@@ -363,6 +363,8 @@ function obtenerVentasComisiones(params) {
         (ventasByVendedor[numVendedor] = ventasByVendedor[numVendedor] || []).push({
           os: String(r[0] || '').trim(), // A
           creacion: creacion, validacion: validacion, activacion: activacion,
+          canal: String(r[7] || '').trim(), // H — "Punto de Venta", "Cambaceo", "Call Center", "Venta Técnico"
+          subcanal: String(r[8] || '').trim(), // I — punto de venta específico cuando canal es "Punto de Venta"
           estatus: String(r[10] || '').trim(), // K
           motivoRechazo: String(r[11] || '').trim(), // L
           estatusII: String(r[13] || '').trim(), // N
