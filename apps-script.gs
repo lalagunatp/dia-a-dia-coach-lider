@@ -277,6 +277,7 @@ function refrescarPerfil(params) {
 const BASEDATOS_SHEET = 'Base de Datos y Comisiones'; // oportunidades: creación/validación/activación, rechazos, asignación
 const COMISIONES_SHEET = 'COMISIONES'; // cuentas: estatus de pago por cuenta
 const OSPORINSTALAR_SHEET = 'OS POR INSTALAR'; // un renglón por intento de asignación de técnico a una OS
+const CLUSTERS_SHEET = 'Clusters Colonias'; // catálogo de zonas para Plan/Permisos (columna A cluster, B colonia)
 const RANKING_ENT_GID = 1643927631;
 const RANKING_GID = 1495976066;
 // Debe coincidir con VENTAS_LOOKBACK_MESES en index.html — ahí solo controla hasta dónde
@@ -586,6 +587,33 @@ function obtenerRanking(params) {
     });
 
     return { ok: true, rankEnt: rankEnt, rankMen: rankMen };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
+// accion=clusters: catálogo de Cluster/Colonia para Plan y Permisos — antes se leía por gviz
+// directo del navegador (requería que "BASE LA LAGUNA 2026" tuviera enlace público), ahora pasa
+// por aquí igual que el resto, para poder restringir ese archivo a solo esta cuenta de Google.
+// No es información sensible por persona, pero exige token de todos modos por consistencia (ya
+// solo se pide después de iniciar sesión).
+function obtenerClusters(params) {
+  try {
+    const numEmp = verificarToken(params && params.token);
+    if (!numEmp) return { ok: false, error: 'Sesión inválida o expirada, vuelve a iniciar sesión' };
+    const sheet = hojaBaseLagunaPorNombre(CLUSTERS_SHEET);
+    const lastRow = sheet.getLastRow();
+    if (lastRow < 1) return { ok: true, clusters: [] };
+    const values = sheet.getRange(1, 1, lastRow, 2).getValues();
+    const clusters = [];
+    values.forEach(function (r) {
+      const cluster = String(r[0] || '').trim();
+      const colonia = String(r[1] || '').trim();
+      if (!cluster || !colonia) return;
+      if (cluster.toUpperCase() === 'CLUSTER' || colonia.toUpperCase() === 'COLONIA') return;
+      clusters.push({ cluster: cluster, colonia: colonia });
+    });
+    return { ok: true, clusters: clusters };
   } catch (err) {
     return { ok: false, error: err.message };
   }
@@ -953,6 +981,9 @@ function doGet(e) {
   }
   if (accion === 'ranking') {
     return jsonResponse(obtenerRanking(e.parameter));
+  }
+  if (accion === 'clusters') {
+    return jsonResponse(obtenerClusters(e.parameter));
   }
   return jsonResponse({
     ok: true,
