@@ -278,6 +278,7 @@ const BASEDATOS_SHEET = 'Base de Datos y Comisiones'; // oportunidades: creació
 const COMISIONES_SHEET = 'COMISIONES'; // cuentas: estatus de pago por cuenta
 const OSPORINSTALAR_SHEET = 'OS POR INSTALAR'; // un renglón por intento de asignación de técnico a una OS
 const CLUSTERS_SHEET = 'Clusters Colonias'; // catálogo de zonas para Plan/Permisos (columna A cluster, B colonia)
+const PDV_SHEET = 'PDV'; // catálogo de Puntos de Venta para Plan (columna A) — Coach Promovendedor Punto de Venta
 const RANKING_ENT_GID = 1643927631;
 const RANKING_GID = 1495976066;
 // Debe coincidir con VENTAS_LOOKBACK_MESES en index.html — ahí solo controla hasta dónde
@@ -614,6 +615,29 @@ function obtenerClusters(params) {
       clusters.push({ cluster: cluster, colonia: colonia });
     });
     return { ok: true, clusters: clusters };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
+// accion=pdv: catálogo de Puntos de Venta (hoja PDV, columna A) para el Plan de Coach
+// Promovendedor Punto de Venta — mismo patrón que obtenerClusters.
+function obtenerPDV(params) {
+  try {
+    const numEmp = verificarToken(params && params.token);
+    if (!numEmp) return { ok: false, error: 'Sesión inválida o expirada, vuelve a iniciar sesión' };
+    const sheet = hojaBaseLagunaPorNombre(PDV_SHEET);
+    const lastRow = sheet.getLastRow();
+    if (lastRow < 1) return { ok: true, puntos: [] };
+    const values = sheet.getRange(1, 1, lastRow, 1).getValues();
+    const puntos = [];
+    values.forEach(function (r) {
+      const nombre = String(r[0] || '').trim();
+      if (!nombre) return;
+      if (nombre.toUpperCase() === 'PDV' || nombre.toUpperCase() === 'PUNTO DE VENTA') return;
+      puntos.push(nombre);
+    });
+    return { ok: true, puntos: puntos };
   } catch (err) {
     return { ok: false, error: err.message };
   }
@@ -984,6 +1008,9 @@ function doGet(e) {
   }
   if (accion === 'clusters') {
     return jsonResponse(obtenerClusters(e.parameter));
+  }
+  if (accion === 'pdv') {
+    return jsonResponse(obtenerPDV(e.parameter));
   }
   return jsonResponse({
     ok: true,
