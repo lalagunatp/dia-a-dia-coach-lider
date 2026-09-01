@@ -732,7 +732,7 @@ const SHEET_CONFIG = {
     headers: [
       'ID', 'Fecha', 'Hora', 'Registrado por', 'Rol',
       'Presentes', 'Ausentes', 'Detalle ausentes', 'Notas',
-      'Con foto', 'Foto grupo', 'Fotos evidencia ausentes',
+      'Con foto', 'Foto grupo', 'Fotos evidencia ausentes', 'Fotos por vendedor',
       'Timestamp'
     ]
   },
@@ -882,6 +882,16 @@ function buildRow(type, d) {
         }))
         .filter(f => f.url);
       const fotosAusentesTxt = fotosAusentes.map(f => `${f.name}: ${f.url}`).join('; ');
+      // Coach Promovendedor Punto de Venta: una foto (con sello) por cada vendedor, presente o
+      // ausente — evidencia de que se visitó cada punto de venta, aparte de la foto de grupo.
+      const fotosVendedores = Object.keys(d.fotosVendedores || {})
+        .filter(name => d.fotosVendedores[name])
+        .map(name => ({
+          name: name,
+          url: subirFotoADrive(d.fotosVendedores[name], `PDV_${fechaHora}_${nombreSeguro(name)}.jpg`)
+        }))
+        .filter(f => f.url);
+      const fotosVendedoresTxt = fotosVendedores.map(f => `${f.name}: ${f.url}`).join('; ');
       const row = [
         d.id, d.date, d.time, d.registradoPor || '', d.rolRegistro || '',
         (d.presentes || []).length,
@@ -891,10 +901,11 @@ function buildRow(type, d) {
         fotoGrupoUrl ? 'SÍ' : 'NO',
         fotoGrupoUrl,
         fotosAusentesTxt,       // "nombre: liga; nombre: liga"
+        fotosVendedoresTxt,     // "nombre: liga; nombre: liga"
         ts
       ];
       // Se regresan las ligas para que la app las use en vez de la foto local.
-      return { row: row, extra: { fotoGrupoUrl: fotoGrupoUrl, fotosAusentes: fotosAusentes } };
+      return { row: row, extra: { fotoGrupoUrl: fotoGrupoUrl, fotosAusentes: fotosAusentes, fotosVendedores: fotosVendedores } };
     }
 
     case 'permiso': {
