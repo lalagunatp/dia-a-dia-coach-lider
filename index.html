@@ -34,9 +34,8 @@ textarea{resize:vertical}
 const{useState,useEffect,useRef,useCallback}=React;
 
 // ═══ CONFIG ═══
-// SHEET_ID solo lo sigue usando fetchClustersColonias (catálogo de zonas, no sensible) — todo lo
-// demás (PLANTILLA, ranking, ventas/comisiones) se resuelve en el servidor, ver apps-script.gs.
-const SHEET_ID='1Ph5T-m-Lkbdw1LBq-9wIIMW6C8bljOG1t5GfZQhNZ2o';
+// Ya no queda ningún dato (ni siquiera el catálogo de Clusters/Colonias) leído directo del
+// navegador por gviz — todo pasa por el servidor con token, ver apps-script.gs.
 const DOPOST_URL='https://script.google.com/macros/s/AKfycbx7DYc01sJV7QJsA9kVdtgW0JOZdyySjLqqHzszA9qsDE3xt8kpr7SfrdF2KqseVTr0/exec';
 // Debe coincidir con VENTAS_LOOKBACK_MESES en apps-script.gs, que es donde de verdad se aplica
 // el filtro ahora (obtenerVentasComisiones) — aquí solo se usa para que el navegador de "Ventas
@@ -186,29 +185,6 @@ function parseFotosAusentes(txt){
     const m=s.match(/^(.*?):\s*(https?:\/\/.+)$/);
     return m?{nombre:m[1].trim(),url:m[2].trim()}:{nombre:s,url:''};
   }).filter(f=>f.url);
-}
-
-// ═══ GVIZ FETCH ═══
-function gvizUrlSheet(sheetName,query){
-  let u=`https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(sheetName)}`;
-  if(query)u+=`&tq=${encodeURIComponent(query)}`;
-  return u;
-}
-function parseGviz(text){
-  const m=text.match(/setResponse\((.+)\);?\s*$/s);
-  if(!m)throw new Error('Invalid gviz response');
-  const json=JSON.parse(m[1]);
-  if(json.status==='error')throw new Error(json.errors?.[0]?.message||'gviz error');
-  const cols=json.table.cols.map(c=>c.label||c.id);
-  return json.table.rows.map(r=>r.c.map(cell=>{
-    if(!cell)return'';
-    let v=cell.v;
-    if(typeof v==='string'&&v.match(/^Date\(/)){
-      const parts=v.match(/Date\((\d+),(\d+),(\d+)\)/);
-      if(parts)v=`${parts[3]}/${parseInt(parts[2])+1}/${parts[1]}`;
-    }
-    return v??'';
-  }));
 }
 
 function startOfWeek(date){ // lunes de la semana que contiene `date`
@@ -388,23 +364,17 @@ async function fetchRanking(token){
   }catch(e){console.error('Ranking fetch error:',e);return vacio;}
 }
 
-// Catálogo de zonas para el Plan: hoja "Clusters Colonias" del mismo archivo base (Distrito La Laguna),
-// columna A = cluster, columna B = colonia.
-const CLUSTERS_SHEET='Clusters Colonias';
-async function fetchClustersColonias(){
+// Catálogo de zonas para el Plan: hoja "Clusters Colonias" del mismo archivo base (Distrito La
+// Laguna). Antes se leía por gviz directo del navegador (exigía que ese archivo tuviera enlace
+// público) — ahora pasa por el Apps Script con token, igual que el resto, así el archivo ya puede
+// restringirse a solo la cuenta del script sin romper nada (ver apps-script.gs: obtenerClusters).
+async function fetchClustersColonias(token){
+  if(!token)return[];
   try{
-    const res=await fetch(gvizUrlSheet(CLUSTERS_SHEET));
-    const text=await res.text();
-    const rows=parseGviz(text);
-    const list=[];
-    rows.forEach(r=>{
-      const cluster=String(r[0]||'').trim();
-      const colonia=String(r[1]||'').trim();
-      if(!cluster||!colonia)return;
-      if(cluster.toUpperCase()==='CLUSTER'||colonia.toUpperCase()==='COLONIA')return;
-      list.push({cluster,colonia});
-    });
-    return list;
+    const res=await fetch(`${DOPOST_URL}?accion=clusters&token=${encodeURIComponent(token)}`);
+    const json=await res.json();
+    if(!json.ok){console.error('Clusters/Colonias fetch error:',json.error);return[];}
+    return json.clusters||[];
   }catch(e){console.error('Clusters/Colonias fetch error:',e);return[];}
 }
 function buildClusterMap(list){
@@ -973,7 +943,7 @@ function PermisosTab({data,setData,team,toast,session,refreshKey}){
   const esLider=session.role==='lider';
   const[form,setForm]=useState({date:today(),vendedor:'',tipo:'Trabajo fuera de ruta',motivo:'',compromiso:{cuentas:'',ventas:'',instalaciones:''},colonia:'',autorizado_por:session.user.nombre,notas:'',photo:null});
   const[zonasData,setZonasData]=useState({clusterToColonias:{},coloniaToCluster:{},clusters:[]});
-  useEffect(()=>{fetchClustersColonias().then(list=>setZonasData(buildClusterMap(list)));},[]);
+  useEffect(()=>{fetchClustersColonias(session.token).then(list=>setZonasData(buildClusterMap(list)));},[]);
 
   // Líder: permisos que cada coach ya otorgó a su gente, agrupados por coach (mes en curso).
   const[permisosEquipo,setPermisosEquipo]=useState([]);
@@ -1368,7 +1338,7 @@ function PlanTab({data,setData,team,toast,session,refreshKey}){
   const planPendiente=data.records.filter(r=>r.type==='plan'&&!planesConResultado.has(r.id)&&r.semanaInicio<semanaIniStr).sort((a,b)=>a.semanaInicio.localeCompare(b.semanaInicio))[0]||null;
 
   const[zonasData,setZonasData]=useState({clusterToColonias:{},coloniaToCluster:{},clusters:[]});
-  useEffect(()=>{fetchClustersColonias().then(list=>setZonasData(buildClusterMap(list)));},[]);
+  useEffect(()=>{fetchClustersColonias(session.token).then(list=>setZonasData(buildClusterMap(list)));},[]);
 
   // Líder: estado del plan de esta semana de cada uno de sus coaches (leído del Sheet, no del
   // dispositivo local — cada coach lo captura en su propio teléfono).
