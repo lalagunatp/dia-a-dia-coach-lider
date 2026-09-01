@@ -274,7 +274,7 @@ function refrescarPerfil(params) {
 // Todo vive en el mismo archivo que PLANTILLA ("BASE LA LAGUNA 2026"): las hojas por
 // nombre y los tabs de ranking por gid (mismos nombres/ids que usaba el cliente).
 
-const BASEDATOS_SHEET = 'Base de Datos y Comisiones'; // oportunidades: creación/validación/activación, rechazos, asignación
+const BASEDATOS_SHEET = 'BASE DE DATOS'; // oportunidades: creación/validación/activación, rechazos, asignación
 const COMISIONES_SHEET = 'COMISIONES'; // cuentas: estatus de pago por cuenta
 const OSPORINSTALAR_SHEET = 'OS POR INSTALAR'; // un renglón por intento de asignación de técnico a una OS
 const CLUSTERS_SHEET = 'Clusters Colonias'; // catálogo de zonas para Plan/Permisos (columna A cluster, B colonia)
@@ -330,7 +330,7 @@ function idsPermitidos(user, built) {
   return ids;
 }
 
-// accion=ventas: oportunidades (Base de Datos y Comisiones), cuentas/comisiones (COMISIONES) y
+// accion=ventas: oportunidades (BASE DE DATOS), cuentas/comisiones (COMISIONES) y
 // asignaciones (OS POR INSTALAR), las tres en un solo viaje — ya filtradas al equipo del token.
 // Las fechas viajan como ISO (JSON no tiene tipo Date); el cliente las reconstruye al recibirlas.
 function obtenerVentasComisiones(params) {
@@ -347,7 +347,7 @@ function obtenerVentasComisiones(params) {
     cutoff.setDate(1); cutoff.setHours(0, 0, 0, 0);
     cutoff.setMonth(cutoff.getMonth() - VENTAS_LOOKBACK_MESES);
 
-    // Base de Datos y Comisiones: columnas usadas A..V (22) — mismos campos que antes
+    // BASE DE DATOS: columnas usadas A..V (22) — mismos campos que antes
     // seleccionaba la query gviz (A,D,E,F,K,L,N,O,P,Q,V), leídos aquí por posición directa.
     const ventasByVendedor = {};
     const hojaVentas = hojaBaseLagunaPorNombre(BASEDATOS_SHEET);
