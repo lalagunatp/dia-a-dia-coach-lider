@@ -385,6 +385,16 @@ function buildClusterMap(list){
   });
   return{clusterToColonias,coloniaToCluster,clusters:Object.keys(clusterToColonias).sort()};
 }
+// Catálogo de Puntos de Venta (hoja "PDV", columna A) — Plan de Coach Promovendedor Punto de Venta.
+async function fetchPDV(token){
+  if(!token)return[];
+  try{
+    const res=await fetch(`${DOPOST_URL}?accion=pdv&token=${encodeURIComponent(token)}`);
+    const json=await res.json();
+    if(!json.ok){console.error('PDV fetch error:',json.error);return[];}
+    return json.puntos||[];
+  }catch(e){console.error('PDV fetch error:',e);return[];}
+}
 
 // Oportunidades validadas en los últimos 30 días que todavía no se instalan.
 function pendientesInstalar30d(ventas,ref){
@@ -1291,6 +1301,39 @@ function CoachDiaSelector({label,dia,coachesDisponibles,onChange}){
   </div>;
 }
 
+// Para Coach Promovendedor Punto de Venta: en vez de cluster/colonia, elige qué punto(s) de venta
+// va a trabajar ese día (catálogo hoja PDV). Reutiliza la misma forma de dato que ZonaDia
+// ({entradas,direccion,comentarios}) guardando el nombre del PDV en "cluster" — así
+// zonasATexto/reporte/WhatsApp lo leen sin cambios.
+function PDVDia({label,dia,puntosDisponibles,onChange}){
+  const entradas=dia.entradas||[];
+  const[pdvSel,setPdvSel]=useState('');
+  const agregar=()=>{
+    if(!pdvSel||entradas.some(e=>e.cluster===pdvSel))return;
+    onChange({...dia,entradas:[...entradas,{cluster:pdvSel,colonia:null}]});
+    setPdvSel('');
+  };
+  const quitar=i=>onChange({...dia,entradas:entradas.filter((_,idx)=>idx!==i)});
+  return <div style={{marginBottom:10,padding:8,border:'1px solid var(--border)',borderRadius:8}}>
+    <div style={{fontWeight:700,fontSize:12,marginBottom:6}}>{label}</div>
+    {entradas.length>0&&<div style={{display:'flex',flexWrap:'wrap',gap:4,marginBottom:6}}>
+      {entradas.map((e,i)=><span key={i} style={{display:'inline-flex',alignItems:'center',gap:4,background:'var(--accent-light)',color:'var(--accent)',padding:'2px 8px',borderRadius:10,fontSize:11,fontWeight:600}}>
+        {e.cluster}
+        <span onClick={()=>quitar(i)} style={{cursor:'pointer',fontWeight:800}}>✕</span>
+      </span>)}
+    </div>}
+    <div style={{marginBottom:6}}>
+      <Autocomplete value={pdvSel} onChange={setPdvSel} placeholder="Buscar punto de venta..." options={puntosDisponibles.map(p=>({value:p,label:p}))}/>
+    </div>
+    <Btn variant="secondary" onClick={agregar} style={{width:'100%',fontSize:12,padding:'6px 10px'}}>+ Agregar</Btn>
+    <div style={{marginTop:8,paddingTop:8,borderTop:'1px dashed var(--border)'}}>
+      <Field label="💬 Comentarios adicionales">
+        <Textarea value={dia.comentarios||''} onChange={e=>onChange({...dia,comentarios:e.target.value})} placeholder="Notas para este día..." style={{minHeight:50,fontSize:13}}/>
+      </Field>
+    </div>
+  </div>;
+}
+
 // ─── Plan ───
 // Objetivo semanal (KPIs comprometidos vs. meta oficial calculada de las metas por ranking del
 // equipo) + resultado real de la semana pasada (precargado del sistema, editable) con % de cumplimiento.
@@ -1311,6 +1354,9 @@ function completitudPlanFila(row){
 
 function PlanTab({data,setData,team,toast,session,refreshKey}){
   const esLider=session.role==='lider';
+  // Coach Promovendedor Punto de Venta: "Zonas a trabajar" se reemplaza por "Puntos de Venta a
+  // trabajar" (catálogo hoja PDV) en vez de cluster/colonia.
+  const esCoachPDV=(session.user.posicion||'').toUpperCase().includes('PROMOVENDEDOR');
   const vendedoresPlan=(team||[]).filter(m=>isVendedor(m.posicion));
   // Meta oficial del equipo: instalaciones = suma de meta semanal por ranking; ventas/validaciones
   // 15% mayor que instalaciones; oportunidades 15% mayor que ventas/validaciones.
@@ -1338,7 +1384,9 @@ function PlanTab({data,setData,team,toast,session,refreshKey}){
   const planPendiente=data.records.filter(r=>r.type==='plan'&&!planesConResultado.has(r.id)&&r.semanaInicio<semanaIniStr).sort((a,b)=>a.semanaInicio.localeCompare(b.semanaInicio))[0]||null;
 
   const[zonasData,setZonasData]=useState({clusterToColonias:{},coloniaToCluster:{},clusters:[]});
-  useEffect(()=>{fetchClustersColonias(session.token).then(list=>setZonasData(buildClusterMap(list)));},[]);
+  useEffect(()=>{if(!esCoachPDV)fetchClustersColonias(session.token).then(list=>setZonasData(buildClusterMap(list)));},[esCoachPDV]);
+  const[puntosVenta,setPuntosVenta]=useState([]);
+  useEffect(()=>{if(esCoachPDV)fetchPDV(session.token).then(setPuntosVenta);},[esCoachPDV]);
 
   // Líder: estado del plan de esta semana de cada uno de sus coaches (leído del Sheet, no del
   // dispositivo local — cada coach lo captura en su propio teléfono).
@@ -1575,10 +1623,17 @@ function PlanTab({data,setData,team,toast,session,refreshKey}){
         <Card title="Acompañamientos">
           <Textarea value={form.vendedores_acompanar} onChange={e=>setForm({...form,vendedores_acompanar:e.target.value})} placeholder="Quién y por qué..." style={{minHeight:50}}/>
         </Card>
+        {esCoachPDV?
+        <Card title="🏬 Puntos de Venta a trabajar en la semana">
+          {puntosVenta.length===0?<p style={{color:'var(--dim)',fontSize:12}}>Cargando puntos de venta…</p>:
+          DIAS_SEMANA.map(d=><PDVDia key={d} label={DIAS_SEMANA_LABEL[d]} dia={form.zonas[d]} puntosDisponibles={puntosVenta} onChange={nuevoDia=>setForm(f=>({...f,zonas:{...f.zonas,[d]:nuevoDia}}))}/>)}
+        </Card>
+        :
         <Card title="🗺️ Zonas a trabajar en la semana">
           {zonasData.clusters.length===0?<p style={{color:'var(--dim)',fontSize:12}}>Cargando clusters/colonias…</p>:
           DIAS_SEMANA.map(d=><ZonaDia key={d} label={DIAS_SEMANA_LABEL[d]} dia={form.zonas[d]} zonasData={zonasData} onChange={nuevoDia=>setForm(f=>({...f,zonas:{...f.zonas,[d]:nuevoDia}}))}/>)}
         </Card>
+        }
       </>}
       <Card title="Resultado esperado">
         <Textarea value={form.resultado_esperado} onChange={e=>setForm({...form,resultado_esperado:e.target.value})} style={{minHeight:50}}/>
