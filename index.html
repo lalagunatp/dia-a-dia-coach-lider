@@ -432,6 +432,20 @@ function instalacionesPorPlan(ventas,inicio,fin){
   });
   return out; // plan -> [venta,...]
 }
+// Instalaciones con canal "Punto de Venta" de un vendedor en un periodo, agrupadas por el punto
+// de venta específico (columna Subcanal) — para Coach/Líder Promovendedor Punto de Venta.
+function instalacionesPorPDV(ventas,inicio,fin){
+  const out={};
+  (ventas||[]).forEach(v=>{
+    if((v.canal||'').trim().toUpperCase()!=='PUNTO DE VENTA')return;
+    if(v.activacion&&enRango(v.activacion,inicio,fin)){
+      const pdv=(v.subcanal||'').trim();
+      const key=(!pdv||pdv==='-')?'Sin especificar':pdv;
+      (out[key]=out[key]||[]).push(v);
+    }
+  });
+  return out; // pdv -> [venta,...]
+}
 // ¿La fecha cae en alguno de los 2 meses anteriores al de `ref` (sin incluir el mes actual)?
 function enVentanaMesesPrevios(fecha,ref){
   if(!fecha)return false;
@@ -1886,6 +1900,8 @@ function DashboardTab({data,team,coaches,session,setTab}){
   const rechazosMotivos={};let rechazosTotalN=0; // motivo -> [{nombre,oportunidad,cuenta}]
   const planesTotalN={};
   const planesDetalle={}; // plan -> [{nombre,cuenta,fecha}]
+  const pdvTotalN={}; // pdv -> instalaciones
+  const pdvPorPlan={}; // pdv -> {plan: n}
   const sinPagarPorPlan={}; // plan -> {n, importe}
   const instaladoPorPlan2m={}; // plan -> instalaciones (pagadas o no) en los 2 meses previos, para el % de sin pagar
   const pendientesPorVendedor=[]; // [{m, pendientes}]
@@ -1909,6 +1925,8 @@ function DashboardTab({data,team,coaches,session,setTab}){
   const[expandedPendienteVendedorLider,setExpandedPendienteVendedorLider]=useState(null);
   const[expandedPlanSinPagar,setExpandedPlanSinPagar]=useState(null);
   const[expandedCoachEquipo,setExpandedCoachEquipo]=useState(null);
+  const[abrirPDV,setAbrirPDV]=useState(false);
+  const[expandedPDV,setExpandedPDV]=useState(null);
   vendedores.forEach(m=>{
     const f=funnelPeriodo(m.ventas,rangoIni,rangoFin);
     ventasTotal.oportunidades+=f.oportunidades;
@@ -1936,6 +1954,12 @@ function DashboardTab({data,team,coaches,session,setTab}){
         (cLider.planes[p]=cLider.planes[p]||[]).push(...items.map(v=>({nombre:m.nombre,cuenta:v.cuenta,fecha:v.activacion})));
       }
     });
+    const porPDV=instalacionesPorPDV(m.ventas,rangoIni,rangoFin);
+    Object.entries(porPDV).forEach(([pdv,items])=>{
+      pdvTotalN[pdv]=(pdvTotalN[pdv]||0)+items.length;
+      const porPlanPDV=pdvPorPlan[pdv]=pdvPorPlan[pdv]||{};
+      items.forEach(v=>{const p=normalizarPlan(v.plan);porPlanPDV[p]=(porPlanPDV[p]||0)+1;});
+    });
     cuentasSinPagar(m.cuentasCom,now).forEach(c=>{
       const p=normalizarPlan(c.plan);
       const b=sinPagarPorPlan[p]=sinPagarPorPlan[p]||{n:0,importe:0};
@@ -1961,6 +1985,12 @@ function DashboardTab({data,team,coaches,session,setTab}){
   });
   const motivosOrdenados=Object.entries(rechazosMotivos).sort((a,b)=>b[1].length-a[1].length);
   const planesOrdenados=Object.entries(planesTotalN).sort((a,b)=>b[1]-a[1]);
+  const pdvOrdenados=Object.entries(pdvTotalN).sort((a,b)=>b[1]-a[1]);
+  // Panel "Ventas por Punto de Venta": solo para Coach Promovendedor Punto de Venta, o Líder
+  // que tenga al menos un coach de ese tipo en su equipo.
+  const hayCoachPDV=esLider
+    ?(coaches||[]).some(c=>(c.posicion||'').toUpperCase().includes('PROMOVENDEDOR'))
+    :(session.user.posicion||'').toUpperCase().includes('PROMOVENDEDOR');
   const sinPagarPorPlanOrdenado=Object.entries(sinPagarPorPlan).sort((a,b)=>b[1].n-a[1].n);
   const sinPagarPorPlanTotales=Object.values(sinPagarPorPlan).reduce((acc,b)=>({n:acc.n+b.n,importe:acc.importe+b.importe}),{n:0,importe:0});
   const instaladoPorPlan2mTotal=Object.values(instaladoPorPlan2m).reduce((a,b)=>a+b,0);
@@ -2224,6 +2254,31 @@ function DashboardTab({data,team,coaches,session,setTab}){
       </div>
       <Gauge value={ventasTotal.instaladas} goal={metaInstalTotal} label={`Instalaciones vs meta (${periodoVentas})`} icon="🎯"/>
     </Card>
+
+    {hayCoachPDV&&pdvOrdenados.length>0&&
+      <PanelAcordeon title={`🏬 Ventas por Punto de Venta — ${labelPeriodoVentas}`} abierto={abrirPDV} onToggle={()=>setAbrirPDV(!abrirPDV)}>
+        {pdvOrdenados.map(([pdv,n])=>{
+          const isExp=expandedPDV===pdv;
+          const planesPDV=Object.entries(pdvPorPlan[pdv]||{}).sort((a,b)=>b[1]-a[1]);
+          return <div key={pdv}>
+            <div onClick={()=>setExpandedPDV(isExp?null:pdv)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:12,padding:'6px 2px',borderBottom:isExp?'none':'1px solid var(--border)',cursor:'pointer'}}>
+              <span>{pdv}</span>
+              <span style={{display:'flex',alignItems:'center',gap:6}}>
+                <b>{n}</b>
+                <span style={{fontSize:11,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
+              </span>
+            </div>
+            {isExp&&<div style={{background:'var(--bg)',borderRadius:6,padding:'6px 8px',marginBottom:6}}>
+              {planesPDV.map(([p,cnt])=>
+                <div key={p} style={{display:'flex',justifyContent:'space-between',fontSize:11,color:'var(--dim)',padding:'3px 0',borderBottom:'1px solid var(--border)'}}>
+                  <span>{p}</span><b>{cnt}</b>
+                </div>
+              )}
+            </div>}
+          </div>;
+        })}
+      </PanelAcordeon>
+    }
 
     {rechazosTotalN>0&&
       <PanelAcordeon title={`❌ Motivos de rechazo OPORTUNIDADES — ${labelPeriodoVentas} (${rechazosTotalN})`} abierto={abrirRechazos} onToggle={()=>setAbrirRechazos(!abrirRechazos)}>
