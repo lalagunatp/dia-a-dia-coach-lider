@@ -857,10 +857,16 @@ function LoginScreen({onLogin}){
 // ─── Arranque ───
 function ArranqueTab({data,setData,team,toast,session,refreshKey}){
   const esLider=session.role==='lider';
-  const[form,setForm]=useState({date:today(),time:now(),photo:null,presentes:[],ausentes:[],notas:''});
+  // Coach Promovendedor Punto de Venta: arranca en un punto de venta, oficina o con su líder
+  // (foto de grupo normal), pero además visita el punto de venta de CADA vendedor a su cargo —
+  // ahí necesita una foto (con sello) por vendedor, presente o ausente, como evidencia de la
+  // visita, y no puede guardar hasta tener la foto de todos.
+  const esCoachPDV=(session.user.posicion||'').toUpperCase().includes('PROMOVENDEDOR');
+  const[form,setForm]=useState({date:today(),time:now(),photo:null,presentes:[],ausentes:[],fotosVendedores:{},notas:''});
   useEffect(()=>{setForm(f=>({...f,presentes:team.map(m=>m.nombre),ausentes:[]}));},[team]);
   const toggle=name=>{setForm(f=>{const p=f.presentes.includes(name);return{...f,presentes:p?f.presentes.filter(n=>n!==name):[...f.presentes,name],ausentes:p?[...f.ausentes,{name,reason:'Falta justificada',detail:'',photo:null}]:f.ausentes.filter(a=>a.name!==name)};});};
   const updAus=(name,field,val)=>setForm(f=>({...f,ausentes:f.ausentes.map(a=>a.name===name?{...a,[field]:val}:a)}));
+  const setFotoVendedor=(name,photo)=>setForm(f=>({...f,fotosVendedores:{...f.fotosVendedores,[name]:photo}}));
 
   // Líder: estatus de arranque de hoy de cada coach (leído del Sheet, cada coach lo guarda en su
   // propio teléfono) + qué coach le toca priorizar hoy según su Plan de la semana ya guardado.
@@ -880,9 +886,13 @@ function ArranqueTab({data,setData,team,toast,session,refreshKey}){
 
   const guardar=async()=>{
     if(!form.photo){alert(esLider?'Agrega la foto con el coach prioridad del día para poder guardar el arranque':'Agrega la foto de grupo para poder guardar el arranque');return;}
+    if(esCoachPDV){
+      const faltantes=team.filter(m=>!form.fotosVendedores[m.nombre]);
+      if(faltantes.length){alert('Falta la foto del punto de venta de: '+faltantes.map(m=>m.nombre).join(', ')+'. Cada vendedor necesita su foto para poder guardar el arranque.');return;}
+    }
     const rec={id:uid(),type:'arranque',...form,registradoPor:session.user.nombre,rolRegistro:session.role,token:session.token,savedAt:new Date().toISOString()};
     const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast,setData);toast('✅ Arranque guardado');
-    setForm({date:today(),time:now(),photo:null,presentes:team.map(m=>m.nombre),ausentes:[],notas:''});
+    setForm({date:today(),time:now(),photo:null,presentes:team.map(m=>m.nombre),ausentes:[],fotosVendedores:{},notas:''});
   };
   return <div>
     <Card title="☀️ Arranque del día">
@@ -924,6 +934,7 @@ function ArranqueTab({data,setData,team,toast,session,refreshKey}){
         team.map(m=>{
           const present=form.presentes.includes(m.nombre);
           const aus=form.ausentes.find(a=>a.name===m.nombre);
+          const fotoVendedor=form.fotosVendedores[m.nombre]||null;
           return <div key={m.numEmp||m.nombre} style={{padding:'8px 10px',borderRadius:8,marginBottom:6,border:`1.5px solid ${present?'var(--green)':'var(--red)'}`,background:present?'var(--gbg)':'var(--rbg)'}}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
               <div><span style={{fontWeight:600,fontSize:13}}>{m.nombre}</span>
@@ -937,7 +948,11 @@ function ArranqueTab({data,setData,team,toast,session,refreshKey}){
                 <Select value={aus.reason} onChange={v=>updAus(m.nombre,'reason',v)} options={ABSENCE_REASONS} style={{flex:1,minWidth:130}}/>
                 <Input placeholder="Detalle..." value={aus.detail} onChange={e=>updAus(m.nombre,'detail',e.target.value)} style={{flex:2,minWidth:130}}/>
               </div>
-              <PhotoCapture photo={aus.photo} onCapture={p=>updAus(m.nombre,'photo',p)} label="📷 Agregar evidencia (foto/plática)"/>
+              {!esCoachPDV&&<PhotoCapture photo={aus.photo} onCapture={p=>updAus(m.nombre,'photo',p)} label="📷 Agregar evidencia (foto/plática)"/>}
+            </div>}
+            {esCoachPDV&&<div style={{marginTop:6}}>
+              <PhotoCaptureGeo photo={fotoVendedor} onCapture={p=>setFotoVendedor(m.nombre,p)} coachName={session.user.nombre} toast={toast} label="📷 Foto en el punto de venta (con sello, obligatoria)"/>
+              {form.photo&&!fotoVendedor&&<button type="button" onClick={()=>setFotoVendedor(m.nombre,form.photo)} style={{marginTop:4,fontSize:11,background:'none',border:'none',color:'var(--accent)',cursor:'pointer',textDecoration:'underline',padding:0}}>📎 Usar la misma foto del Arranque del día</button>}
             </div>}
           </div>;
         })}
