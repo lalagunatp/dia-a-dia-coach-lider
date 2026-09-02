@@ -2129,7 +2129,7 @@ function DashboardTab({data,team,coaches,session,setTab}){
               </div>
               <div style={{display:'flex',justifyContent:'space-between',gap:6,marginTop:1}}>
                 <span>{c.plan}</span>
-                <span style={{color:'var(--red)',fontWeight:600,textAlign:'right'}}>{fmtMoney(c.importe)}{motivoNoPagado(c)&&` · ${motivoNoPagado(c)}`}</span>
+                <span style={{color:'var(--red)',fontWeight:600,textAlign:'right'}}>{fmtMoney(c.importe)}</span>
               </div>
             </div>
           )}
