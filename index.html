@@ -351,6 +351,26 @@ async function refrescarDatosSesion(token){
 // Las fechas viajan como texto ISO (JSON no tiene tipo Date) y se reconstruyen aquí.
 const reviveFecha=s=>s?new Date(s):null;
 
+// Al guardar la sesión en localStorage (para poder abrir la app sin señal) las fechas dentro de
+// ventas/cuentasCom se vuelven texto — igual que cuando viajan del servidor — y hay que
+// reconstruirlas al leerla de vuelta, o cualquier código que espere un Date ahí (cuentasSinPagar,
+// funnelPeriodo, etc.) truena. Los fetch frescos (login, "Actualizar información") no lo
+// necesitan: ya pasan por reviveFecha en fetchVentasComisiones antes de guardarse.
+function revivirFechasMiembro(m){
+  return {
+    ...m,
+    ventas:(m.ventas||[]).map(v=>({...v,creacion:reviveFecha(v.creacion),validacion:reviveFecha(v.validacion),activacion:reviveFecha(v.activacion)})),
+    cuentasCom:(m.cuentasCom||[]).map(c=>({...c,fechaInstalacion:reviveFecha(c.fechaInstalacion)})),
+  };
+}
+function revivirFechasSesion(session){
+  return {
+    ...session,
+    team:(session.team||[]).map(revivirFechasMiembro),
+    coaches:(session.coaches||[]).map(revivirFechasMiembro),
+  };
+}
+
 async function fetchVentasComisiones(token){
   const vacio={ventasByVendedor:{},cuentasByHomologado:{},asignacionesPorOS:{}};
   if(!token)return vacio;
@@ -3007,7 +3027,7 @@ function App(){
       const s=localStorage.getItem('sv2-session');
       if(!s)return;
       const parsed=JSON.parse(s);
-      if(parsed&&parsed.token&&parsed.user&&parsed.role)setSession(parsed);
+      if(parsed&&parsed.token&&parsed.user&&parsed.role)setSession(revivirFechasSesion(parsed));
       else localStorage.removeItem('sv2-session');
     }catch{localStorage.removeItem('sv2-session');}
   },[]);

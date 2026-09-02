@@ -44,7 +44,13 @@ self.addEventListener('fetch',e=>{
     // red sigue intentando en segundo plano y actualiza la caché para la próxima vez.
     e.respondWith((async()=>{
       const netPromise=fetch(e.request).then(r=>{
-        if(r&&r.ok)caches.open(CACHE).then(c=>c.put('./index.html',r.clone()));
+        // Clonar YA, antes de devolver r — si se deja para dentro del .then de abajo (que corre
+        // después, cuando resuelva caches.open), el navegador ya pudo haber empezado a consumir el
+        // cuerpo de r vía respondWith, y clonar en ese momento truena ("Response body is already used").
+        if(r&&r.ok){
+          const copia=r.clone();
+          caches.open(CACHE).then(c=>c.put('./index.html',copia));
+        }
         return r;
       }).catch(()=>null);
       const timeout=new Promise(res=>setTimeout(()=>res(null),3000));
