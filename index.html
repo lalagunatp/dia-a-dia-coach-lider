@@ -12,15 +12,16 @@
 <link rel="manifest" href="./manifest.json">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📋</text></svg>">
 <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='18' fill='%231e40af'/><text x='50' y='68' font-size='60' text-anchor='middle'>📋</text></svg>">
-<link rel="preconnect" href="https://unpkg.com">
-<link rel="dns-prefetch" href="https://unpkg.com">
-<!-- Versión fijada (antes "@18"/sin versión): permite que sw.js las cachee y la app arranque sin
-     depender de que unpkg.com responda en ese momento — más rápido y sin importar la compañía celular.
-     Sin crossorigin: sw.js las cachea en modo no-cors (respuesta opaca), y un <script crossorigin>
-     exige respuesta CORS real — con las dos cosas juntas el navegador se niega a ejecutar el script. -->
-<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
-<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
-<script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
+<!-- React/ReactDOM/Babel vendorizados en ./vendor (mismo origen que este archivo, servidos por
+     GitHub Pages) en vez de bajarlos de unpkg.com en cada arranque. Antes, aunque el HTML cargara
+     bien desde GitHub Pages, el arranque completo dependía de que el navegador TAMBIÉN pudiera
+     alcanzar un segundo origen distinto (unpkg.com/Cloudflare) — con una red que tuviera problemas
+     específicamente con ese CDN (o solo con ese, no con Fastly/GitHub Pages), la app se quedaba en
+     blanco aunque el resto sí cargara. Con todo bajo el mismo origen, un solo camino de red decide
+     si la app arranca o no. Versión: react-dom 18.3.1, babel standalone 7.24.7. -->
+<script src="./vendor/react.production.min.js"></script>
+<script src="./vendor/react-dom.production.min.js"></script>
+<script src="./vendor/babel.min.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:#f0f2f8;color:#1a1d29;-webkit-font-smoothing:antialiased}
@@ -43,6 +44,16 @@ const{useState,useEffect,useRef,useCallback}=React;
 // Ya no queda ningún dato (ni siquiera el catálogo de Clusters/Colonias) leído directo del
 // navegador por gviz — todo pasa por el servidor con token, ver apps-script.gs.
 const DOPOST_URL='https://script.google.com/macros/s/AKfycbx7DYc01sJV7QJsA9kVdtgW0JOZdyySjLqqHzszA9qsDE3xt8kpr7SfrdF2KqseVTr0/exec';
+// Con datos móviles inestables, un fetch a Apps Script puede quedarse colgado (ni resuelve ni
+// truena) en vez de fallar rápido — sin este tope, eso dejaba el login (u otros fetch) esperando
+// para siempre con el spinner puesto, sin ningún mensaje de error. 25s es holgado (Apps Script
+// puede tardar varios segundos leyendo hojas grandes), pero acotado.
+function fetchConTope(url,opts,ms=25000){
+  return Promise.race([
+    fetch(url,opts),
+    new Promise((_,rej)=>setTimeout(()=>rej(new Error('La conexión está tardando demasiado, intenta de nuevo')),ms)),
+  ]);
+}
 // Debe coincidir con VENTAS_LOOKBACK_MESES en apps-script.gs, que es donde de verdad se aplica
 // el filtro ahora (obtenerVentasComisiones) — aquí solo se usa para que el navegador de "Ventas
 // del equipo" en el Dashboard no deje hojear a un periodo más viejo del que el servidor trae.
@@ -94,7 +105,7 @@ async function sendToSheet(record){
   try{
     // Las fotos SÍ se envían: el Apps Script las sube a Drive y guarda la liga en el Sheet.
     const payload={...record};
-    const res=await fetch(DOPOST_URL,{method:'POST',body:JSON.stringify(payload),headers:{'Content-Type':'text/plain'}});
+    const res=await fetchConTope(DOPOST_URL,{method:'POST',body:JSON.stringify(payload),headers:{'Content-Type':'text/plain'}});
     const json=await res.json();
     return json;
   }catch(e){
@@ -178,7 +189,7 @@ async function retryPending(toast,setData){
 async function fetchHistorialEquipo(hoja,token){
   if(!DOPOST_URL||!token)return[];
   try{
-    const res=await fetch(`${DOPOST_URL}?accion=historial&hoja=${encodeURIComponent(hoja||'ARRANQUE')}&token=${encodeURIComponent(token)}`);
+    const res=await fetchConTope(`${DOPOST_URL}?accion=historial&hoja=${encodeURIComponent(hoja||'ARRANQUE')}&token=${encodeURIComponent(token)}`);
     const json=await res.json();
     if(!json.ok)return[];
     return json.registros||[];
@@ -294,14 +305,14 @@ function textoCierre(rec){
 // (historial, doPost) — así ya no hace falta reenviar el PIN después de este primer paso.
 async function fetchLogin(numEmp,pin){
   try{
-    const res=await fetch(`${DOPOST_URL}?accion=login&numEmp=${encodeURIComponent(numEmp)}&pin=${encodeURIComponent(pin)}`);
+    const res=await fetchConTope(`${DOPOST_URL}?accion=login&numEmp=${encodeURIComponent(numEmp)}&pin=${encodeURIComponent(pin)}`);
     return await res.json();
   }catch(e){return{ok:false,error:'Error de conexión, intenta de nuevo'};}
 }
 // Re-trae team/coaches/role con el token (sin volver a pedir el PIN) — botón "Actualizar información".
 async function fetchPerfil(token){
   try{
-    const res=await fetch(`${DOPOST_URL}?accion=perfil&token=${encodeURIComponent(token)}`);
+    const res=await fetchConTope(`${DOPOST_URL}?accion=perfil&token=${encodeURIComponent(token)}`);
     return await res.json();
   }catch(e){return{ok:false,error:'Error de conexión, intenta de nuevo'};}
 }
@@ -344,7 +355,7 @@ async function fetchVentasComisiones(token){
   const vacio={ventasByVendedor:{},cuentasByHomologado:{},asignacionesPorOS:{}};
   if(!token)return vacio;
   try{
-    const res=await fetch(`${DOPOST_URL}?accion=ventas&token=${encodeURIComponent(token)}`);
+    const res=await fetchConTope(`${DOPOST_URL}?accion=ventas&token=${encodeURIComponent(token)}`);
     const json=await res.json();
     if(!json.ok){console.error('Ventas fetch error:',json.error);return vacio;}
     const ventasByVendedor={};
@@ -363,7 +374,7 @@ async function fetchRanking(token){
   const vacio={rankEnt:{},rankMen:{}};
   if(!token)return vacio;
   try{
-    const res=await fetch(`${DOPOST_URL}?accion=ranking&token=${encodeURIComponent(token)}`);
+    const res=await fetchConTope(`${DOPOST_URL}?accion=ranking&token=${encodeURIComponent(token)}`);
     const json=await res.json();
     if(!json.ok){console.error('Ranking fetch error:',json.error);return vacio;}
     return{rankEnt:json.rankEnt||{},rankMen:json.rankMen||{}};
@@ -382,7 +393,7 @@ function leerCatalogoCache(key){try{const s=localStorage.getItem('sv2-cat-'+key)
 async function fetchClustersColonias(token){
   if(!token)return leerCatalogoCache('clusters');
   try{
-    const res=await fetch(`${DOPOST_URL}?accion=clusters&token=${encodeURIComponent(token)}`);
+    const res=await fetchConTope(`${DOPOST_URL}?accion=clusters&token=${encodeURIComponent(token)}`);
     const json=await res.json();
     if(!json.ok){console.error('Clusters/Colonias fetch error:',json.error);return leerCatalogoCache('clusters');}
     cacheCatalogo('clusters',json.clusters||[]);
@@ -401,7 +412,7 @@ function buildClusterMap(list){
 async function fetchPDV(token){
   if(!token)return leerCatalogoCache('pdv');
   try{
-    const res=await fetch(`${DOPOST_URL}?accion=pdv&token=${encodeURIComponent(token)}`);
+    const res=await fetchConTope(`${DOPOST_URL}?accion=pdv&token=${encodeURIComponent(token)}`);
     const json=await res.json();
     if(!json.ok){console.error('PDV fetch error:',json.error);return leerCatalogoCache('pdv');}
     cacheCatalogo('pdv',json.puntos||[]);

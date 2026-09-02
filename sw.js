@@ -1,21 +1,28 @@
-const CACHE='sv2-shell-v2';
-const SHELL=['./','./index.html','./manifest.json'];
-// Versión fijada de React/ReactDOM/Babel standalone (antes sin versión / "@18" sin fijar): permite
-// cachearlas aquí y arrancar la app sin depender de que unpkg.com responda en ese momento — clave
-// para que entre rápido y funcione igual con cualquier compañía celular, no solo con wifi.
-const CDN=[
-  'https://unpkg.com/react@18.3.1/umd/react.production.min.js',
-  'https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js',
-  'https://unpkg.com/@babel/standalone@7.24.7/babel.min.js',
-];
+const CACHE='sv2-shell-v4';
+// React/ReactDOM/Babel ahora viven en ./vendor (mismo origen, servidos por GitHub Pages) en vez de
+// bajarse de unpkg.com — un solo origen decide si la app arranca, no dos. Se cachean aquí junto con
+// el resto del shell, con el mismo camino simple que ./index.html (ya no hace falta el manejo
+// especial "no-cors" que necesitaban cuando venían de un origen distinto).
+const SHELL=['./','./index.html','./manifest.json','./vendor/react.production.min.js','./vendor/react-dom.production.min.js','./vendor/babel.min.js'];
+
+// Con datos móviles inestables un fetch puede quedarse "colgado" (ni resuelve ni truena) en vez de
+// fallar rápido — sin este tope, eso bloqueaba la instalación completa del service worker (si UN
+// solo archivo no respondía, quedaba detenido) o dejaba una carga de script esperando para siempre.
+// Con el tope, lo peor que pasa es que ese archivo en particular no queda pre-cacheado esta vez, no
+// que toda la app se quede en blanco.
+function fetchConTope(req,opts,ms){
+  return Promise.race([
+    fetch(req,opts),
+    new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),ms)),
+  ]);
+}
 
 self.addEventListener('install',e=>{
-  e.waitUntil(Promise.all([
-    caches.open(CACHE).then(c=>c.addAll(SHELL)),
-    caches.open(CACHE).then(c=>Promise.all(CDN.map(u=>
-      fetch(u,{mode:'no-cors'}).then(r=>c.put(u,r)).catch(()=>{})
-    ))),
-  ]));
+  e.waitUntil(
+    caches.open(CACHE).then(c=>Promise.all(SHELL.map(u=>
+      fetchConTope(u,undefined,10000).then(r=>c.put(u,r)).catch(()=>{})
+    )))
+  );
   self.skipWaiting();
 });
 
@@ -24,22 +31,10 @@ self.addEventListener('activate',e=>{
   self.clients.claim();
 });
 
-// Solo se cachea el shell de la app (HTML/manifest), React/ReactDOM/Babel (versión fija, nunca
-// cambian) y el catálogo de Clusters/PDV (ver index.html: fetchClustersColonias/fetchPDV, que
-// tienen su propio respaldo en localStorage). Todo lo demás (Sheets, Apps Script, fotos) va
-// directo a red para no servir datos desactualizados.
+// Solo se cachea el shell de la app (HTML/manifest/React/ReactDOM/Babel, todo mismo origen y
+// versión fija). Todo lo demás (Sheets, Apps Script, fotos) va directo a red para no servir datos
+// desactualizados — esos tienen su propio respaldo en localStorage (ver index.html).
 self.addEventListener('fetch',e=>{
-  // React/ReactDOM/Babel: caché primero — arranca la app al instante sin esperar a unpkg.com.
-  if(CDN.includes(e.request.url)){
-    e.respondWith(
-      caches.match(e.request).then(cached=>cached||fetch(e.request,{mode:'no-cors'}).then(r=>{
-        caches.open(CACHE).then(c=>c.put(e.request,r.clone()));
-        return r;
-      }))
-    );
-    return;
-  }
-
   const url=new URL(e.request.url);
   if(url.origin!==location.origin)return;
 
@@ -61,6 +56,6 @@ self.addEventListener('fetch',e=>{
     return;
   }
   if(SHELL.some(s=>url.pathname.endsWith(s.replace('./','')))){
-    e.respondWith(caches.match(e.request).then(r=>r||fetch(e.request)));
+    e.respondWith(caches.match(e.request).then(r=>r||fetchConTope(e.request,undefined,15000)));
   }
 });
