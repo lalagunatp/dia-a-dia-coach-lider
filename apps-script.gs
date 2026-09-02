@@ -389,6 +389,7 @@ function obtenerVentasComisiones(params) {
           cuenta: String(r[14] || '').trim(), // O
           plan: String(r[15] || '').trim(), // P
           oportunidad: String(r[16] || '').trim(), // Q
+          arpu: Number(r[18]) || 0, // S — con IVA; el cliente lo divide entre 1.16 para el ARPU sin IVA
         });
       });
     }

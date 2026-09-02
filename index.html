@@ -456,6 +456,13 @@ function funnelPeriodo(ventas,inicio,fin){
   });
   return f;
 }
+// ARPU promedio (columna S de BASE DE DATOS, sin IVA ÷1.16) de las ventas activadas/instaladas de
+// un vendedor en un periodo.
+function arpuPromedioPeriodo(ventas,inicio,fin){
+  const activadas=(ventas||[]).filter(v=>v.activacion&&enRango(v.activacion,inicio,fin));
+  if(!activadas.length)return 0;
+  return activadas.reduce((s,v)=>s+(Number(v.arpu)||0),0)/activadas.length/1.16;
+}
 // Oportunidades rechazadas de un vendedor en un periodo (agrupadas por fecha de oportunidad).
 function rechazosPeriodo(ventas,inicio,fin){
   return(ventas||[]).filter(v=>v.estatus==='Rechazada'&&enRango(v.creacion,inicio,fin));
@@ -1959,6 +1966,7 @@ function DashboardTab({data,team,coaches,session,setTab}){
   const sinPagarPorPlan={}; // plan -> {n, importe}
   const instaladoPorPlan2m={}; // plan -> instalaciones (pagadas o no) entre 25 y 90 días, para el % de sin pagar
   const pendientesPorVendedor=[]; // [{m, pendientes}]
+  const arpuPorVendedor=[]; // [{m, arpu, n}] — ARPU promedio (sin IVA) de lo activado/instalado en el periodo
   // Mismos datos que arriba, pero agregados por coach (solo se llena si esLider).
   const porCoachLider={};
   if(esLider){
@@ -1972,6 +1980,7 @@ function DashboardTab({data,team,coaches,session,setTab}){
   const[abrirRechazos,setAbrirRechazos]=useState(false);
   const[abrirPlanes,setAbrirPlanes]=useState(false);
   const[abrirPendientesPanel,setAbrirPendientesPanel]=useState(false);
+  const[abrirArpu,setAbrirArpu]=useState(false);
   const[abrirSinPagarPlan,setAbrirSinPagarPlan]=useState(false);
   const[expandedCoachRechazo,setExpandedCoachRechazo]=useState(null);
   const[expandedCoachPlan,setExpandedCoachPlan]=useState(null);
@@ -2014,6 +2023,11 @@ function DashboardTab({data,team,coaches,session,setTab}){
       const porPlanPDV=pdvPorPlan[pdv]=pdvPorPlan[pdv]||{};
       items.forEach(v=>{const p=normalizarPlan(v.plan);porPlanPDV[p]=(porPlanPDV[p]||0)+1;});
     });
+    const instaladasArpu=(m.ventas||[]).filter(v=>v.activacion&&enRango(v.activacion,rangoIni,rangoFin));
+    if(instaladasArpu.length){
+      const arpuProm=instaladasArpu.reduce((s,v)=>s+(Number(v.arpu)||0),0)/instaladasArpu.length/1.16;
+      arpuPorVendedor.push({m,arpu:arpuProm,n:instaladasArpu.length});
+    }
     cuentasSinPagar(m.cuentasCom,now).forEach(c=>{
       const p=normalizarPlan(c.plan);
       const b=sinPagarPorPlan[p]=sinPagarPorPlan[p]||{n:0,importe:0};
@@ -2045,6 +2059,12 @@ function DashboardTab({data,team,coaches,session,setTab}){
   const hayCoachPDV=esLider
     ?(coaches||[]).some(c=>(c.posicion||'').toUpperCase().includes('PROMOVENDEDOR'))
     :(session.user.posicion||'').toUpperCase().includes('PROMOVENDEDOR');
+  const arpuPorVendedorOrdenado=arpuPorVendedor.slice().sort((a,b)=>b.arpu-a.arpu);
+  const arpuGeneral=(()=>{
+    const totalN=arpuPorVendedor.reduce((s,x)=>s+x.n,0);
+    if(!totalN)return 0;
+    return arpuPorVendedor.reduce((s,x)=>s+x.arpu*x.n,0)/totalN;
+  })();
   const sinPagarPorPlanOrdenado=Object.entries(sinPagarPorPlan).sort((a,b)=>b[1].n-a[1].n);
   const sinPagarPorPlanTotales=Object.values(sinPagarPorPlan).reduce((acc,b)=>({n:acc.n+b.n,importe:acc.importe+b.importe}),{n:0,importe:0});
   const instaladoPorPlan2mTotal=Object.values(instaladoPorPlan2m).reduce((a,b)=>a+b,0);
@@ -2138,13 +2158,15 @@ function DashboardTab({data,team,coaches,session,setTab}){
       {(()=>{
         const fSem=funnelPeriodo(m.ventas,semanaIni,semanaFin);
         const fMes=funnelPeriodo(m.ventas,mesIni,mesFin);
+        const arpuSem=arpuPromedioPeriodo(m.ventas,semanaIni,semanaFin);
+        const arpuMes=arpuPromedioPeriodo(m.ventas,mesIni,mesFin);
         const meta=metaMensual(m.badge);
         const sinPagar=cuentasSinPagar(m.cuentasCom,now);
         if(!m.ventas?.length&&!sinPagar.length)return null;
         return <div style={{padding:'6px 8px',background:'var(--card)',borderRadius:6,marginBottom:6}}>
           <div style={{fontSize:11,fontWeight:700,color:'var(--dim)',marginBottom:3}}>🛒 Ventas</div>
-          <div style={{display:'flex',justifyContent:'space-between'}}><span>Semana:</span><span>{fSem.oportunidades} op · {fSem.validadas} val · {fSem.instaladas} inst</span></div>
-          <div style={{display:'flex',justifyContent:'space-between'}}><span>Mes:</span><span>{fMes.oportunidades} op · {fMes.validadas} val · {fMes.instaladas} inst</span></div>
+          <div style={{display:'flex',justifyContent:'space-between'}}><span>Semana:</span><span>{fSem.oportunidades} op · {fSem.validadas} val · {fSem.instaladas} inst{arpuSem>0?` · ARPU ${fmtMoney(arpuSem)}`:''}</span></div>
+          <div style={{display:'flex',justifyContent:'space-between'}}><span>Mes:</span><span>{fMes.oportunidades} op · {fMes.validadas} val · {fMes.instaladas} inst{arpuMes>0?` · ARPU ${fmtMoney(arpuMes)}`:''}</span></div>
           {meta>0&&<div style={{display:'flex',justifyContent:'space-between'}}><span>Meta del mes:</span><b>{fMes.instaladas}/{meta}</b></div>}
         </div>;
       })()}
@@ -2528,6 +2550,18 @@ function DashboardTab({data,team,coaches,session,setTab}){
             </div>}
           </div>;
         })}
+      </PanelAcordeon>
+    }
+
+    {arpuPorVendedorOrdenado.length>0&&
+      <PanelAcordeon title={`💵 ARPU promedio por vendedor — ${labelPeriodoVentas} (${fmtMoney(arpuGeneral)})`} abierto={abrirArpu} onToggle={()=>setAbrirArpu(!abrirArpu)}>
+        {arpuPorVendedorOrdenado.map(({m,arpu,n})=>
+          <div key={m.numEmp||m.nombre} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'6px 2px',borderBottom:'1px solid var(--border)'}}>
+            <span style={{fontSize:12,fontWeight:600}}>{m.nombre.split(' ').slice(0,3).join(' ')}</span>
+            <span style={{fontSize:12}}><b>{fmtMoney(arpu)}</b> <span style={{fontSize:10,color:'var(--dim)'}}>({n} inst.)</span></span>
+          </div>
+        )}
+        <p style={{fontSize:10,color:'var(--dim)',marginTop:6}}>Promedio sin IVA de lo activado/instalado en el periodo (columna S de BASE DE DATOS ÷ 1.16).</p>
       </PanelAcordeon>
     }
 
