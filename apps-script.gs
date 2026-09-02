@@ -144,16 +144,31 @@ function construirEquipo(user, allEmployees) {
   return { team: team, coaches: coaches, role: role };
 }
 
+// Un login completo dispara ?accion=login y LUEGO, por separado, ?accion=ventas y ?accion=ranking
+// (cada uno una ejecución de Apps Script aparte) — sin caché, eso eran 3 lecturas completas de
+// PLANTILLA para una sola entrada a la app, cuando solo hacía falta leerla una vez. Se cachea aquí
+// (CacheService, compartido entre ejecuciones, 2 minutos) para que las 2 siguientes lo aprovechen.
+// Cabe en el límite de 100KB de CacheService salvo que la plantilla crezca mucho — si algún día no
+// cabe, cache.put() truena, se atrapa, y sigue funcionando igual de bien sin el acelerón.
+const ROSTER_CACHE_KEY = 'roster_v1';
+const ROSTER_CACHE_TTL_S = 120;
+
 // Lee PLANTILLA de BASE LA LAGUNA 2026 ya parseada a objetos (getValues ignora el
 // inmovilizado, a diferencia de gviz — ver nota arriba). Incluye el PIN: por eso esta
 // función NUNCA debe usarse para construir una respuesta que salga tal cual al cliente
 // — siempre pasar cada empleado por sinPin() antes de regresarlo.
 function leerRosterCompleto() {
+  const cache = CacheService.getScriptCache();
+  try {
+    const cached = cache.get(ROSTER_CACHE_KEY);
+    if (cached) return JSON.parse(cached);
+  } catch (e) { /* si falla la lectura de caché, se sigue con la lectura normal de abajo */ }
+
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID_PLANTILLA);
   const sheet = ss.getSheetByName(PLANTILLA_SHEET_NAME);
   if (!sheet) throw new Error('Hoja no encontrada: ' + PLANTILLA_SHEET_NAME);
   const values = sheet.getDataRange().getValues();
-  return values.map(function (r) {
+  const roster = values.map(function (r) {
     return {
       numEmp: String(r[3] || '').trim(),
       numEmpB: String(r[1] || '').trim(),
@@ -169,6 +184,9 @@ function leerRosterCompleto() {
       pin: String(r[27] || '').trim(),
     };
   }).filter(function (e) { return e.nombre && e.nombre !== 'VACANTE' && e.nombre !== 'NOMBRE DEL EMPLEADO'; });
+
+  try { cache.put(ROSTER_CACHE_KEY, JSON.stringify(roster), ROSTER_CACHE_TTL_S); } catch (e) { /* excede el límite de tamaño u otro problema de CacheService: no pasa nada, solo no se cachea */ }
+  return roster;
 }
 
 function sinPin(e) {
