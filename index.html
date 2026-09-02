@@ -231,7 +231,7 @@ function textoCuentasSinPagar(m,cuentas){
     const motivo=motivoNoPagado(c);
     return `• ${c.cuenta} · ${c.cliente} · ${fmtDateObj(c.fechaInstalacion)} · ${c.plan} · ${fmtMoney(c.importe)}${motivo?' · '+motivo:''}`;
   }).join('\n');
-  return `📋 Cuentas sin pagar de ${m.nombre} (2 meses anteriores):\n\n${lineas}`;
+  return `📋 Cuentas sin pagar de ${m.nombre} (25 a 90 días de instaladas):\n\n${lineas}`;
 }
 function textoPendientesInstalar(m,pendientes,ref){
   const lineas=pendientes.map(v=>{
@@ -490,18 +490,14 @@ function instalacionesPorPDV(ventas,inicio,fin){
   });
   return out; // pdv -> [venta,...]
 }
-// ¿La fecha cae en alguno de los 2 meses anteriores al de `ref` (sin incluir el mes actual)?
-function enVentanaMesesPrevios(fecha,ref){
-  if(!fecha)return false;
-  for(let back=1;back<=2;back++){
-    const d=new Date(ref.getFullYear(),ref.getMonth()-back,1);
-    if(fecha.getFullYear()===d.getFullYear()&&fecha.getMonth()===d.getMonth())return true;
-  }
-  return false;
-}
-// Todas las cuentas instaladas en los 2 meses anteriores al actual (pagadas o no) — el universo contra el que se saca el %.
+// Cuentas activadas/instaladas entre hace 25 y 90 días (ventana rodante por día, no por mes
+// calendario) — pagadas o no, es el universo contra el que se saca el %.
 function cuentasDelPeriodo(cuentas,ref){
-  return(cuentas||[]).filter(c=>enVentanaMesesPrevios(c.fechaInstalacion,ref));
+  return(cuentas||[]).filter(c=>{
+    if(!c.fechaInstalacion)return false;
+    const dias=Math.floor((ref-c.fechaInstalacion)/86400000);
+    return dias>=25&&dias<=90;
+  });
 }
 // De esas, las que aún no se han pagado.
 function cuentasSinPagar(cuentas,ref){
@@ -1950,7 +1946,7 @@ function DashboardTab({data,team,coaches,session,setTab}){
   const pdvTotalN={}; // pdv -> instalaciones
   const pdvPorPlan={}; // pdv -> {plan: n}
   const sinPagarPorPlan={}; // plan -> {n, importe}
-  const instaladoPorPlan2m={}; // plan -> instalaciones (pagadas o no) en los 2 meses previos, para el % de sin pagar
+  const instaladoPorPlan2m={}; // plan -> instalaciones (pagadas o no) entre 25 y 90 días, para el % de sin pagar
   const pendientesPorVendedor=[]; // [{m, pendientes}]
   // Mismos datos que arriba, pero agregados por coach (solo se llena si esLider).
   const porCoachLider={};
@@ -2161,7 +2157,7 @@ function DashboardTab({data,team,coaches,session,setTab}){
           </a>
         </div>;
       })()}
-      {/* Cuentas sin pagar de este vendedor (2 meses anteriores al actual) */}
+      {/* Cuentas sin pagar de este vendedor (25 a 90 días de instaladas) */}
       {(()=>{
         const sinPagar=cuentasSinPagar(m.cuentasCom,now);
         if(!sinPagar.length)return null;
