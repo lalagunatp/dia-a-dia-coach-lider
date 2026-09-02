@@ -364,18 +364,24 @@ async function fetchRanking(token){
   }catch(e){console.error('Ranking fetch error:',e);return vacio;}
 }
 
+// Caché en localStorage de catálogos (clusters/colonias, PDV): si no hay señal en campo, se usa
+// el último catálogo descargado en vez de dejar el formulario de Plan/Permisos sin opciones.
+function cacheCatalogo(key,list){try{localStorage.setItem('sv2-cat-'+key,JSON.stringify(list));}catch{}}
+function leerCatalogoCache(key){try{const s=localStorage.getItem('sv2-cat-'+key);return s?JSON.parse(s):[];}catch{return[];}}
+
 // Catálogo de zonas para el Plan: hoja "Clusters Colonias" del mismo archivo base (Distrito La
 // Laguna). Antes se leía por gviz directo del navegador (exigía que ese archivo tuviera enlace
 // público) — ahora pasa por el Apps Script con token, igual que el resto, así el archivo ya puede
 // restringirse a solo la cuenta del script sin romper nada (ver apps-script.gs: obtenerClusters).
 async function fetchClustersColonias(token){
-  if(!token)return[];
+  if(!token)return leerCatalogoCache('clusters');
   try{
     const res=await fetch(`${DOPOST_URL}?accion=clusters&token=${encodeURIComponent(token)}`);
     const json=await res.json();
-    if(!json.ok){console.error('Clusters/Colonias fetch error:',json.error);return[];}
+    if(!json.ok){console.error('Clusters/Colonias fetch error:',json.error);return leerCatalogoCache('clusters');}
+    cacheCatalogo('clusters',json.clusters||[]);
     return json.clusters||[];
-  }catch(e){console.error('Clusters/Colonias fetch error:',e);return[];}
+  }catch(e){console.error('Clusters/Colonias fetch error:',e);return leerCatalogoCache('clusters');}
 }
 function buildClusterMap(list){
   const clusterToColonias={},coloniaToCluster={};
@@ -387,13 +393,14 @@ function buildClusterMap(list){
 }
 // Catálogo de Puntos de Venta (hoja "PDV", columna A) — Plan de Coach Promovendedor Punto de Venta.
 async function fetchPDV(token){
-  if(!token)return[];
+  if(!token)return leerCatalogoCache('pdv');
   try{
     const res=await fetch(`${DOPOST_URL}?accion=pdv&token=${encodeURIComponent(token)}`);
     const json=await res.json();
-    if(!json.ok){console.error('PDV fetch error:',json.error);return[];}
+    if(!json.ok){console.error('PDV fetch error:',json.error);return leerCatalogoCache('pdv');}
+    cacheCatalogo('pdv',json.puntos||[]);
     return json.puntos||[];
-  }catch(e){console.error('PDV fetch error:',e);return[];}
+  }catch(e){console.error('PDV fetch error:',e);return leerCatalogoCache('pdv');}
 }
 
 // Oportunidades validadas en los últimos 30 días que todavía no se instalan.
@@ -826,7 +833,10 @@ function LoginScreen({onLogin}){
       // (a veces D/numEmp, a veces B/numEmpB según la persona) — se consultan ambas y se cruzan las dos al final.
       const{user,team,coaches,role}=await enriquecerSesion(login,login.token);
       const session={user,team,coaches,role,token:login.token,loginTime:new Date().toISOString()};
-      sessionStorage.setItem('sv2-session',JSON.stringify(session));
+      // localStorage (no sessionStorage): sobrevive a que se cierre por completo el navegador/PWA,
+      // para poder seguir trabajando con los últimos datos aunque no haya señal al reabrir la app
+      // en campo — el botón "Actualizar información" refresca en cuanto vuelve la conexión.
+      localStorage.setItem('sv2-session',JSON.stringify(session));
       onLogin(session);
     }catch(e){
       console.error(e);
@@ -2874,8 +2884,10 @@ function MainApp({session,setSession,onLogout}){
   const hasCie=todayRecs.some(r=>r.type==='cierre');
   const roleLabels={coach:'🏅 Coach',lider:'⭐ Líder',director:'👔 Director',gestor:'🧑‍💼 Gestor CH'};
 
-  // Botón flotante "Actualizar información" (solo líder): re-trae ranking/ventas/cuentas del
+  // Botón flotante "Actualizar información" (todos los roles): re-trae ranking/ventas/cuentas del
   // equipo y fuerza a Arranque/Plan/Permisos a releer el historial del Sheet sin recargar la app.
+  // La sesión se guarda en localStorage y sobrevive a cerrar la app por completo, así que sin esto
+  // los datos podrían quedarse desactualizados indefinidamente entre una conexión y la siguiente.
   const[refreshKey,setRefreshKey]=useState(0);
   const[refreshing,setRefreshing]=useState(false);
   const actualizarInfo=async()=>{
@@ -2885,11 +2897,11 @@ function MainApp({session,setSession,onLogout}){
       const nuevo=await refrescarDatosSesion(session.token);
       const nuevaSesion={...session,...nuevo,loginTime:new Date().toISOString()};
       // Descarta cualquier `allEmployees`/PIN que pudiera venir de una sesión guardada antes de
-      // este cambio (el servidor ya nunca los manda, pero una sesión vieja en sessionStorage sí
+      // este cambio (el servidor ya nunca los manda, pero una sesión vieja guardada localmente sí
       // podría traerlos) — no se vuelven a persistir.
       delete nuevaSesion.allEmployees;
       if(nuevaSesion.user)delete nuevaSesion.user.pin;
-      sessionStorage.setItem('sv2-session',JSON.stringify(nuevaSesion));
+      localStorage.setItem('sv2-session',JSON.stringify(nuevaSesion));
       setSession(nuevaSesion);
       setRefreshKey(k=>k+1);
       toast('🔄 Información actualizada');
@@ -2955,14 +2967,12 @@ function MainApp({session,setSession,onLogout}){
       {tab==='feedback'&&<FeedbackTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
       {tab==='historial'&&<HistorialTab data={data} setData={setData} toast={toast} session={session}/>}
     </div>
-    {role==='lider'&&
-      <button onClick={actualizarInfo} disabled={refreshing} title="Actualizar información"
-        style={{position:'fixed',bottom:20,right:16,zIndex:50,width:52,height:52,borderRadius:'50%',
-          background:'var(--accent)',color:'#fff',border:'none',boxShadow:'0 4px 14px rgba(0,0,0,.3)',
-          fontSize:22,cursor:refreshing?'default':'pointer',display:'flex',alignItems:'center',justifyContent:'center'}}>
-        {refreshing?<span style={{display:'inline-block',width:20,height:20,border:'2.5px solid rgba(255,255,255,.4)',borderTop:'2.5px solid #fff',borderRadius:'50%',animation:'spin .8s linear infinite'}}/>:'🔄'}
-      </button>
-    }
+    <button onClick={actualizarInfo} disabled={refreshing} title="Actualizar información"
+      style={{position:'fixed',bottom:20,right:16,zIndex:50,width:52,height:52,borderRadius:'50%',
+        background:'var(--accent)',color:'#fff',border:'none',boxShadow:'0 4px 14px rgba(0,0,0,.3)',
+        fontSize:22,cursor:refreshing?'default':'pointer',display:'flex',alignItems:'center',justifyContent:'center'}}>
+      {refreshing?<span style={{display:'inline-block',width:20,height:20,border:'2.5px solid rgba(255,255,255,.4)',borderTop:'2.5px solid #fff',borderRadius:'50%',animation:'spin .8s linear infinite'}}/>:'🔄'}
+    </button>
     {toastMsg&&<Toast msg={toastMsg} onClose={()=>setToastMsg('')}/>}
   </div>;
 }
@@ -2970,8 +2980,10 @@ function MainApp({session,setSession,onLogout}){
 // ═══ APP ROOT ═══
 function App(){
   const[session,setSession]=useState(null);
-  useEffect(()=>{try{const s=sessionStorage.getItem('sv2-session');if(s)setSession(JSON.parse(s));}catch{}},[]);
-  const logout=()=>{sessionStorage.removeItem('sv2-session');setSession(null);};
+  // localStorage (no sessionStorage): al reabrir la app en campo sin señal, se entra directo con
+  // la última sesión guardada en vez de quedarse atorado en la pantalla de login.
+  useEffect(()=>{try{const s=localStorage.getItem('sv2-session');if(s)setSession(JSON.parse(s));}catch{}},[]);
+  const logout=()=>{localStorage.removeItem('sv2-session');setSession(null);};
   if(!session)return <LoginScreen onLogin={setSession}/>;
   return <MainApp session={session} setSession={setSession} onLogout={logout}/>;
 }
