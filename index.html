@@ -691,7 +691,8 @@ function PhotoCapture({photo,onCapture,label}){
 }
 // Foto con sello de coach, día/fecha/hora, dirección y coordenadas (geolocalización del dispositivo).
 function PhotoCaptureGeo({photo,onCapture,coachName,toast,label}){
-  const ref=useRef();
+  const refCam=useRef();
+  const refGal=useRef();
   const[loading,setLoading]=useState(false);
   const handle=e=>{
     const f=e.target.files?.[0];if(!f)return;
@@ -756,17 +757,27 @@ function PhotoCaptureGeo({photo,onCapture,coachName,toast,label}){
     r.readAsDataURL(f);
   };
   return <div>
-    <input ref={ref} type="file" accept="image/*" capture="environment" onChange={handle} style={{display:'none'}}/>
+    <input ref={refCam} type="file" accept="image/*" capture="environment" onChange={handle} style={{display:'none'}}/>
+    <input ref={refGal} type="file" accept="image/*" onChange={handle} style={{display:'none'}}/>
     {photo?
       <div style={{position:'relative'}}>
         <img src={photo} alt="" style={{width:'100%',maxHeight:200,objectFit:'cover',borderRadius:8,border:'1px solid var(--border)'}}/>
-        <Btn onClick={()=>ref.current.click()} variant="ghost" style={{position:'absolute',top:6,right:6,background:'rgba(0,0,0,.55)',color:'#fff',borderRadius:8,fontSize:11,padding:'4px 8px'}}>📷</Btn>
+        <div style={{position:'absolute',top:6,right:6,display:'flex',gap:4}}>
+          <Btn onClick={()=>refCam.current.click()} variant="ghost" style={{background:'rgba(0,0,0,.55)',color:'#fff',borderRadius:8,fontSize:11,padding:'4px 8px'}}>📷</Btn>
+          <Btn onClick={()=>refGal.current.click()} variant="ghost" style={{background:'rgba(0,0,0,.55)',color:'#fff',borderRadius:8,fontSize:11,padding:'4px 8px'}}>🖼️</Btn>
+        </div>
       </div>
-    :
-      <button onClick={()=>ref.current.click()} disabled={loading} style={{width:'100%',padding:'10px 12px',borderRadius:8,border:'2px dashed var(--border)',background:'var(--input)',cursor:loading?'wait':'pointer',textAlign:'center',color:'var(--dim)',fontSize:12}}>
-        {loading?'📍 Obteniendo ubicación...':(label||'📷 Tomar foto')}
-      </button>
-    }
+    :<>
+      {label&&<p style={{fontSize:12,color:'var(--dim)',marginBottom:6}}>{label}</p>}
+      <div style={{display:'flex',gap:8}}>
+        <button onClick={()=>refCam.current.click()} disabled={loading} style={{flex:1,padding:'10px 12px',borderRadius:8,border:'2px dashed var(--border)',background:'var(--input)',cursor:loading?'wait':'pointer',textAlign:'center',color:'var(--dim)',fontSize:12}}>
+          {loading?'📍 Obteniendo ubicación...':'📷 Tomar foto'}
+        </button>
+        <button onClick={()=>refGal.current.click()} disabled={loading} style={{flex:1,padding:'10px 12px',borderRadius:8,border:'2px dashed var(--border)',background:'var(--input)',cursor:loading?'wait':'pointer',textAlign:'center',color:'var(--dim)',fontSize:12}}>
+          {loading?'📍 Obteniendo ubicación...':'🖼️ Subir foto'}
+        </button>
+      </div>
+    </>}
   </div>;
 }
 
