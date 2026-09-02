@@ -12,9 +12,15 @@
 <link rel="manifest" href="./manifest.json">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📋</text></svg>">
 <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='18' fill='%231e40af'/><text x='50' y='68' font-size='60' text-anchor='middle'>📋</text></svg>">
-<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
-<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<link rel="preconnect" href="https://unpkg.com">
+<link rel="dns-prefetch" href="https://unpkg.com">
+<!-- Versión fijada (antes "@18"/sin versión): permite que sw.js las cachee y la app arranque sin
+     depender de que unpkg.com responda en ese momento — más rápido y sin importar la compañía celular.
+     Sin crossorigin: sw.js las cachea en modo no-cors (respuesta opaca), y un <script crossorigin>
+     exige respuesta CORS real — con las dos cosas juntas el navegador se niega a ejecutar el script. -->
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:#f0f2f8;color:#1a1d29;-webkit-font-smoothing:antialiased}
@@ -2981,8 +2987,19 @@ function MainApp({session,setSession,onLogout}){
 function App(){
   const[session,setSession]=useState(null);
   // localStorage (no sessionStorage): al reabrir la app en campo sin señal, se entra directo con
-  // la última sesión guardada en vez de quedarse atorado en la pantalla de login.
-  useEffect(()=>{try{const s=localStorage.getItem('sv2-session');if(s)setSession(JSON.parse(s));}catch{}},[]);
+  // la última sesión guardada en vez de quedarse atorado en la pantalla de login. Si esa sesión
+  // guardada quedó incompleta o de una versión vieja de la app (le falta token/user/role), se
+  // descarta en vez de arriesgarse a que truene MainApp con datos a medias — mejor pedir login
+  // una vez que dejar la app "rota" hasta que alguien la cierre y la abra de nuevo a mano.
+  useEffect(()=>{
+    try{
+      const s=localStorage.getItem('sv2-session');
+      if(!s)return;
+      const parsed=JSON.parse(s);
+      if(parsed&&parsed.token&&parsed.user&&parsed.role)setSession(parsed);
+      else localStorage.removeItem('sv2-session');
+    }catch{localStorage.removeItem('sv2-session');}
+  },[]);
   const logout=()=>{localStorage.removeItem('sv2-session');setSession(null);};
   if(!session)return <LoginScreen onLogin={setSession}/>;
   return <MainApp session={session} setSession={setSession} onLogout={logout}/>;
@@ -2991,7 +3008,26 @@ ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
 </script>
 <script>
 if('serviceWorker' in navigator){
-  window.addEventListener('load',()=>{navigator.serviceWorker.register('./sw.js').catch(()=>{});});
+  window.addEventListener('load',()=>{
+    navigator.serviceWorker.register('./sw.js').then(reg=>{
+      // El navegador solo revisa si hay una versión nueva del shell de vez en cuando por su cuenta
+      // — se fuerza aquí para que un despliegue nuevo se note lo antes posible al abrir la app.
+      reg.update().catch(()=>{});
+    }).catch(()=>{});
+  });
+  // Si mientras la app está abierta se activa una versión nueva del service worker (se acaba de
+  // desplegar algo), se recarga sola en vez de quedarse corriendo con JS viejo hasta que alguien
+  // la cierre y la vuelva a abrir a mano. "controllerchange" también dispara la PRIMERA vez que
+  // esta pestaña queda bajo control de un service worker (no solo en una actualización real) —
+  // se ignora esa primera vez para no recargar de más justo al abrir la app.
+  let yaHuboControlador=!!navigator.serviceWorker.controller;
+  let recargandoPorSW=false;
+  navigator.serviceWorker.addEventListener('controllerchange',()=>{
+    if(!yaHuboControlador){yaHuboControlador=true;return;}
+    if(recargandoPorSW)return;
+    recargandoPorSW=true;
+    location.reload();
+  });
 }
 </script>
 </body>
