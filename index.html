@@ -342,6 +342,23 @@ async function refrescarDatosSesion(token){
   return enriquecerSesion(perfil,token);
 }
 
+// Vuelve a traer ranking/ventas/cuentas para una sesión ya autenticada, guarda el resultado en
+// localStorage y actualiza el estado — usado tanto al abrir la app (automático, en segundo plano,
+// para que una sesión guardada con ventas vacías por ejemplo por una falla de red se autocorrija
+// sola) como por el botón flotante "Actualizar información" (manual).
+async function refrescarYPersistirSesion(sesionBase,setSession){
+  const nuevo=await refrescarDatosSesion(sesionBase.token);
+  const nuevaSesion={...sesionBase,...nuevo,loginTime:new Date().toISOString()};
+  // Descarta cualquier `allEmployees`/PIN que pudiera venir de una sesión guardada antes de este
+  // cambio (el servidor ya nunca los manda, pero una sesión vieja guardada localmente sí podría
+  // traerlos) — no se vuelven a persistir.
+  delete nuevaSesion.allEmployees;
+  if(nuevaSesion.user)delete nuevaSesion.user.pin;
+  localStorage.setItem('sv2-session',JSON.stringify(nuevaSesion));
+  setSession(nuevaSesion);
+  return nuevaSesion;
+}
+
 // ═══ VENTAS, COMISIONES, ASIGNACIONES Y RANKING ═══
 // Antes se leían directo de "BASE LA LAGUNA 2026" por gviz (obligaba a compartir ese Sheet
 // ampliamente) — ahora el servidor hace la misma lectura y el mismo parseo dinámico de columnas
@@ -2972,15 +2989,7 @@ function MainApp({session,setSession,onLogout}){
     if(refreshing)return;
     setRefreshing(true);
     try{
-      const nuevo=await refrescarDatosSesion(session.token);
-      const nuevaSesion={...session,...nuevo,loginTime:new Date().toISOString()};
-      // Descarta cualquier `allEmployees`/PIN que pudiera venir de una sesión guardada antes de
-      // este cambio (el servidor ya nunca los manda, pero una sesión vieja guardada localmente sí
-      // podría traerlos) — no se vuelven a persistir.
-      delete nuevaSesion.allEmployees;
-      if(nuevaSesion.user)delete nuevaSesion.user.pin;
-      localStorage.setItem('sv2-session',JSON.stringify(nuevaSesion));
-      setSession(nuevaSesion);
+      await refrescarYPersistirSesion(session,setSession);
       setRefreshKey(k=>k+1);
       toast('🔄 Información actualizada');
     }catch(e){
@@ -3068,8 +3077,16 @@ function App(){
       const s=localStorage.getItem('sv2-session');
       if(!s)return;
       const parsed=JSON.parse(s);
-      if(parsed&&parsed.token&&parsed.user&&parsed.role)setSession(revivirFechasSesion(parsed));
-      else localStorage.removeItem('sv2-session');
+      if(parsed&&parsed.token&&parsed.user&&parsed.role){
+        const revivida=revivirFechasSesion(parsed);
+        setSession(revivida);
+        // La app ya abre al instante con lo guardado — de fondo, sin bloquear ni avisar, se
+        // refresca contra el servidor. Así una sesión que quedó con ventas/ranking vacíos (por
+        // ejemplo por una falla de red justo al guardarla la última vez) se autocorrige sola en
+        // cuanto haya señal, sin que la persona tenga que saber que existe el botón "Actualizar
+        // información" — antes se quedaba así indefinidamente hasta que alguien lo tocara a mano.
+        refrescarYPersistirSesion(revivida,setSession).catch(()=>{});
+      }else localStorage.removeItem('sv2-session');
     }catch{localStorage.removeItem('sv2-session');}
   },[]);
   const logout=()=>{localStorage.removeItem('sv2-session');setSession(null);};
