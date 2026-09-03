@@ -358,6 +358,11 @@ async function refrescarYPersistirSesion(sesionBase,setSession){
   setSession(nuevaSesion);
   return nuevaSesion;
 }
+// El token de sesión vence (ver apps-script.gs: TOKEN_VIGENCIA_MS) — cuando eso pasa, ni el
+// refresco automático ni el botón manual pueden renovarlo solos, así que hay que distinguirlo de
+// una simple falla de red para poder mandar a la persona de vuelta al login en vez de dejarla
+// viendo datos viejos para siempre sin explicación.
+const esSesionExpirada=e=>/expirada|inválida/i.test(e?.message||'');
 
 // ═══ VENTAS, COMISIONES, ASIGNACIONES Y RANKING ═══
 // Antes se leían directo de "BASE LA LAGUNA 2026" por gviz (obligaba a compartir ese Sheet
@@ -891,7 +896,7 @@ function AudioRecorder({onTranscript}){
 // ═══════════════════════════════════════
 // LOGIN SCREEN
 // ═══════════════════════════════════════
-function LoginScreen({onLogin}){
+function LoginScreen({onLogin,aviso}){
   const[numEmp,setNumEmp]=useState('');
   const[pin,setPin]=useState('');
   const[loading,setLoading]=useState(false);
@@ -930,6 +935,7 @@ function LoginScreen({onLogin}){
           <h1 style={{fontSize:22,fontWeight:800,color:'var(--text)',marginBottom:4}}>Supervisión 2.0</h1>
           <p style={{fontSize:13,color:'var(--dim)'}}>Plan de Trabajo y Seguimiento</p>
         </div>
+        {aviso&&<p style={{background:'var(--ybg)',color:'var(--yellow)',fontSize:12,fontWeight:600,textAlign:'center',padding:'8px 10px',borderRadius:8,marginBottom:16}}>{aviso}</p>}
         <Field label="Número de empleado">
           <Input value={numEmp} onChange={e=>setNumEmp(e.target.value)} placeholder="Ej: 17091931"
             onKeyDown={e=>e.key==='Enter'&&document.getElementById('pin-input')?.focus()}
@@ -3074,7 +3080,12 @@ function MainApp({session,setSession,onLogout}){
       toast('🔄 Información actualizada');
     }catch(e){
       console.error(e);
-      toast('⚠️ No se pudo actualizar, intenta de nuevo');
+      if(esSesionExpirada(e)){
+        toast('⚠️ Tu sesión expiró, vuelve a iniciar sesión');
+        onLogout();
+      }else{
+        toast('⚠️ No se pudo actualizar, intenta de nuevo');
+      }
     }
     setRefreshing(false);
   };
@@ -3147,6 +3158,7 @@ function MainApp({session,setSession,onLogout}){
 // ═══ APP ROOT ═══
 function App(){
   const[session,setSession]=useState(null);
+  const[avisoSesion,setAvisoSesion]=useState('');
   // localStorage (no sessionStorage): al reabrir la app en campo sin señal, se entra directo con
   // la última sesión guardada en vez de quedarse atorado en la pantalla de login. Si esa sesión
   // guardada quedó incompleta o de una versión vieja de la app (le falta token/user/role), se
@@ -3165,12 +3177,21 @@ function App(){
         // ejemplo por una falla de red justo al guardarla la última vez) se autocorrige sola en
         // cuanto haya señal, sin que la persona tenga que saber que existe el botón "Actualizar
         // información" — antes se quedaba así indefinidamente hasta que alguien lo tocara a mano.
-        refrescarYPersistirSesion(revivida,setSession).catch(()=>{});
+        // Si en cambio el token ya venció, ni esto ni el botón manual pueden renovarlo — hay que
+        // mandar de vuelta al login (con un aviso) en vez de dejar la app viendo datos viejos para
+        // siempre sin que la persona entienda por qué.
+        refrescarYPersistirSesion(revivida,setSession).catch(e=>{
+          if(esSesionExpirada(e)){
+            localStorage.removeItem('sv2-session');
+            setSession(null);
+            setAvisoSesion('Tu sesión expiró. Vuelve a iniciar sesión con tu PIN.');
+          }
+        });
       }else localStorage.removeItem('sv2-session');
     }catch{localStorage.removeItem('sv2-session');}
   },[]);
   const logout=()=>{localStorage.removeItem('sv2-session');setSession(null);};
-  if(!session)return <LoginScreen onLogin={setSession}/>;
+  if(!session)return <LoginScreen onLogin={setSession} aviso={avisoSesion}/>;
   return <MainApp session={session} setSession={setSession} onLogout={logout}/>;
 }
 ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
