@@ -370,12 +370,17 @@ function obtenerVentasComisiones(params) {
     const ventasByVendedor = {};
     const hojaVentas = hojaBaseLagunaPorNombre(BASEDATOS_SHEET);
     const lastRowVentas = hojaVentas.getLastRow();
+    // Si la fecha de validación quedó capturada a futuro (después de hoy), no cuenta como
+    // validada todavía — se trata como si no tuviera fecha de validación.
+    const hoySinHora = new Date(); hoySinHora.setHours(0, 0, 0, 0);
     if (lastRowVentas >= 2) {
       const values = hojaVentas.getRange(2, 1, lastRowVentas - 1, 22).getValues();
       values.forEach(function (r) {
         const numVendedor = String(r[21] || '').trim(); // V
         if (!numVendedor || !permitidos[numVendedor]) return;
-        const creacion = aFecha(r[3]), validacion = aFecha(r[4]), activacion = aFecha(r[5]); // D,E,F
+        const creacion = aFecha(r[3]), activacion = aFecha(r[5]); // D,F
+        let validacion = aFecha(r[4]); // E
+        if (validacion && validacion > hoySinHora) validacion = null;
         const enVentana = (creacion && creacion >= cutoff) || (validacion && validacion >= cutoff) || (activacion && activacion >= cutoff);
         if (!enVentana) return;
         (ventasByVendedor[numVendedor] = ventasByVendedor[numVendedor] || []).push({

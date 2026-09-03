@@ -367,6 +367,15 @@ async function refrescarYPersistirSesion(sesionBase,setSession){
 // siempre, así que enrichTeam/attachVentas/funnelPeriodo/etc. no necesitaron ningún cambio.
 // Las fechas viajan como texto ISO (JSON no tiene tipo Date) y se reconstruyen aquí.
 const reviveFecha=s=>s?new Date(s):null;
+// Si la fecha de validación quedó capturada a futuro (después de hoy), no cuenta como validada
+// todavía — se trata como si no tuviera fecha de validación. Aplica solo a "validacion" (no a
+// creacion/activacion/fechaInstalacion, que reviveFecha también reconstruye).
+function reviveValidacion(s){
+  const d=reviveFecha(s);
+  if(!d)return d;
+  const hoy=new Date();hoy.setHours(0,0,0,0);
+  return d>hoy?null:d;
+}
 
 // Al guardar la sesión en localStorage (para poder abrir la app sin señal) las fechas dentro de
 // ventas/cuentasCom se vuelven texto — igual que cuando viajan del servidor — y hay que
@@ -376,7 +385,7 @@ const reviveFecha=s=>s?new Date(s):null;
 function revivirFechasMiembro(m){
   return {
     ...m,
-    ventas:(m.ventas||[]).map(v=>({...v,creacion:reviveFecha(v.creacion),validacion:reviveFecha(v.validacion),activacion:reviveFecha(v.activacion)})),
+    ventas:(m.ventas||[]).map(v=>({...v,creacion:reviveFecha(v.creacion),validacion:reviveValidacion(v.validacion),activacion:reviveFecha(v.activacion)})),
     cuentasCom:(m.cuentasCom||[]).map(c=>({...c,fechaInstalacion:reviveFecha(c.fechaInstalacion)})),
   };
 }
@@ -397,7 +406,7 @@ async function fetchVentasComisiones(token){
     if(!json.ok){console.error('Ventas fetch error:',json.error);return vacio;}
     const ventasByVendedor={};
     Object.entries(json.ventasByVendedor||{}).forEach(([k,lista])=>{
-      ventasByVendedor[k]=lista.map(v=>({...v,creacion:reviveFecha(v.creacion),validacion:reviveFecha(v.validacion),activacion:reviveFecha(v.activacion)}));
+      ventasByVendedor[k]=lista.map(v=>({...v,creacion:reviveFecha(v.creacion),validacion:reviveValidacion(v.validacion),activacion:reviveFecha(v.activacion)}));
     });
     const cuentasByHomologado={};
     Object.entries(json.cuentasByHomologado||{}).forEach(([k,lista])=>{
