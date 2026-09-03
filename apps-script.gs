@@ -210,7 +210,12 @@ function getTokenSecret() {
   return secret;
 }
 
-const TOKEN_VIGENCIA_MS = 24 * 60 * 60 * 1000; // 24 horas
+// La app ahora guarda la sesión en el teléfono y la sigue usando días después de cerrarla (para
+// poder abrir sin señal) — con 24h de vigencia, el token expiraba a media faena de campo y la app
+// se quedaba mostrando datos viejos sin poder refrescar (ni el refresco automático ni el botón
+// manual pueden renovarlo solos; hace falta volver a iniciar sesión con PIN). 7 días le da margen
+// de sobra para uso normal semana a semana, y sigue expirando eventualmente por higiene básica.
+const TOKEN_VIGENCIA_MS = 7 * 24 * 60 * 60 * 1000; // 7 días
 
 function firmar(payload) {
   const bytes = Utilities.computeHmacSha256Signature(payload, getTokenSecret());
