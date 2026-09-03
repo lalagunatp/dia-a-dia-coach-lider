@@ -2007,6 +2007,8 @@ function DashboardTab({data,team,coaches,session,setTab}){
   const[abrirPlanes,setAbrirPlanes]=useState(false);
   const[abrirPendientesPanel,setAbrirPendientesPanel]=useState(false);
   const[abrirArpu,setAbrirArpu]=useState(false);
+  const[expandedCoachArpu,setExpandedCoachArpu]=useState(null);
+  const[expandedVendedorArpu,setExpandedVendedorArpu]=useState(null);
   const[abrirSinPagarPlan,setAbrirSinPagarPlan]=useState(false);
   const[expandedCoachRechazo,setExpandedCoachRechazo]=useState(null);
   const[expandedCoachPlan,setExpandedCoachPlan]=useState(null);
@@ -2052,7 +2054,13 @@ function DashboardTab({data,team,coaches,session,setTab}){
     const instaladasArpu=(m.ventas||[]).filter(v=>v.activacion&&enRango(v.activacion,rangoIni,rangoFin));
     if(instaladasArpu.length){
       const arpuProm=instaladasArpu.reduce((s,v)=>s+(Number(v.arpu)||0),0)/instaladasArpu.length/1.16;
-      arpuPorVendedor.push({m,arpu:arpuProm,n:instaladasArpu.length});
+      const arpuPorPlan={}; // plan -> {n, sumaArpu}
+      instaladasArpu.forEach(v=>{
+        const p=normalizarPlan(v.plan);
+        const b=arpuPorPlan[p]=arpuPorPlan[p]||{n:0,sumaArpu:0};
+        b.n++;b.sumaArpu+=(Number(v.arpu)||0)/1.16;
+      });
+      arpuPorVendedor.push({m,arpu:arpuProm,n:instaladasArpu.length,arpuPorPlan});
     }
     cuentasSinPagar(m.cuentasCom,now).forEach(c=>{
       const p=normalizarPlan(c.plan);
@@ -2090,6 +2098,22 @@ function DashboardTab({data,team,coaches,session,setTab}){
     const totalN=arpuPorVendedor.reduce((s,x)=>s+x.n,0);
     if(!totalN)return 0;
     return arpuPorVendedor.reduce((s,x)=>s+x.arpu*x.n,0)/totalN;
+  })();
+  // Líder: mismo ARPU por vendedor de arriba, agrupado por coach — coach → vendedor → planes colocados.
+  const arpuPorCoach=(()=>{
+    if(!esLider)return[];
+    const porCoach={};
+    (coaches||[]).forEach(c=>{porCoach[c.nombre]={coach:c,vendedores:[],sumaArpu:0,totalN:0};});
+    arpuPorVendedor.forEach(item=>{
+      const bucket=porCoach[item.m.reportaA];
+      if(!bucket)return;
+      bucket.vendedores.push(item);
+      bucket.sumaArpu+=item.arpu*item.n;
+      bucket.totalN+=item.n;
+    });
+    return Object.values(porCoach).filter(c=>c.totalN>0)
+      .map(c=>({...c,arpuProm:c.totalN?c.sumaArpu/c.totalN:0,vendedores:c.vendedores.slice().sort((a,b)=>b.arpu-a.arpu)}))
+      .sort((a,b)=>b.arpuProm-a.arpuProm);
   })();
   const sinPagarPorPlanOrdenado=Object.entries(sinPagarPorPlan).sort((a,b)=>b[1].n-a[1].n);
   const sinPagarPorPlanTotales=Object.values(sinPagarPorPlan).reduce((acc,b)=>({n:acc.n+b.n,importe:acc.importe+b.importe}),{n:0,importe:0});
@@ -2579,9 +2603,56 @@ function DashboardTab({data,team,coaches,session,setTab}){
       </PanelAcordeon>
     }
 
-    {arpuPorVendedorOrdenado.length>0&&
+    {(esLider?arpuPorCoach.length>0:arpuPorVendedorOrdenado.length>0)&&
       <PanelAcordeon title={`💵 ARPU promedio por vendedor — ${labelPeriodoVentas} (${fmtMoney(arpuGeneral)})`} abierto={abrirArpu} onToggle={()=>setAbrirArpu(!abrirArpu)}>
-        {arpuPorVendedorOrdenado.map(({m,arpu,n})=>
+        {esLider?arpuPorCoach.map(c=>{
+          const key=c.coach.nombre;
+          const isExp=expandedCoachArpu===key;
+          return <div key={key} style={{marginBottom:6}}>
+            <div onClick={()=>setExpandedCoachArpu(isExp?null:key)} style={{
+              display:'flex',justifyContent:'space-between',alignItems:'center',cursor:'pointer',
+              padding:'8px 10px',borderRadius:isExp?'8px 8px 0 0':8,
+              border:'1px solid var(--border)',borderBottom:isExp?'none':undefined,
+              background:'var(--bg)',
+            }}>
+              <span style={{fontWeight:700,fontSize:12}}>{c.coach.nombre.split(' ').slice(0,3).join(' ')}</span>
+              <div style={{display:'flex',alignItems:'center',gap:6}}>
+                <b style={{fontSize:12}}>{fmtMoney(c.arpuProm)}</b>
+                <span style={{fontSize:12,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
+              </div>
+            </div>
+            {isExp&&<div style={{border:'1px solid var(--border)',borderTop:'none',borderRadius:'0 0 8px 8px',padding:'8px 10px'}}>
+              {c.vendedores.map(({m,arpu,n,arpuPorPlan})=>{
+                const keyV=m.numEmp||m.nombre;
+                const isExpV=expandedVendedorArpu===keyV;
+                const planes=Object.entries(arpuPorPlan).sort((a,b)=>b[1].n-a[1].n);
+                return <div key={keyV} style={{marginBottom:6}}>
+                  <div onClick={()=>setExpandedVendedorArpu(isExpV?null:keyV)} style={{
+                    display:'flex',justifyContent:'space-between',alignItems:'center',cursor:'pointer',
+                    padding:'6px 8px',borderRadius:isExpV?'8px 8px 0 0':8,
+                    border:'1px solid var(--nest-border)',borderBottom:isExpV?'none':undefined,
+                    background:'var(--nest-bg)',
+                  }}>
+                    <span style={{fontWeight:600,fontSize:11}}>{m.nombre.split(' ').slice(0,3).join(' ')}</span>
+                    <div style={{display:'flex',alignItems:'center',gap:6}}>
+                      <b style={{fontSize:11}}>{fmtMoney(arpu)}</b>
+                      <span style={{fontSize:10,color:'var(--dim)'}}>({n})</span>
+                      <span style={{fontSize:11,color:'var(--dim)'}}>{isExpV?'▲':'▼'}</span>
+                    </div>
+                  </div>
+                  {isExpV&&<div style={{border:'1px solid var(--border)',borderTop:'none',borderRadius:'0 0 8px 8px',padding:'8px 10px'}}>
+                    {planes.map(([p,b])=>
+                      <div key={p} style={{display:'flex',justifyContent:'space-between',fontSize:11,color:'var(--dim)',padding:'3px 0',borderBottom:'1px solid var(--border)'}}>
+                        <span>{p}</span>
+                        <span><b>{fmtMoney(b.sumaArpu/b.n)}</b> ({b.n})</span>
+                      </div>
+                    )}
+                  </div>}
+                </div>;
+              })}
+            </div>}
+          </div>;
+        }):arpuPorVendedorOrdenado.map(({m,arpu,n})=>
           <div key={m.numEmp||m.nombre} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'6px 2px',borderBottom:'1px solid var(--border)'}}>
             <span style={{fontSize:12,fontWeight:600}}>{m.nombre.split(' ').slice(0,3).join(' ')}</span>
             <span style={{fontSize:12}}><b>{fmtMoney(arpu)}</b> <span style={{fontSize:10,color:'var(--dim)'}}>({n} inst.)</span></span>
