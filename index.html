@@ -68,6 +68,8 @@ const today=()=>new Date().toISOString().slice(0,10);
 const now=()=>new Date().toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'});
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,6);
 const fmt=d=>{if(!d)return'';const p=d.split('-');return`${p[2]}/${p[1]}/${p[0]}`};
+// Nombre completo → primeros 3 tramos ("APELLIDO APELLIDO NOMBRE"), para que quepa en chips y barras.
+const nombreCorto=n=>String(n||'').split(' ').slice(0,3).join(' ');
 
 const STATUS={
   verde:{bg:'var(--gbg)',border:'var(--green)',label:'Verde'},
@@ -183,13 +185,19 @@ async function retryPending(toast,setData){
   localStorage.setItem('sv2-pending',JSON.stringify(still));
   if(still.length===0&&pending.length>0)toast?.('✅ Registros pendientes sincronizados');
 }
+// Cuando el Director está viendo la app "como" uno de sus líderes/coaches, todas las lecturas
+// llevan además ?verComo=<numEmp> — el servidor valida ahí que ese objetivo sea suyo y responde
+// como si preguntara esa persona (ver apps-script.gs: resolverUsuarioVista). Sin él, se lee
+// normal, como el dueño del token.
+const qsVerComo=verComo=>verComo?`&verComo=${encodeURIComponent(verComo)}`:'';
+
 // Historial del equipo leído del Sheet del Director (no solo lo capturado en este teléfono).
 // `token` (emitido por fetchLogin) es obligatorio: el servidor valida la sesión y filtra
 // el historial por jerarquía ahí mismo, ya no confía en que el cliente se autolimite.
-async function fetchHistorialEquipo(hoja,token){
+async function fetchHistorialEquipo(hoja,token,verComo){
   if(!DOPOST_URL||!token)return[];
   try{
-    const res=await fetchConTope(`${DOPOST_URL}?accion=historial&hoja=${encodeURIComponent(hoja||'ARRANQUE')}&token=${encodeURIComponent(token)}`);
+    const res=await fetchConTope(`${DOPOST_URL}?accion=historial&hoja=${encodeURIComponent(hoja||'ARRANQUE')}&token=${encodeURIComponent(token)}${qsVerComo(verComo)}`);
     const json=await res.json();
     if(!json.ok)return[];
     return json.registros||[];
@@ -310,17 +318,17 @@ async function fetchLogin(numEmp,pin){
   }catch(e){return{ok:false,error:'Error de conexión, intenta de nuevo'};}
 }
 // Re-trae team/coaches/role con el token (sin volver a pedir el PIN) — botón "Actualizar información".
-async function fetchPerfil(token){
+async function fetchPerfil(token,verComo){
   try{
-    const res=await fetchConTope(`${DOPOST_URL}?accion=perfil&token=${encodeURIComponent(token)}`);
+    const res=await fetchConTope(`${DOPOST_URL}?accion=perfil&token=${encodeURIComponent(token)}${qsVerComo(verComo)}`);
     return await res.json();
   }catch(e){return{ok:false,error:'Error de conexión, intenta de nuevo'};}
 }
 
 // Ranking, ventas/comisiones y asignaciones ahora también se piden al servidor con el token
 // (ver fetchVentasComisiones/fetchRanking) — comparte el mismo pipeline entre login y refresco.
-async function enriquecerSesion({user,team,coaches,role},token){
-  const[{rankEnt,rankMen},{ventasByVendedor,cuentasByHomologado,asignacionesPorOS}]=await Promise.all([fetchRanking(token),fetchVentasComisiones(token)]);
+async function enriquecerSesion({user,team,coaches,role},token,verComo){
+  const[{rankEnt,rankMen},{ventasByVendedor,cuentasByHomologado,asignacionesPorOS}]=await Promise.all([fetchRanking(token,verComo),fetchVentasComisiones(token,verComo)]);
   const attachVentas=m=>({...m,
     ventas:ventasByVendedor[m.numEmp]||ventasByVendedor[m.numEmpB]||[],
     cuentasCom:cuentasByHomologado[m.numEmp]||cuentasByHomologado[m.numEmpB]||[],
@@ -336,10 +344,10 @@ async function enriquecerSesion({user,team,coaches,role},token){
 
 // Re-ejecuta el pipeline de datos (ranking/ventas/cuentas/asignaciones) para la sesión ya
 // autenticada — usado por el botón flotante "Actualizar información".
-async function refrescarDatosSesion(token){
-  const perfil=await fetchPerfil(token);
+async function refrescarDatosSesion(token,verComo){
+  const perfil=await fetchPerfil(token,verComo);
   if(!perfil.ok)throw new Error(perfil.error||'No se pudo actualizar la sesión');
-  return enriquecerSesion(perfil,token);
+  return enriquecerSesion(perfil,token,verComo);
 }
 
 // Vuelve a traer ranking/ventas/cuentas para una sesión ya autenticada, guarda el resultado en
@@ -363,6 +371,17 @@ async function refrescarYPersistirSesion(sesionBase,setSession){
 // una simple falla de red para poder mandar a la persona de vuelta al login en vez de dejarla
 // viendo datos viejos para siempre sin explicación.
 const esSesionExpirada=e=>/expirada|inválida/i.test(e?.message||'');
+
+// ═══ VISTA PRESTADA DEL DIRECTOR ═══
+// Trae la sesión COMPLETA de uno de sus líderes (o de un coach de ese líder) tal como la vería
+// esa persona: mismo pipeline que un login normal, pero pidiéndole al servidor que responda
+// "como" ese objetivo (?verComo, validado allá). Va marcada `soloLectura` — el director consulta,
+// no captura a nombre de nadie — y NO se guarda en localStorage: lo persistido sigue siendo la
+// sesión del director, para que al reabrir la app entre en su propia vista.
+async function cargarVistaComo(tokenBase,objetivo){
+  const nuevo=await refrescarDatosSesion(tokenBase,objetivo.numEmp);
+  return{...nuevo,token:tokenBase,verComo:objetivo.numEmp,soloLectura:true,loginTime:new Date().toISOString()};
+}
 
 // ═══ VENTAS, COMISIONES, ASIGNACIONES Y RANKING ═══
 // Antes se leían directo de "BASE LA LAGUNA 2026" por gviz (obligaba a compartir ese Sheet
@@ -402,11 +421,11 @@ function revivirFechasSesion(session){
   };
 }
 
-async function fetchVentasComisiones(token){
+async function fetchVentasComisiones(token,verComo){
   const vacio={ventasByVendedor:{},cuentasByHomologado:{},asignacionesPorOS:{}};
   if(!token)return vacio;
   try{
-    const res=await fetchConTope(`${DOPOST_URL}?accion=ventas&token=${encodeURIComponent(token)}`);
+    const res=await fetchConTope(`${DOPOST_URL}?accion=ventas&token=${encodeURIComponent(token)}${qsVerComo(verComo)}`);
     const json=await res.json();
     if(!json.ok){console.error('Ventas fetch error:',json.error);return vacio;}
     const ventasByVendedor={};
@@ -421,11 +440,11 @@ async function fetchVentasComisiones(token){
   }catch(e){console.error('Ventas fetch error:',e);return vacio;}
 }
 
-async function fetchRanking(token){
+async function fetchRanking(token,verComo){
   const vacio={rankEnt:{},rankMen:{}};
   if(!token)return vacio;
   try{
-    const res=await fetchConTope(`${DOPOST_URL}?accion=ranking&token=${encodeURIComponent(token)}`);
+    const res=await fetchConTope(`${DOPOST_URL}?accion=ranking&token=${encodeURIComponent(token)}${qsVerComo(verComo)}`);
     const json=await res.json();
     if(!json.ok){console.error('Ranking fetch error:',json.error);return vacio;}
     return{rankEnt:json.rankEnt||{},rankMen:json.rankMen||{}};
@@ -658,6 +677,16 @@ function PanelAcordeon({title,abierto,onToggle,children}){
   </Card>;
 }
 function Select({value,onChange,options,style:s}){return <select value={value} onChange={e=>onChange(e.target.value)} style={{padding:'10px 12px',borderRadius:8,border:'1.5px solid var(--border)',background:'var(--input)',fontSize:14,color:'var(--text)',outline:'none',width:'100%',boxSizing:'border-box',...s}}>{options.map(o=><option key={typeof o==='string'?o:o.value} value={typeof o==='string'?o:o.value}>{typeof o==='string'?o:o.label}</option>)}</select>;}
+// Vista prestada del Director (solo lectura): toma el lugar del botón de guardar en cada
+// pestaña de captura. El director ve exactamente lo que ve el líder/coach, pero el registro
+// tiene que capturarlo esa persona desde su propia sesión — si no, quedaría a nombre de
+// alguien que no estuvo ahí (el servidor tampoco lo permitiría: doPost siempre usa el token).
+function AvisoSoloLectura({nombre}){
+  const corto=nombre?nombre.split(' ').slice(0,3).join(' '):'esa persona';
+  return <p style={{background:'var(--ybg)',color:'var(--yellow)',fontSize:12,fontWeight:600,textAlign:'center',padding:'10px 12px',borderRadius:8,margin:0}}>
+    👁️ Vista de consulta — este registro solo lo puede guardar {corto} desde su propia sesión
+  </p>;
+}
 function Toast({msg,onClose}){useEffect(()=>{const t=setTimeout(onClose,2500);return()=>clearTimeout(t);},[]);return <div style={{position:'fixed',bottom:80,left:'50%',transform:'translateX(-50%)',background:'#1a1d29',color:'#fff',padding:'10px 20px',borderRadius:10,fontSize:14,fontWeight:600,zIndex:9999,boxShadow:'0 4px 20px rgba(0,0,0,.25)',whiteSpace:'nowrap'}}>{msg}</div>;}
 function Spinner(){return <div style={{width:28,height:28,border:'3px solid var(--border)',borderTop:'3px solid var(--accent)',borderRadius:'50%',animation:'spin .8s linear infinite',margin:'0 auto'}}/>;}
 
@@ -983,7 +1012,7 @@ function ArranqueTab({data,setData,team,toast,session,refreshKey}){
   useEffect(()=>{
     if(!esLider)return;
     setCargandoArranquesEquipo(true);
-    fetchHistorialEquipo('ARRANQUE',session.token).then(regs=>{setArranquesEquipo(regs);setCargandoArranquesEquipo(false);});
+    fetchHistorialEquipo('ARRANQUE',session.token,session.verComo).then(regs=>{setArranquesEquipo(regs);setCargandoArranquesEquipo(false);});
   },[esLider,refreshKey]);
   const coachesArranqueHoy=esLider?(session.coaches||[]).map(c=>({coach:c,row:arranquesEquipo.find(r=>r['Registrado por']===c.nombre&&r['Fecha']===hoyStr)||null})):[];
   const diaHoyKey=DIAS_SEMANA[(new Date().getDay()+6)%7];
@@ -992,6 +1021,7 @@ function ArranqueTab({data,setData,team,toast,session,refreshKey}){
   const coachesPrioridadHoy=planLiderSemana?.zonas?.[diaHoyKey]?.entradas?.map(e=>e.cluster)||[];
 
   const guardar=async()=>{
+    if(session.soloLectura)return; // vista prestada del director: solo consulta
     if(!form.photo){alert(esLider?'Agrega la foto con el coach prioridad del día para poder guardar el arranque':'Agrega la foto de grupo para poder guardar el arranque');return;}
     if(esCoachPDV){
       const faltantes=team.filter(m=>!form.fotosVendedores[m.nombre]);
@@ -1066,7 +1096,7 @@ function ArranqueTab({data,setData,team,toast,session,refreshKey}){
       </Card>
     }
     <Card title="Notas"><Textarea value={form.notas} onChange={e=>setForm({...form,notas:e.target.value})} placeholder="Prioridades, situaciones especiales..."/></Card>
-    <Btn onClick={guardar} style={{width:'100%'}}>💾 Guardar arranque</Btn>
+    {session.soloLectura?<AvisoSoloLectura nombre={session.user.nombre}/>:<Btn onClick={guardar} style={{width:'100%'}}>💾 Guardar arranque</Btn>}
   </div>;
 }
 
@@ -1083,7 +1113,7 @@ function PermisosTab({data,setData,team,toast,session,refreshKey}){
   useEffect(()=>{
     if(!esLider)return;
     setCargandoPermisosEquipo(true);
-    fetchHistorialEquipo('PERMISO',session.token).then(regs=>{setPermisosEquipo(regs);setCargandoPermisosEquipo(false);});
+    fetchHistorialEquipo('PERMISO',session.token,session.verComo).then(regs=>{setPermisosEquipo(regs);setCargandoPermisosEquipo(false);});
   },[esLider,refreshKey]);
   const mesActual=today().slice(0,7);
   const permisosPorCoach=esLider?(session.coaches||[]).map(c=>({
@@ -1093,6 +1123,7 @@ function PermisosTab({data,setData,team,toast,session,refreshKey}){
   const totalPermisosMes=permisosPorCoach.reduce((s,x)=>s+x.permisos.length,0);
 
   const guardar=async()=>{
+    if(session.soloLectura)return; // vista prestada del director: solo consulta
     if(!form.vendedor){alert('Selecciona un integrante');return;}
     if(!form.photo){alert('Agrega una foto de evidencia (foto o conversación del motivo) para poder guardar el permiso');return;}
     const rec={id:uid(),type:'permiso',...form,registradoPor:session.user.nombre,token:session.token,savedAt:new Date().toISOString()};
@@ -1147,7 +1178,7 @@ function PermisosTab({data,setData,team,toast,session,refreshKey}){
       <Field label="Evidencia (obligatoria)"><PhotoCapture photo={form.photo} onCapture={p=>setForm({...form,photo:p})} label="Foto o conversación del motivo del permiso"/></Field>
       <Field label="Notas"><Textarea value={form.notas} onChange={e=>setForm({...form,notas:e.target.value})} placeholder="Observaciones..." style={{minHeight:50}}/></Field>
     </Card>
-    <Btn onClick={guardar} style={{width:'100%'}}>💾 Guardar permiso</Btn>
+    {session.soloLectura?<AvisoSoloLectura nombre={session.user.nombre}/>:<Btn onClick={guardar} style={{width:'100%'}}>💾 Guardar permiso</Btn>}
     </>}
   </div>;
 }
@@ -1168,7 +1199,7 @@ function CierreTab({data,setData,team,toast,session,refreshKey}){
   useEffect(()=>{
     if(!esLider)return;
     setCargandoCierresEquipo(true);
-    fetchHistorialEquipo('CIERRE',session.token).then(regs=>{setCierresEquipo(regs);setCargandoCierresEquipo(false);});
+    fetchHistorialEquipo('CIERRE',session.token,session.verComo).then(regs=>{setCierresEquipo(regs);setCargandoCierresEquipo(false);});
   },[esLider,refreshKey]);
   const coachesCierreHoy=esLider?(session.coaches||[]).map(c=>({coach:c,row:cierresEquipo.find(r=>r['Registrado por']===c.nombre&&r['Fecha']===hoyStr)||null})):[];
 
@@ -1187,6 +1218,7 @@ function CierreTab({data,setData,team,toast,session,refreshKey}){
   });
   const updSeguimiento=(nombre,motivo)=>setForm(f=>({...f,seguimiento:f.seguimiento.map(s=>s.name===nombre?{...s,motivo}:s)}));
   const guardar=async()=>{
+    if(session.soloLectura)return; // vista prestada del director: solo consulta
     const rec={id:uid(),type:'cierre',...form,registradoPor:session.user.nombre,token:session.token,savedAt:new Date().toISOString()};
     const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast);toast('✅ Cierre guardado');
     setUltimoGuardado(rec);
@@ -1284,7 +1316,7 @@ function CierreTab({data,setData,team,toast,session,refreshKey}){
     </Card>
     }
     <Card title="Notas"><Textarea value={form.notas} onChange={e=>setForm({...form,notas:e.target.value})} style={{minHeight:50}}/></Card>
-    <Btn onClick={guardar} style={{width:'100%'}}>💾 Guardar cierre</Btn>
+    {session.soloLectura?<AvisoSoloLectura nombre={session.user.nombre}/>:<Btn onClick={guardar} style={{width:'100%'}}>💾 Guardar cierre</Btn>}
   </div>;
 }
 
@@ -1517,7 +1549,7 @@ function PlanTab({data,setData,team,toast,session,refreshKey}){
   useEffect(()=>{
     if(!esLider)return;
     setCargandoPlanesEquipo(true);
-    fetchHistorialEquipo('PLAN',session.token).then(regs=>{setPlanesEquipo(regs);setCargandoPlanesEquipo(false);});
+    fetchHistorialEquipo('PLAN',session.token,session.verComo).then(regs=>{setPlanesEquipo(regs);setCargandoPlanesEquipo(false);});
   },[esLider,refreshKey]);
   // Datos completos (no solo % de completitud) del plan de cada coach — alimenta la tarjeta de
   // estatus, el Objetivo/Prioridades/Acompañamientos agregados, y lo que se guarda al final.
@@ -1555,6 +1587,7 @@ function PlanTab({data,setData,team,toast,session,refreshKey}){
   const updObjetivo=(k,v)=>setForm(f=>({...f,objetivos:{...f.objetivos,[k]:v}}));
 
   const guardarPlan=async()=>{
+    if(session.soloLectura)return; // vista prestada del director: solo consulta
     const rec={id:uid(),type:'plan',date:today(),
       semanaInicio:semanaIniStr,semanaFin:semanaFinStr,semanaLabel,
       objetivos:esLider?objetivosEquipo:form.objetivos,
@@ -1583,6 +1616,7 @@ function PlanTab({data,setData,team,toast,session,refreshKey}){
   },[planPendiente?.id]);
 
   const guardarResultado=async()=>{
+    if(session.soloLectura)return; // vista prestada del director: solo consulta
     if(!planPendiente||!resForm)return;
     const rec={id:uid(),type:'plan_resultado',planId:planPendiente.id,date:today(),
       semanaInicio:planPendiente.semanaInicio,semanaFin:planPendiente.semanaFin,semanaLabel:planPendiente.semanaLabel,
@@ -1635,7 +1669,7 @@ function PlanTab({data,setData,team,toast,session,refreshKey}){
             <InputMoney value={resForm.arpu} onChange={e=>setResForm(f=>({...f,arpu:e.target.value}))}/>
           </Field>
         </div>
-        <Btn onClick={guardarResultado} style={{width:'100%'}}>💾 Guardar resultado real</Btn>
+        {session.soloLectura?<AvisoSoloLectura nombre={session.user.nombre}/>:<Btn onClick={guardarResultado} style={{width:'100%'}}>💾 Guardar resultado real</Btn>}
       </Card>
     }
 
@@ -1761,7 +1795,7 @@ function PlanTab({data,setData,team,toast,session,refreshKey}){
         <Textarea value={form.resultado_esperado} onChange={e=>setForm({...form,resultado_esperado:e.target.value})} style={{minHeight:50}}/>
       </Card>
       <Card title="Notas"><Textarea value={form.notas} onChange={e=>setForm({...form,notas:e.target.value})} style={{minHeight:50}}/></Card>
-      <Btn onClick={guardarPlan} style={{width:'100%'}}>💾 Guardar plan</Btn>
+      {session.soloLectura?<AvisoSoloLectura nombre={session.user.nombre}/>:<Btn onClick={guardarPlan} style={{width:'100%'}}>💾 Guardar plan</Btn>}
     </>}
   </div>;
 }
@@ -1781,10 +1815,11 @@ function FeedbackTab({data,setData,team,toast,session,refreshKey}){
   useEffect(()=>{
     if(!esLider)return;
     setCargandoFeedbackEquipo(true);
-    fetchHistorialEquipo('FEEDBACK',session.token).then(regs=>{setFeedbackEquipo(regs);setCargandoFeedbackEquipo(false);});
+    fetchHistorialEquipo('FEEDBACK',session.token,session.verComo).then(regs=>{setFeedbackEquipo(regs);setCargandoFeedbackEquipo(false);});
   },[esLider,refreshKey]);
   const coachesFeedbackHoy=esLider?(session.coaches||[]).map(c=>({coach:c,rows:feedbackEquipo.filter(r=>r['Registrado por']===c.nombre&&r['Fecha']===hoyStr)})):[];
   const guardar=async()=>{
+    if(session.soloLectura)return; // vista prestada del director: solo consulta
     if(!form.vendedor){alert('Selecciona un integrante');return;}
     if(esAcompanamiento&&!form.photo){alert('Agrega una foto (con sello) — es obligatoria para este tipo de hallazgo');return;}
     if(esEvidenciaExterna&&!form.fotos.length){alert('Agrega al menos una foto (persona en campo y conversación del avance) — es obligatoria para este tipo de hallazgo');return;}
@@ -1918,7 +1953,7 @@ function FeedbackTab({data,setData,team,toast,session,refreshKey}){
       </Card>
     </>}
     <Card title="Notas"><Textarea value={form.notas} onChange={e=>setForm({...form,notas:e.target.value})} style={{minHeight:50}}/></Card>
-    <Btn onClick={guardar} style={{width:'100%'}}>💾 Guardar hallazgo</Btn>
+    {session.soloLectura?<AvisoSoloLectura nombre={session.user.nombre}/>:<Btn onClick={guardar} style={{width:'100%'}}>💾 Guardar hallazgo</Btn>}
   </div>;
 }
 
@@ -2780,7 +2815,9 @@ function DashboardTab({data,team,coaches,session,setTab}){
 function HistorialTab({data,setData,toast,session}){
   const[filter,setFilter]=useState('todos');const[dateF,setDateF]=useState('');
   const[verFoto,setVerFoto]=useState(null);
-  const[vista,setVista]=useState('dispositivo'); // 'dispositivo' (local) | 'equipo' (Sheet)
+  // 'dispositivo' (local) | 'equipo' (Sheet). En la vista prestada del director no hay registros
+  // locales de esa persona (viven en SU teléfono), así que se arranca directo en el del Sheet.
+  const[vista,setVista]=useState(session?.soloLectura?'equipo':'dispositivo');
   const[equipoRecs,setEquipoRecs]=useState([]);
   const[cargandoEquipo,setCargandoEquipo]=useState(false);
   // Nombres cuyos registros puede ver este usuario: los suyos propios y los de su equipo.
@@ -2791,7 +2828,7 @@ function HistorialTab({data,setData,toast,session}){
     if(vista!=='equipo')return;
     setCargandoEquipo(true);
     const hojas=filter==='todos'?HOJAS_EQUIPO:[filter];
-    Promise.all(hojas.map(tipo=>fetchHistorialEquipo(TIPO_A_HOJA[tipo],session.token).then(regs=>regs.map(r=>({...r,_tipo:tipo})))))
+    Promise.all(hojas.map(tipo=>fetchHistorialEquipo(TIPO_A_HOJA[tipo],session.token,session.verComo).then(regs=>regs.map(r=>({...r,_tipo:tipo})))))
       .then(resultados=>{
         const todos=resultados.flat().filter(r=>nombresEquipo.has(r['Registrado por']));
         todos.sort((a,b)=>String(b['Timestamp']||'').localeCompare(String(a['Timestamp']||'')));
@@ -3052,13 +3089,72 @@ ${cuerpo||'<p style="text-align:center;color:#6b7086;padding:40px">Sin registros
 // ═══════════════════════════════════════
 // MAIN APP
 // ═══════════════════════════════════════
-function MainApp({session,setSession,onLogout}){
-  const[data,setData]=useState(loadData());
+// ═══ VISTA PRESTADA DEL DIRECTOR ═══
+// Hoja para elegir a quién entrar (sus líderes en el primer nivel; los coaches de ese líder
+// en el segundo). Las listas son cortas — no hace falta buscador.
+function ModalElegirVista({titulo,opciones,onElegir,onCerrar}){
+  return <div onClick={onCerrar} style={{position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,.5)',zIndex:9998,display:'flex',alignItems:'flex-end',justifyContent:'center'}}>
+    <div onClick={e=>e.stopPropagation()} style={{background:'var(--card)',width:'100%',maxWidth:600,borderRadius:'16px 16px 0 0',padding:18,maxHeight:'75vh',overflowY:'auto'}}>
+      <h3 style={{margin:'0 0 4px',fontSize:15,fontWeight:800}}>{titulo}</h3>
+      <p style={{margin:'0 0 12px',fontSize:11,color:'var(--dim)'}}>Verás la app tal como la ve esa persona, en modo consulta.</p>
+      {opciones.length===0
+        ?<p style={{color:'var(--dim)',fontSize:13}}>No hay nadie disponible en este nivel.</p>
+        :opciones.map(o=>
+          <button key={o.numEmp||o.nombre} onClick={()=>onElegir(o)}
+            style={{display:'block',width:'100%',textAlign:'left',padding:'11px 12px',marginBottom:8,borderRadius:10,border:'1px solid var(--border)',background:'var(--input)',color:'var(--text)',cursor:'pointer'}}>
+            <div style={{fontWeight:700,fontSize:13}}>{o.nombre}</div>
+            <div style={{fontSize:11,color:'var(--dim)'}}>{o.posicion||''}</div>
+          </button>)}
+      <Btn variant="secondary" onClick={onCerrar} style={{width:'100%',marginTop:4}}>Cancelar</Btn>
+    </div>
+  </div>;
+}
+// Barra bajo el encabezado, solo para el Director: entra a la vista de un líder y, desde ahí, a la
+// de uno de sus coaches (nivel 0 = su propia vista, 1 = líder, 2 = coach), y regresa un nivel a la
+// vez. En cada nivel las opciones son `coaches` de la sesión activa: para el director son sus
+// líderes; dentro de la vista de un líder son los coaches de ese líder.
+function BarraVistaDirector({sessionBase,vistas,onAbrir,onRegresar,onSalir,abriendo}){
+  const[eligiendo,setEligiendo]=useState(false);
+  const nivel=vistas.length;
+  const actual=nivel?vistas[nivel-1]:null;
+  const opciones=(actual?actual.coaches:sessionBase.coaches)||[];
+  const puedeBajar=nivel<2&&opciones.length>0;
+  const ruta=vistas.map(v=>nombreCorto(v.user.nombre)).join(' › ');
+  const chip={fontSize:11,fontWeight:700,padding:'6px 10px',borderRadius:8,border:'none',cursor:abriendo?'default':'pointer'};
+  return <>
+    <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap',padding:'8px 14px',background:nivel?'var(--ybg)':'var(--accent-light)',borderBottom:'1px solid var(--border)'}}>
+      <span style={{flex:1,minWidth:150,fontSize:11,fontWeight:700,color:nivel?'var(--yellow)':'var(--accent)'}}>
+        {nivel?`👁️ Viendo como ${ruta} · solo consulta`:'👔 Estás en tu vista de director'}
+      </span>
+      {puedeBajar&&<button onClick={()=>setEligiendo(true)} disabled={!!abriendo} style={{...chip,background:'var(--accent)',color:'#fff',opacity:abriendo?.6:1}}>
+        {abriendo?'Abriendo…':nivel===0?'👁️ Ver como líder':'👁️ Ver un coach'}
+      </button>}
+      {nivel>0&&<button onClick={onRegresar} disabled={!!abriendo} style={{...chip,background:'var(--card)',color:'var(--text)',border:'1px solid var(--border)'}}>← Regresar</button>}
+      {nivel>1&&<button onClick={onSalir} disabled={!!abriendo} style={{...chip,background:'var(--card)',color:'var(--dim)',border:'1px solid var(--border)'}}>Salir de la vista</button>}
+    </div>
+    {eligiendo&&<ModalElegirVista
+      titulo={nivel===0?'Ver la app como uno de tus líderes':'Ver la app como uno de sus coaches'}
+      opciones={opciones}
+      onElegir={o=>{setEligiendo(false);onAbrir(o);}}
+      onCerrar={()=>setEligiendo(false)}/>}
+  </>;
+}
+
+function MainApp({session,setSession,onLogout,sessionBase,vistas,onAbrirVista,onRegresarVista,onSalirVista}){
+  const[datosLocales,setDatosLocales]=useState(loadData());
   const[tab,setTab]=useState('dashboard');
   const[toastMsg,setToastMsg]=useState('');
   const toast=msg=>setToastMsg(msg);
-  useEffect(()=>{retryPending(toast,setData);},[]);
+  useEffect(()=>{retryPending(toast,setDatosLocales);},[]);
   const{user,team,coaches,role}=session;
+  const enVista=!!session.verComo; // el director está viendo la app como un líder/coach suyo
+  // Los registros guardados en ESTE teléfono son del director, no del líder/coach que está
+  // viendo — mostrárselos como si fueran de esa persona sería falso. En vista prestada se
+  // trabaja con un set vacío: lo que sí se ve de esa persona es lo que está en el Sheet
+  // (paneles por coach, estatus del equipo, Historial › Equipo), que sí llega filtrado a su
+  // jerarquía desde el servidor.
+  const data=enVista?{records:[],pendingSync:[]}:datosLocales;
+  const setData=enVista?(()=>{}):setDatosLocales;
   const allTeam=[...(coaches||[]),...team];
   const todayRecs=data.records.filter(r=>r.date===today());
   const hasArr=todayRecs.some(r=>r.type==='arranque');
@@ -3075,7 +3171,10 @@ function MainApp({session,setSession,onLogout}){
     if(refreshing)return;
     setRefreshing(true);
     try{
-      await refrescarYPersistirSesion(session,setSession);
+      // En vista prestada se refresca esa vista (sin tocar lo guardado en localStorage, que
+      // sigue siendo la sesión propia del director); en la propia, el refresco de siempre.
+      if(enVista)setSession(await cargarVistaComo(session.token,{numEmp:session.verComo}));
+      else await refrescarYPersistirSesion(session,setSession);
       setRefreshKey(k=>k+1);
       toast('🔄 Información actualizada');
     }catch(e){
@@ -3088,6 +3187,26 @@ function MainApp({session,setSession,onLogout}){
       }
     }
     setRefreshing(false);
+  };
+
+  // Entrar a la vista de un líder/coach: traer su sesión completa toma unos segundos (perfil +
+  // ranking + ventas), así que el botón avisa que está abriendo y la app se queda usable mientras.
+  const[abriendoVista,setAbriendoVista]=useState('');
+  const abrirVista=async objetivo=>{
+    if(abriendoVista)return;
+    setAbriendoVista(objetivo.nombre||'…');
+    try{
+      await onAbrirVista(objetivo);
+      setTab('dashboard');
+      toast(`👁️ Viendo como ${nombreCorto(objetivo.nombre)}`);
+    }catch(e){
+      console.error(e);
+      if(esSesionExpirada(e)){
+        toast('⚠️ Tu sesión expiró, vuelve a iniciar sesión');
+        onLogout();
+      }else toast('⚠️ No se pudo abrir esa vista, intenta de nuevo');
+    }
+    setAbriendoVista('');
   };
 
   const exportReporte=()=>{
@@ -3107,11 +3226,18 @@ function MainApp({session,setSession,onLogout}){
         <div style={{display:'flex',gap:6,alignItems:'center'}}>
           {hasArr&&<span style={{fontSize:14}}>☀️</span>}
           {hasCie&&<span style={{fontSize:14}}>🌙</span>}
-          <button onClick={exportReporte} style={{background:'rgba(255,255,255,.15)',border:'none',borderRadius:8,padding:'5px 8px',color:'#fff',cursor:'pointer',fontSize:14}} title="Descargar reporte">📥</button>
+          {/* El reporte se arma con los registros de este teléfono — en vista prestada no hay
+              ninguno de esa persona, así que saldría en blanco: mejor no ofrecerlo ahí. */}
+          {!enVista&&<button onClick={exportReporte} style={{background:'rgba(255,255,255,.15)',border:'none',borderRadius:8,padding:'5px 8px',color:'#fff',cursor:'pointer',fontSize:14}} title="Descargar reporte">📥</button>}
           <button onClick={onLogout} style={{background:'rgba(255,255,255,.15)',border:'none',borderRadius:8,padding:'5px 8px',color:'#fff',cursor:'pointer',fontSize:12,fontWeight:700}} title="Cerrar sesión">Salir</button>
         </div>
       </div>
     </div>
+
+    {/* Cambio de vista (solo Director) */}
+    {sessionBase.role==='director'&&<BarraVistaDirector
+      sessionBase={sessionBase} vistas={vistas} abriendo={abriendoVista}
+      onAbrir={abrirVista} onRegresar={onRegresarVista} onSalir={onSalirVista}/>}
 
     {/* Stats */}
     <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:6,padding:'10px 14px'}}>
@@ -3130,13 +3256,21 @@ function MainApp({session,setSession,onLogout}){
       </div>
     }
 
+    {/* En vista prestada, los contadores que salen de los registros de ESTE teléfono quedan en 0
+        (los de esa persona están en el suyo) — se explica para que no se lea como "no trabajó". */}
+    {enVista&&<p style={{margin:'0 14px 10px',fontSize:11,color:'var(--dim)',background:'var(--card)',border:'1px dashed var(--border)',borderRadius:8,padding:'8px 10px'}}>
+      Los contadores de registros salen en 0 porque lo que {nombreCorto(user.nombre)} captura se guarda en su propio teléfono. Lo que sí ves aquí es su equipo, sus ventas y todo lo que ya está en el Sheet: paneles por coach, estatus del equipo e Historial › Equipo.
+    </p>}
+
     {/* Tabs */}
     <div style={{display:'flex',overflowX:'auto',gap:0,padding:'0 10px',borderBottom:'1px solid var(--border)',background:'var(--card)',WebkitOverflowScrolling:'touch'}}>
       {TABS.map(t=><button key={t.id} onClick={()=>setTab(t.id)} style={{flex:'0 0 auto',padding:'10px 12px',border:'none',background:'transparent',cursor:'pointer',fontSize:11,fontWeight:600,color:tab===t.id?'var(--accent)':'var(--dim)',borderBottom:tab===t.id?'3px solid var(--accent)':'3px solid transparent',whiteSpace:'nowrap'}}><span style={{fontSize:15,display:'block'}}>{t.icon}</span>{t.label}</button>)}
     </div>
 
-    {/* Content */}
-    <div style={{padding:14,paddingBottom:30}}>
+    {/* Content — la `key` cambia al entrar/salir de una vista prestada, para que las pestañas
+        se vuelvan a montar de cero y no arrastren el formulario a medio llenar ni los paneles
+        ya cargados de la persona anterior. */}
+    <div key={session.verComo||'propia'} style={{padding:14,paddingBottom:30}}>
       {tab==='dashboard'&&<DashboardTab data={data} team={allTeam} coaches={coaches} session={session} setTab={setTab}/>}
       {tab==='arranque'&&<ArranqueTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
       {tab==='permisos'&&<PermisosTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
@@ -3159,6 +3293,21 @@ function MainApp({session,setSession,onLogout}){
 function App(){
   const[session,setSession]=useState(null);
   const[avisoSesion,setAvisoSesion]=useState('');
+  // Pila de vistas prestadas del Director: [] = su propia vista, [líder] = viendo a un líder,
+  // [líder, coach] = viendo a un coach de ese líder. "Regresar" saca la de arriba. Vive solo en
+  // memoria: al recargar la app se entra siempre por la vista propia.
+  const[vistas,setVistas]=useState([]);
+  const vistaActiva=vistas.length?vistas[vistas.length-1]:null;
+  const abrirVista=async objetivo=>{
+    const vista=await cargarVistaComo(session.token,objetivo);
+    setVistas(v=>[...v,vista]);
+  };
+  // MainApp trabaja con la sesión activa sin saber si es propia o prestada: este setter manda el
+  // cambio a donde corresponde (la vista de arriba de la pila, o la sesión propia).
+  const setSessionActiva=upd=>{
+    if(vistas.length)setVistas(v=>[...v.slice(0,-1),typeof upd==='function'?upd(v[v.length-1]):upd]);
+    else setSession(upd);
+  };
   // localStorage (no sessionStorage): al reabrir la app en campo sin señal, se entra directo con
   // la última sesión guardada en vez de quedarse atorado en la pantalla de login. Si esa sesión
   // guardada quedó incompleta o de una versión vieja de la app (le falta token/user/role), se
@@ -3190,9 +3339,11 @@ function App(){
       }else localStorage.removeItem('sv2-session');
     }catch{localStorage.removeItem('sv2-session');}
   },[]);
-  const logout=()=>{localStorage.removeItem('sv2-session');setSession(null);};
+  const logout=()=>{localStorage.removeItem('sv2-session');setVistas([]);setSession(null);};
   if(!session)return <LoginScreen onLogin={setSession} aviso={avisoSesion}/>;
-  return <MainApp session={session} setSession={setSession} onLogout={logout}/>;
+  return <MainApp session={vistaActiva||session} setSession={setSessionActiva} onLogout={logout}
+    sessionBase={session} vistas={vistas} onAbrirVista={abrirVista}
+    onRegresarVista={()=>setVistas(v=>v.slice(0,-1))} onSalirVista={()=>setVistas([])}/>;
 }
 ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
 </script>

@@ -82,6 +82,12 @@
 // jerarquía real del usuario, igual que el historial — así "BASE LA LAGUNA 2026" ya
 // puede restringirse a solo esta cuenta (Ejecutar como) sin romper nada en la app.
 //
+// VISTA PRESTADA DEL DIRECTOR: las 4 lecturas con token (perfil/historial/ventas/ranking)
+// aceptan además ?verComo=<numEmp> para responder como si quien preguntara fuera esa
+// persona — solo si el dueño del token es Director Distrital y el objetivo es uno de sus
+// líderes o un coach de esos líderes (ver resolverUsuarioVista). doPost NO lo acepta: lo
+// que se guarde siempre queda a nombre del dueño del token, nunca del suplantado.
+//
 // ══════════════════════════════════════════════════════════════
 
 const SPREADSHEET_ID = '1jMrhZMQRqXQRD6VrEUJ0JcWT5dK599BwLYzAOBnmPv4';
@@ -142,6 +148,35 @@ function construirEquipo(user, allEmployees) {
     });
   }
   return { team: team, coaches: coaches, role: role };
+}
+
+// ─── Vista prestada del Director ("ver como") ───
+// El Director Distrital puede abrir la app tal como la ve uno de SUS líderes, o uno de los
+// coaches de esos líderes. Es solo de consulta: doPost sigue registrando siempre a nombre del
+// dueño del token (nunca del suplantado), así que ?verComo solo afecta a las lecturas.
+// A quién puede ver se decide SIEMPRE aquí: si esta validación viviera en el cliente, cualquiera
+// podría pedir el equipo/historial/ventas de otra persona con solo mandar su número de empleado.
+function objetivosVistaPermitidos(user, activos) {
+  if (getRoleType(user.posicion) !== 'director') return [];
+  const lideres = activos.filter(function (e) { return e.reportaA === user.nombre && isLiderPos(e.posicion); });
+  const liderNames = lideres.map(function (l) { return l.nombre; });
+  const coaches = activos.filter(function (e) { return liderNames.indexOf(e.reportaA) !== -1 && isCoachPos(e.posicion); });
+  return lideres.concat(coaches);
+}
+
+// Resuelve de quién hay que construir el equipo en una lectura: el dueño del token, o el
+// líder/coach que el director pidió ver con ?verComo=<numEmp>. Regresa {user} o {error}.
+function resolverUsuarioVista(params, all) {
+  const numEmp = verificarToken(params && params.token);
+  if (!numEmp) return { error: 'Sesión inválida o expirada, vuelve a iniciar sesión' };
+  const dueno = all.find(function (e) { return e.numEmp === numEmp; });
+  if (!dueno) return { error: 'Usuario no encontrado' };
+  const verComo = String((params && params.verComo) || '').trim();
+  if (!verComo || verComo === numEmp) return { user: dueno };
+  const activos = all.filter(function (e) { return e.activo === 'ACTIVO'; });
+  const objetivo = objetivosVistaPermitidos(dueno, activos).find(function (e) { return e.numEmp === verComo; });
+  if (!objetivo) return { error: 'No tienes acceso a la vista de esa persona' };
+  return { user: objetivo };
 }
 
 // Un login completo dispara ?accion=login y LUEGO, por separado, ?accion=ventas y ?accion=ranking
@@ -279,15 +314,13 @@ function iniciarSesion(params) {
 
 // accion=perfil: como iniciarSesion pero autenticado con el token (no con el PIN) —
 // lo usa el botón "Actualizar información" para refrescar team/coaches sin volver a
-// pedir el PIN.
+// pedir el PIN, y el Director para abrir la vista de un líder/coach suyo (?verComo).
 function refrescarPerfil(params) {
   try {
-    const numEmp = verificarToken(params && params.token);
-    if (!numEmp) return { ok: false, error: 'Sesión inválida o expirada, vuelve a iniciar sesión' };
     const all = leerRosterCompleto();
-    const user = all.find(function (e) { return e.numEmp === numEmp; });
-    if (!user) return { ok: false, error: 'Usuario no encontrado' };
-    return armarSesion(user, all);
+    const vista = resolverUsuarioVista(params, all);
+    if (vista.error) return { ok: false, error: vista.error };
+    return armarSesion(vista.user, all);
   } catch (err) {
     return { ok: false, error: err.message };
   }
@@ -358,11 +391,10 @@ function idsPermitidos(user, built) {
 // Las fechas viajan como ISO (JSON no tiene tipo Date); el cliente las reconstruye al recibirlas.
 function obtenerVentasComisiones(params) {
   try {
-    const numEmp = verificarToken(params && params.token);
-    if (!numEmp) return { ok: false, error: 'Sesión inválida o expirada, vuelve a iniciar sesión' };
     const all = leerRosterCompleto();
-    const user = all.find(function (e) { return e.numEmp === numEmp; });
-    if (!user) return { ok: false, error: 'Usuario no encontrado' };
+    const vista = resolverUsuarioVista(params, all);
+    if (vista.error) return { ok: false, error: vista.error };
+    const user = vista.user;
     const built = construirEquipo(user, all);
     const permitidos = idsPermitidos(user, built);
 
@@ -594,11 +626,10 @@ function leerRankingMensual() {
 // al Sheet veía el ranking/certificaciones de TODA la empresa sin ningún filtro.
 function obtenerRanking(params) {
   try {
-    const numEmp = verificarToken(params && params.token);
-    if (!numEmp) return { ok: false, error: 'Sesión inválida o expirada, vuelve a iniciar sesión' };
     const all = leerRosterCompleto();
-    const user = all.find(function (e) { return e.numEmp === numEmp; });
-    if (!user) return { ok: false, error: 'Usuario no encontrado' };
+    const vista = resolverUsuarioVista(params, all);
+    if (vista.error) return { ok: false, error: vista.error };
+    const user = vista.user;
     const built = construirEquipo(user, all);
     const permitidos = idsPermitidos(user, built);
     const nombresPermitidos = {};
@@ -1070,11 +1101,10 @@ function doGet(e) {
 // hoja: clave de SHEET_CONFIG, p.ej. 'ARRANQUE', 'PLAN', 'PLAN_RESULTADO'.
 function obtenerHistorial(params) {
   try {
-    const numEmp = verificarToken(params && params.token);
-    if (!numEmp) return { ok: false, error: 'Sesión inválida o expirada, vuelve a iniciar sesión' };
     const all = leerRosterCompleto();
-    const user = all.find(function (e) { return e.numEmp === numEmp; });
-    if (!user) return { ok: false, error: 'Usuario no encontrado' };
+    const vista = resolverUsuarioVista(params, all);
+    if (vista.error) return { ok: false, error: vista.error };
+    const user = vista.user;
     const built = construirEquipo(user, all);
     const nombresPermitidos = {};
     nombresPermitidos[user.nombre] = true;
