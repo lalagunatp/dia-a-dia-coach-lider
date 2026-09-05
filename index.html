@@ -212,6 +212,126 @@ function parseFotosAusentes(txt){
   }).filter(f=>f.url);
 }
 
+// ═══ REGISTROS DEL SHEET → FORMA LOCAL ═══
+// Todo lo que se captura se guarda en el teléfono de quien lo capturó Y se manda al Sheet
+// (saveAndSync). En la vista prestada del director no hay nada local de esa persona, así que sus
+// registros se reconstruyen desde el Sheet: es la misma información que escribió buildRow
+// (apps-script.gs), leída de vuelta al shape que usan Dashboard/Plan/Arranque/Cierre/Historial,
+// para que los contadores, el semáforo, el plan de la semana y el historial se vean completos.
+// Dos cosas no se pueden reconstruir porque el Sheet no las guarda: los NOMBRES de los presentes
+// en un arranque (solo queda el total, que es lo que se muestra) y las fotos, que llegan como
+// liga de Drive en vez de la imagen embebida (la app ya sabe abrir ambas, ver FotoMini).
+const HOJA_POR_TIPO={arranque:'ARRANQUE',permiso:'PERMISO',cierre:'CIERRE',plan:'PLAN',plan_resultado:'PLAN_RESULTADO',feedback:'FEEDBACK'};
+const nNum=v=>Number(v)||0;
+// "Nombre: resto; Nombre: resto" → [{nombre,resto}] — el formato de lista que usa buildRow.
+function partirLista(txt){
+  return String(txt||'').split(';').map(s=>s.trim()).filter(Boolean).map(s=>{
+    const i=s.indexOf(':');
+    return i===-1?{nombre:s,resto:''}:{nombre:s.slice(0,i).trim(),resto:s.slice(i+1).trim()};
+  });
+}
+// Inverso de formatZonas: "Lunes: Colonia (Cluster), Otra (todo) · 📍 dirección · 💬 comentario | Martes: …"
+function parsearZonas(txt){
+  if(!txt)return null;
+  const porLabel={};DIAS_SEMANA.forEach(d=>{porLabel[DIAS_SEMANA_LABEL[d].toLowerCase()]=d;});
+  const zonas={};
+  String(txt).split('|').forEach(bloque=>{
+    const i=bloque.indexOf(':');
+    if(i===-1)return;
+    const dia=porLabel[bloque.slice(0,i).trim().toLowerCase()];
+    if(!dia)return;
+    const dz={entradas:[],direccion:'',comentarios:''};
+    bloque.slice(i+1).split('·').map(p=>p.trim()).filter(Boolean).forEach(parte=>{
+      if(parte.startsWith('📍'))dz.direccion=parte.slice(2).trim();
+      else if(parte.startsWith('💬'))dz.comentarios=parte.slice(2).trim();
+      else{
+        // "Colonia (Cluster)" → {cluster,colonia}; "Cluster (todo)" → cluster completo (así se
+        // guarda también el coach que prioriza un líder: su nombre en `cluster`, colonia null).
+        const re=/([^,(]+)\(([^)]+)\)/g;let m;
+        while((m=re.exec(parte))!==null){
+          const etiqueta=m[1].trim(),dentro=m[2].trim();
+          if(dentro.toLowerCase()==='todo')dz.entradas.push({cluster:etiqueta,colonia:null});
+          else dz.entradas.push({cluster:dentro,colonia:etiqueta});
+        }
+      }
+    });
+    zonas[dia]=dz;
+  });
+  return Object.keys(zonas).length?zonas:null;
+}
+// Una fila del Sheet (objeto {encabezado: valor}) → un registro con la misma forma que los que
+// guarda la app en el teléfono. `desdeSheet` marca su origen (se usa para no ofrecer "Eliminar",
+// que solo tiene sentido sobre lo local).
+function recordDesdeFila(tipo,f){
+  const base={id:f['ID']||uid(),type:tipo,date:f['Fecha']||'',registradoPor:f['Registrado por']||'',
+    savedAt:String(f['Timestamp']||f['Fecha']||''),desdeSheet:true};
+  switch(tipo){
+    case'arranque':{
+      const fotosAus=parseFotosAusentes(f['Fotos evidencia ausentes']);
+      const fotosVendedores={};
+      parseFotosAusentes(f['Fotos por vendedor']).forEach(x=>{fotosVendedores[x.nombre]=x.url;});
+      return{...base,time:f['Hora']||'',rolRegistro:f['Rol']||'',
+        presentes:new Array(nNum(f['Presentes'])).fill(''), // el Sheet guarda cuántos, no quiénes
+        ausentes:partirLista(f['Detalle ausentes']).map(({nombre,resto})=>{
+          const partes=resto.split('—');
+          return{name:nombre,reason:(partes[0]||'').trim(),detail:(partes[1]||'').trim(),
+            photo:(fotosAus.find(x=>x.nombre===nombre)||{}).url||null};
+        }),
+        notas:f['Notas']||'',photo:f['Foto grupo']||null,fotosVendedores};
+    }
+    case'permiso':
+      return{...base,vendedor:f['Integrante']||'',tipo:f['Tipo']||'',motivo:f['Motivo']||'',
+        compromiso:{cuentas:nNum(f['Compromiso Cuentas']),ventas:nNum(f['Compromiso Ventas']),instalaciones:nNum(f['Compromiso Instalaciones'])},
+        colonia:f['Colonia']||'',autorizado_por:f['Autorizado por']||'',notas:f['Notas']||'',
+        photo:f['Foto evidencia']||null};
+    case'cierre':
+      return{...base,time:f['Hora']||'',
+        resultados:partirLista(f['Resultados por vendedor']).map(({nombre,resto})=>({
+          nombre,
+          oportunidades:nNum((resto.match(/(\d+)\s*op\b/)||[])[1]),
+          validadas:nNum((resto.match(/(\d+)\s*val\b/)||[])[1]),
+          instaladas:nNum((resto.match(/(\d+)\s*inst\b/)||[])[1]),
+          pagadasHoy:nNum((resto.match(/(\d+)\s*pagadas/)||[])[1]),
+          pendiente:((resto.match(/Pendiente:\s*(.*)$/)||[])[1]||'').trim(),
+        })),
+        incidencias:f['Incidencias']||'',
+        seguimiento:partirLista(f['Seguimiento mañana']).map(({nombre,resto})=>({name:nombre,motivo:resto})),
+        notas:f['Notas']||''};
+    case'plan':
+      return{...base,semanaLabel:f['Semana']||'',semanaInicio:f['Semana inicio']||'',semanaFin:f['Semana fin']||'',
+        objetivos:{oportunidades:nNum(f['Obj. Oportunidades']),ventas:nNum(f['Obj. Ventas']),instalaciones:nNum(f['Obj. Instalaciones']),cuentasRecuperadas:nNum(f['Obj. Cuentas recuperadas NPPF']),arpu:nNum(f['Obj. ARPU'])},
+        metaOficial:{oportunidades:nNum(f['Meta Oportunidades']),ventas:nNum(f['Meta Ventas']),instalaciones:nNum(f['Meta Instalaciones'])},
+        prioridades:f['Prioridades']||'',vendedores_acompanar:f['Acompañamientos']||'',
+        zonas:parsearZonas(f['Zonas']),resultado_esperado:f['Resultado esperado']||'',notas:f['Notas']||''};
+    case'plan_resultado':
+      return{...base,planId:f['Plan ID']||'',semanaLabel:f['Semana']||'',
+        objetivos:{oportunidades:nNum(f['Obj. Oportunidades']),ventas:nNum(f['Obj. Ventas']),instalaciones:nNum(f['Obj. Instalaciones'])},
+        resultados:{oportunidades:nNum(f['Real Oportunidades']),ventas:nNum(f['Real Ventas']),instalaciones:nNum(f['Real Instalaciones']),cuentasRecuperadas:nNum(f['Real Cuentas recuperadas NPPF']),arpu:nNum(f['Real ARPU'])}};
+    case'feedback':{
+      // "Evidencia de asignación externa" guarda varias ligas separadas por "; " en la misma
+      // columna que la foto única del acompañamiento — se distinguen por el separador.
+      const col=String(f['Foto evidencia']||'').trim();
+      const fotos=col.includes(';')?col.split(';').map(s=>s.trim()).filter(Boolean):[];
+      return{...base,vendedor:f['Integrante']||'',tipo:f['Tipo']||'',semaforo:f['Semáforo']||'',
+        hallazgos:f['Hallazgos']||'',fortalezas:f['Fortalezas']||'',areas_oportunidad:f['Áreas de oportunidad']||'',
+        compromisos:f['Compromisos']||'',fecha_revision:f['Fecha revisión']||'',
+        grabado:String(f['Grabado']||'').toUpperCase().startsWith('S'),transcript:f['Transcripción']||'',
+        notas:f['Notas']||'',photo:fotos.length?null:(col||null),fotos};
+    }
+    default:return null;
+  }
+}
+// Los registros que capturó ESA persona (los suyos, no los de su equipo), de las 6 hojas.
+async function fetchRegistrosPropiosDelSheet(session){
+  const nombre=session?.user?.nombre;
+  if(!nombre||!session?.token)return[];
+  const listas=await Promise.all(Object.entries(HOJA_POR_TIPO).map(([tipo,hoja])=>
+    fetchHistorialEquipo(hoja,session.token,session.verComo)
+      .then(filas=>filas.filter(f=>f['Registrado por']===nombre).map(f=>recordDesdeFila(tipo,f)).filter(Boolean))
+      .catch(e=>{console.error('Registros del Sheet:',hoja,e);return[];})));
+  return listas.flat().sort((a,b)=>a.savedAt.localeCompare(b.savedAt));
+}
+
 function startOfWeek(date){ // lunes de la semana que contiene `date`
   const d=new Date(date);d.setHours(0,0,0,0);
   const diff=(d.getDay()+6)%7; // Mon=0..Sun=6
@@ -2815,20 +2935,20 @@ function DashboardTab({data,team,coaches,session,setTab}){
 function HistorialTab({data,setData,toast,session}){
   const[filter,setFilter]=useState('todos');const[dateF,setDateF]=useState('');
   const[verFoto,setVerFoto]=useState(null);
-  // 'dispositivo' (local) | 'equipo' (Sheet). En la vista prestada del director no hay registros
-  // locales de esa persona (viven en SU teléfono), así que se arranca directo en el del Sheet.
-  const[vista,setVista]=useState(session?.soloLectura?'equipo':'dispositivo');
+  // 'dispositivo' (los registros propios: de este teléfono, o los de esa persona reconstruidos
+  // del Sheet en la vista prestada del director) | 'equipo' (los de todo su equipo, del Sheet).
+  const[vista,setVista]=useState('dispositivo');
+  const enVista=!!session?.verComo;
   const[equipoRecs,setEquipoRecs]=useState([]);
   const[cargandoEquipo,setCargandoEquipo]=useState(false);
   // Nombres cuyos registros puede ver este usuario: los suyos propios y los de su equipo.
   const nombresEquipo=new Set([session?.user?.nombre,...(session?.team||[]).map(m=>m.nombre),...(session?.coaches||[]).map(m=>m.nombre)].filter(Boolean));
-  const HOJAS_EQUIPO=['arranque','cierre','permiso','plan','plan_resultado','feedback'];
-  const TIPO_A_HOJA={arranque:'ARRANQUE',cierre:'CIERRE',permiso:'PERMISO',plan:'PLAN',plan_resultado:'PLAN_RESULTADO',feedback:'FEEDBACK'};
+  const HOJAS_EQUIPO=Object.keys(HOJA_POR_TIPO);
   useEffect(()=>{
     if(vista!=='equipo')return;
     setCargandoEquipo(true);
     const hojas=filter==='todos'?HOJAS_EQUIPO:[filter];
-    Promise.all(hojas.map(tipo=>fetchHistorialEquipo(TIPO_A_HOJA[tipo],session.token,session.verComo).then(regs=>regs.map(r=>({...r,_tipo:tipo})))))
+    Promise.all(hojas.map(tipo=>fetchHistorialEquipo(HOJA_POR_TIPO[tipo],session.token,session.verComo).then(regs=>regs.map(r=>({...r,_tipo:tipo})))))
       .then(resultados=>{
         const todos=resultados.flat().filter(r=>nombresEquipo.has(r['Registrado por']));
         todos.sort((a,b)=>String(b['Timestamp']||'').localeCompare(String(a['Timestamp']||'')));
@@ -2838,7 +2958,7 @@ function HistorialTab({data,setData,toast,session}){
   },[vista,filter]);
   const typeL={arranque:'☀️ Arranque',cierre:'🌙 Cierre',permiso:'📋 Permiso',plan:'📊 Plan',plan_resultado:'📊 Resultado Plan',feedback:'💬 Hallazgo'};
   const recs=data.records.filter(r=>filter==='todos'||r.type===filter).filter(r=>!dateF||r.date===dateF).sort((a,b)=>b.savedAt.localeCompare(a.savedAt));
-  const del=id=>{if(!confirm('¿Eliminar?'))return;const upd={...data,records:data.records.filter(r=>r.id!==id)};setData(upd);saveData(upd);toast('Eliminado');};
+  const del=id=>{if(enVista)return;if(!confirm('¿Eliminar?'))return;const upd={...data,records:data.records.filter(r=>r.id!==id)};setData(upd);saveData(upd);toast('Eliminado');};
   // Si ya se subió a Drive, `src` es una liga (no una foto embebida) — no carga como <img>,
   // así que se ofrece como botón para abrirla, en vez de intentar mostrarla en línea.
   const FotoMini=({src,style:s})=>{
@@ -2956,7 +3076,7 @@ function HistorialTab({data,setData,toast,session}){
   return <div>
     <Card title="📁 Historial">
       <div style={{display:'flex',gap:6,marginBottom:10}}>
-        <button onClick={()=>setVista('dispositivo')} style={{flex:1,padding:'8px 10px',borderRadius:8,border:'1.5px solid var(--border)',background:vista==='dispositivo'?'var(--accent)':'var(--card)',color:vista==='dispositivo'?'#fff':'var(--dim)',fontWeight:700,fontSize:12,cursor:'pointer'}}>📱 Este dispositivo</button>
+        <button onClick={()=>setVista('dispositivo')} style={{flex:1,padding:'8px 10px',borderRadius:8,border:'1.5px solid var(--border)',background:vista==='dispositivo'?'var(--accent)':'var(--card)',color:vista==='dispositivo'?'#fff':'var(--dim)',fontWeight:700,fontSize:12,cursor:'pointer'}}>{enVista?'📄 Sus registros':'📱 Este dispositivo'}</button>
         <button onClick={()=>setVista('equipo')} style={{flex:1,padding:'8px 10px',borderRadius:8,border:'1.5px solid var(--border)',background:vista==='equipo'?'var(--accent)':'var(--card)',color:vista==='equipo'?'#fff':'var(--dim)',fontWeight:700,fontSize:12,cursor:'pointer'}}>👥 Equipo</button>
       </div>
       <div style={{display:'flex',gap:6,marginBottom:10,flexWrap:'wrap'}}>
@@ -2965,7 +3085,7 @@ function HistorialTab({data,setData,toast,session}){
         {dateF&&<Btn variant="ghost" onClick={()=>setDateF('')}>✕</Btn>}
       </div>
       {vista==='dispositivo'?
-        <p style={{fontSize:12,color:'var(--dim)'}}>{recs.length} registro{recs.length!==1?'s':''} · guardados en este teléfono</p>
+        <p style={{fontSize:12,color:'var(--dim)'}}>{recs.length} registro{recs.length!==1?'s':''} · {enVista?`capturados por ${nombreCorto(session.user.nombre)}, leídos del Sheet`:'guardados en este teléfono'}</p>
       :
         <p style={{fontSize:12,color:'var(--dim)'}}>{cargandoEquipo?'Cargando…':`${equipoRecsFiltrados.length} registro${equipoRecsFiltrados.length!==1?'s':''} del equipo`} · sincronizados al Sheet, se ven desde cualquier dispositivo.</p>
       }
@@ -2976,7 +3096,9 @@ function HistorialTab({data,setData,toast,session}){
       {recs.map(r=><Card key={r.id} style={{borderLeft:`4px solid ${r.type==='feedback'&&r.semaforo?STATUS[r.semaforo]?.border:'var(--accent)'}`}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
           <div><span style={{fontWeight:700,fontSize:13}}>{typeL[r.type]||r.type}</span><span style={{marginLeft:8,fontSize:11,color:'var(--dim)'}}>{fmt(r.date)} · {r.time||new Date(r.savedAt).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'})}</span></div>
-          <Btn variant="ghost" onClick={()=>del(r.id)} style={{color:'var(--red)',fontSize:11}}>Eliminar</Btn>
+          {/* "Eliminar" solo aplica a lo guardado en este teléfono: un registro reconstruido del
+              Sheet (vista prestada) no es de aquí y borrarlo no significaría nada. */}
+          {!r.desdeSheet&&<Btn variant="ghost" onClick={()=>del(r.id)} style={{color:'var(--red)',fontSize:11}}>Eliminar</Btn>}
         </div>
         {detail(r)}
         {r.registradoPor&&<p style={{fontSize:11,color:'var(--dim)',marginTop:6,borderTop:'1px solid var(--border)',paddingTop:4}}>Registrado por: {r.registradoPor}</p>}
@@ -3149,11 +3271,13 @@ function MainApp({session,setSession,onLogout,sessionBase,vistas,onAbrirVista,on
   const{user,team,coaches,role}=session;
   const enVista=!!session.verComo; // el director está viendo la app como un líder/coach suyo
   // Los registros guardados en ESTE teléfono son del director, no del líder/coach que está
-  // viendo — mostrárselos como si fueran de esa persona sería falso. En vista prestada se
-  // trabaja con un set vacío: lo que sí se ve de esa persona es lo que está en el Sheet
-  // (paneles por coach, estatus del equipo, Historial › Equipo), que sí llega filtrado a su
-  // jerarquía desde el servidor.
-  const data=enVista?{records:[],pendingSync:[]}:datosLocales;
+  // viendo. Los de esa persona están en el Sheet (todo se sincroniza al guardar), así que se
+  // traen de ahí y se reconstruyen a la forma local — con eso los contadores, el semáforo, el
+  // plan de la semana y el historial se ven igual que en su propio teléfono, en vez de en 0.
+  const[registrosVista,setRegistrosVista]=useState(null); // null = todavía cargando (ver efecto abajo)
+  const data=enVista?{records:registrosVista||[],pendingSync:[]}:datosLocales;
+  // En vista prestada nada se guarda (los botones de captura ya están bloqueados) — este setter
+  // vacío evita además que algo escriba en localStorage los registros de otra persona.
   const setData=enVista?(()=>{}):setDatosLocales;
   const allTeam=[...(coaches||[]),...team];
   const todayRecs=data.records.filter(r=>r.date===today());
@@ -3167,6 +3291,17 @@ function MainApp({session,setSession,onLogout,sessionBase,vistas,onAbrirVista,on
   // los datos podrían quedarse desactualizados indefinidamente entre una conexión y la siguiente.
   const[refreshKey,setRefreshKey]=useState(0);
   const[refreshing,setRefreshing]=useState(false);
+
+  // Vista prestada: traer del Sheet los registros de esa persona (al entrar, al cambiar de
+  // persona y al tocar "Actualizar información"). `cancelado` evita que una respuesta lenta de
+  // la vista anterior pise a la nueva si se cambia de persona antes de que llegue.
+  useEffect(()=>{
+    if(!enVista){setRegistrosVista(null);return;}
+    let cancelado=false;
+    setRegistrosVista(null);
+    fetchRegistrosPropiosDelSheet(session).then(recs=>{if(!cancelado)setRegistrosVista(recs);});
+    return()=>{cancelado=true;};
+  },[session.verComo,refreshKey]);
   const actualizarInfo=async()=>{
     if(refreshing)return;
     setRefreshing(true);
@@ -3256,10 +3391,12 @@ function MainApp({session,setSession,onLogout,sessionBase,vistas,onAbrirVista,on
       </div>
     }
 
-    {/* En vista prestada, los contadores que salen de los registros de ESTE teléfono quedan en 0
-        (los de esa persona están en el suyo) — se explica para que no se lea como "no trabajó". */}
+    {/* En vista prestada los registros de esa persona se leen del Sheet — mientras llegan, los
+        contadores están incompletos y hay que decirlo, o se leerían como "no trabajó". */}
     {enVista&&<p style={{margin:'0 14px 10px',fontSize:11,color:'var(--dim)',background:'var(--card)',border:'1px dashed var(--border)',borderRadius:8,padding:'8px 10px'}}>
-      Los contadores de registros salen en 0 porque lo que {nombreCorto(user.nombre)} captura se guarda en su propio teléfono. Lo que sí ves aquí es su equipo, sus ventas y todo lo que ya está en el Sheet: paneles por coach, estatus del equipo e Historial › Equipo.
+      {registrosVista===null
+        ?`⏳ Cargando del Sheet los registros de ${nombreCorto(user.nombre)}…`
+        :`📄 ${registrosVista.length} registro${registrosVista.length!==1?'s':''} de ${nombreCorto(user.nombre)} leídos del Sheet.`}
     </p>}
 
     {/* Tabs */}
