@@ -448,7 +448,9 @@ async function fetchPerfil(token,verComo){
 // Ranking, ventas/comisiones y asignaciones ahora también se piden al servidor con el token
 // (ver fetchVentasComisiones/fetchRanking) — comparte el mismo pipeline entre login y refresco.
 async function enriquecerSesion({user,team,coaches,role},token,verComo){
-  const[{rankEnt,rankMen},{ventasByVendedor,cuentasByHomologado,asignacionesPorOS}]=await Promise.all([fetchRanking(token,verComo),fetchVentasComisiones(token,verComo)]);
+  const[rank,vtas]=await Promise.all([fetchRanking(token,verComo),fetchVentasComisiones(token,verComo)]);
+  const{rankEnt,rankMen}=rank;
+  const{ventasByVendedor,cuentasByHomologado,asignacionesPorOS}=vtas;
   const attachVentas=m=>({...m,
     ventas:ventasByVendedor[m.numEmp]||ventasByVendedor[m.numEmpB]||[],
     cuentasCom:cuentasByHomologado[m.numEmp]||cuentasByHomologado[m.numEmpB]||[],
@@ -459,6 +461,10 @@ async function enriquecerSesion({user,team,coaches,role},token,verComo){
     team:sortByRanking(enrichTeam(team,rankEnt,rankMen).map(attachVentas)),
     coaches:sortByRanking(enrichTeam(coaches,rankEnt,rankMen).map(attachVentas)),
     role,
+    // Si ventas o ranking no cargaron, la sesión queda marcada: sin esto el Dashboard mostraba
+    // ceros que se leen como "el equipo no vendió nada" cuando en realidad la lectura falló.
+    avisoDatos:[vtas.error&&('no se pudieron cargar las ventas del equipo ('+vtas.error+')'),
+                rank.error&&('no se pudo cargar el ranking ('+rank.error+')')].filter(Boolean).join(' y '),
   };
 }
 
@@ -541,13 +547,18 @@ function revivirFechasSesion(session){
   };
 }
 
+// Es la lectura más pesada de todas (BASE DE DATOS + COMISIONES + OS POR INSTALAR completas, que
+// crecen mes con mes), así que se le da bastante más margen que a las demás: con el tope normal
+// de 25s, en cuanto la lectura se pasaba de ahí el navegador la cortaba y el Dashboard se quedaba
+// en ceros — indistinguible de "el equipo no vendió nada".
+const TOPE_VENTAS_MS=90000;
 async function fetchVentasComisiones(token,verComo){
   const vacio={ventasByVendedor:{},cuentasByHomologado:{},asignacionesPorOS:{}};
   if(!token)return vacio;
   try{
-    const res=await fetchConTope(`${DOPOST_URL}?accion=ventas&token=${encodeURIComponent(token)}${qsVerComo(verComo)}`);
+    const res=await fetchConTope(`${DOPOST_URL}?accion=ventas&token=${encodeURIComponent(token)}${qsVerComo(verComo)}`,undefined,TOPE_VENTAS_MS);
     const json=await res.json();
-    if(!json.ok){console.error('Ventas fetch error:',json.error);return vacio;}
+    if(!json.ok){console.error('Ventas fetch error:',json.error);return{...vacio,error:json.error||'el servidor no pudo leerlas'};}
     const ventasByVendedor={};
     Object.entries(json.ventasByVendedor||{}).forEach(([k,lista])=>{
       ventasByVendedor[k]=lista.map(v=>({...v,creacion:reviveFecha(v.creacion),validacion:reviveValidacion(v.validacion),activacion:reviveFecha(v.activacion)}));
@@ -557,7 +568,7 @@ async function fetchVentasComisiones(token,verComo){
       cuentasByHomologado[k]=lista.map(c=>({...c,fechaInstalacion:reviveFecha(c.fechaInstalacion)}));
     });
     return{ventasByVendedor,cuentasByHomologado,asignacionesPorOS:json.asignacionesPorOS||{}};
-  }catch(e){console.error('Ventas fetch error:',e);return vacio;}
+  }catch(e){console.error('Ventas fetch error:',e);return{...vacio,error:e.message||'no hubo respuesta'};}
 }
 
 async function fetchRanking(token,verComo){
@@ -566,9 +577,9 @@ async function fetchRanking(token,verComo){
   try{
     const res=await fetchConTope(`${DOPOST_URL}?accion=ranking&token=${encodeURIComponent(token)}${qsVerComo(verComo)}`);
     const json=await res.json();
-    if(!json.ok){console.error('Ranking fetch error:',json.error);return vacio;}
+    if(!json.ok){console.error('Ranking fetch error:',json.error);return{...vacio,error:json.error||'el servidor no pudo leerlo'};}
     return{rankEnt:json.rankEnt||{},rankMen:json.rankMen||{}};
-  }catch(e){console.error('Ranking fetch error:',e);return vacio;}
+  }catch(e){console.error('Ranking fetch error:',e);return{...vacio,error:e.message||'no hubo respuesta'};}
 }
 
 // Caché en localStorage de catálogos (clusters/colonias, PDV): si no hay señal en campo, se usa
@@ -3390,6 +3401,13 @@ function MainApp({session,setSession,onLogout,sessionBase,vistas,onAbrirVista,on
         {coaches.map(c=><span key={c.nombre} style={{fontSize:11,background:'var(--accent-light)',color:'var(--accent)',padding:'2px 8px',borderRadius:10,fontWeight:600}}>{c.nombre.split(' ').slice(0,2).join(' ')}</span>)}
       </div>
     }
+
+    {/* Ventas/ranking no cargaron: hay que decirlo con todas sus letras. Un Dashboard en ceros
+        por una lectura fallida se ve idéntico a uno en ceros porque no hubo ventas, y así se
+        han perdido horas buscando el problema del lado equivocado. */}
+    {session.avisoDatos&&<p style={{margin:'0 14px 10px',fontSize:12,fontWeight:600,color:'var(--red)',background:'var(--rbg)',border:'1.5px solid var(--red)',borderRadius:8,padding:'9px 11px'}}>
+      ⚠️ Esta vez {session.avisoDatos}. Los números de oportunidades, validadas e instaladas de abajo salen en cero por eso — no es que el equipo no haya vendido. Toca 🔄 para reintentar.
+    </p>}
 
     {/* En vista prestada los registros de esa persona se leen del Sheet — mientras llegan, los
         contadores están incompletos y hay que decirlo, o se leerían como "no trabajó". */}
