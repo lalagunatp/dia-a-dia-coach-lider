@@ -125,7 +125,7 @@ function isLiderPos(p) { return (p || '').toUpperCase().indexOf('LIDER') !== -1;
 function construirEquipo(user, allEmployees) {
   const activos = allEmployees.filter(function (e) { return e.activo === 'ACTIVO'; });
   const role = getRoleType(user.posicion);
-  let team = [], coaches = [];
+  let team = [], coaches = [], lideres = [];
   if (role === 'coach') {
     team = activos.filter(function (e) { return e.reportaA === user.nombre && isVendedorPos(e.posicion); });
   } else if (role === 'lider') {
@@ -133,10 +133,17 @@ function construirEquipo(user, allEmployees) {
     const coachNames = coaches.map(function (c) { return c.nombre; });
     team = activos.filter(function (e) { return coachNames.indexOf(e.reportaA) !== -1 && isVendedorPos(e.posicion); });
   } else if (role === 'director') {
-    const lideres = activos.filter(function (e) { return e.reportaA === user.nombre && isLiderPos(e.posicion); });
-    coaches = lideres;
+    // El Director ve su distrito COMPLETO: sus líderes, los coaches de esos líderes y los
+    // vendedores de esos coaches. Antes se quedaba un nivel arriba (coaches = líderes, team =
+    // coaches, sin ningún vendedor) y, como las ventas se registran con el ID del vendedor, su
+    // Dashboard salía siempre en ceros aunque el distrito entero estuviera vendiendo.
+    // `lideres` va aparte de `coaches` para no perder ese nivel de la jerarquía: lo usan el
+    // selector de "ver como" y el agrupado por líder del Dashboard.
+    lideres = activos.filter(function (e) { return e.reportaA === user.nombre && isLiderPos(e.posicion); });
     const liderNames = lideres.map(function (l) { return l.nombre; });
-    team = activos.filter(function (e) { return liderNames.indexOf(e.reportaA) !== -1 && isCoachPos(e.posicion); });
+    coaches = activos.filter(function (e) { return liderNames.indexOf(e.reportaA) !== -1 && isCoachPos(e.posicion); });
+    const coachNamesDir = coaches.map(function (c) { return c.nombre; });
+    team = activos.filter(function (e) { return coachNamesDir.indexOf(e.reportaA) !== -1 && isVendedorPos(e.posicion); });
   } else if (role === 'gestor') {
     // Gestor de Capital Humano: visibilidad amplia por diseño (todos los coaches, para Historial).
     coaches = activos.filter(function (e) { return isCoachPos(e.posicion); });
@@ -147,7 +154,7 @@ function construirEquipo(user, allEmployees) {
       else if (!team.some(function (t) { return t.nombre === p.nombre; })) team.push(p);
     });
   }
-  return { team: team, coaches: coaches, role: role };
+  return { team: team, coaches: coaches, lideres: lideres, role: role };
 }
 
 // ─── Vista prestada del Director ("ver como") ───
@@ -285,6 +292,7 @@ function armarSesion(user, all) {
     user: sinPin(user),
     team: built.team.map(sinPin),
     coaches: built.coaches.map(sinPin),
+    lideres: built.lideres.map(sinPin), // solo el Director trae líderes; para el resto va vacío
     role: built.role,
   };
 }
@@ -379,7 +387,7 @@ function normalizarCelda(v) {
 // usa obtenerHistorial para nombres, aquí para IDs (así se filtran ventas/comisiones/ranking).
 function idsPermitidos(user, built) {
   const ids = {};
-  [user].concat(built.team, built.coaches).forEach(function (m) {
+  [user].concat(built.team, built.coaches, built.lideres || []).forEach(function (m) {
     if (m.numEmp) ids[m.numEmp] = true;
     if (m.numEmpB) ids[m.numEmpB] = true;
   });
@@ -666,7 +674,7 @@ function obtenerRanking(params) {
     const built = construirEquipo(user, all);
     const permitidos = idsPermitidos(user, built);
     const nombresPermitidos = {};
-    [user].concat(built.team, built.coaches).forEach(function (m) { nombresPermitidos[m.nombre] = true; });
+    [user].concat(built.team, built.coaches, built.lideres || []).forEach(function (m) { nombresPermitidos[m.nombre] = true; });
 
     const rankEnt = {};
     const rankEntFull = leerRankingEntrenamiento();
@@ -1143,6 +1151,8 @@ function obtenerHistorial(params) {
     nombresPermitidos[user.nombre] = true;
     built.team.forEach(function (m) { nombresPermitidos[m.nombre] = true; });
     built.coaches.forEach(function (m) { nombresPermitidos[m.nombre] = true; });
+    // El Director también ve lo que capturan sus líderes (antes venían dentro de `coaches`).
+    (built.lideres || []).forEach(function (m) { nombresPermitidos[m.nombre] = true; });
 
     const hojaNombre = ((params && params.hoja) || 'ARRANQUE').toUpperCase();
     const cfg = SHEET_CONFIG[hojaNombre];
