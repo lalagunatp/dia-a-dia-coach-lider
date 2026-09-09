@@ -411,7 +411,25 @@ function obtenerVentasComisiones(params) {
     // validada todavía — se trata como si no tuviera fecha de validación.
     const hoySinHora = new Date(); hoySinHora.setHours(0, 0, 0, 0);
     if (lastRowVentas >= 2) {
-      const values = hojaVentas.getRange(2, 1, lastRowVentas - 1, 22).getValues();
+      // BASE DE DATOS ya pasa de 37,000 filas y leerla completa (22 columnas) se llevaba ~18s de
+      // los ~28s que tardaba toda esta función — más que el tope del navegador, así que la app
+      // se quedaba en ceros aunque aquí todo estuviera bien. Como solo interesan las filas de los
+      // últimos VENTAS_LOOKBACK_MESES meses, primero se leen SOLO las tres columnas de fecha
+      // (D,E,F) para ubicar el primer y el último renglón que caen en la ventana, y después se
+      // leen las 22 columnas de ESE TRAMO nada más. El filtro real sigue haciéndose renglón por
+      // renglón abajo: el tramo solo acota la lectura, nunca decide qué entra. Si la hoja no
+      // estuviera ordenada por fecha, el tramo sale siendo la hoja entera y esto no empeora nada.
+      const totalFilas = lastRowVentas - 1;
+      const fechas = hojaVentas.getRange(2, 4, totalFilas, 3).getValues(); // D,E,F
+      let primera = -1, ultima = -1;
+      for (let i = 0; i < totalFilas; i++) {
+        const c = aFecha(fechas[i][0]), v = aFecha(fechas[i][1]), a = aFecha(fechas[i][2]);
+        if ((c && c >= cutoff) || (v && v >= cutoff) || (a && a >= cutoff)) {
+          if (primera === -1) primera = i;
+          ultima = i;
+        }
+      }
+      const values = primera === -1 ? [] : hojaVentas.getRange(2 + primera, 1, ultima - primera + 1, 22).getValues();
       values.forEach(function (r) {
         const numVendedor = String(r[21] || '').trim(); // V
         if (!numVendedor || !permitidos[numVendedor]) return;
@@ -441,7 +459,22 @@ function obtenerVentasComisiones(params) {
     const hojaCom = hojaBaseLagunaPorNombre(COMISIONES_SHEET);
     const lastRowCom = hojaCom.getLastRow();
     if (lastRowCom >= 2) {
-      const values = hojaCom.getRange(2, 1, lastRowCom - 1, 21).getValues();
+      // Mismo recorte que en BASE DE DATOS, aquí por fecha de instalación (columna K): el cliente
+      // solo usa estas cuentas dentro de una ventana de 25 a 90 días (ver cuentasDelPeriodo y
+      // cuentasSinPagar en index.html), y `cutoff` es más viejo que eso, así que nada de lo que
+      // se deja fuera se alcanzaba a mostrar. Las filas sin fecha de instalación tampoco: el
+      // cliente las descarta de entrada.
+      const totalCom = lastRowCom - 1;
+      const fechasCom = hojaCom.getRange(2, 11, totalCom, 1).getValues(); // K
+      let primeraCom = -1, ultimaCom = -1;
+      for (let i = 0; i < totalCom; i++) {
+        const f = aFecha(fechasCom[i][0]);
+        if (f && f >= cutoff) {
+          if (primeraCom === -1) primeraCom = i;
+          ultimaCom = i;
+        }
+      }
+      const values = primeraCom === -1 ? [] : hojaCom.getRange(2 + primeraCom, 1, ultimaCom - primeraCom + 1, 21).getValues();
       values.forEach(function (r) {
         const numHom = String(r[2] || '').trim(); // C
         if (!numHom || !permitidos[numHom]) return;
