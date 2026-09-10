@@ -99,7 +99,7 @@ const TABS=[
 // "Trabajo fuera de ruta" y "Actividad especial" no son ausencias: el vendedor sí trabaja, solo que
 // fuera de su ruta. Por eso aparecen tanto aquí (Arranque) como en Permisos, y en los dos lados son
 // los únicos que piden el compromiso del día — el resto de motivos no tiene nada que comprometer.
-const ABSENCE_REASONS=['Falta justificada','Falta injustificada','Incapacidad','Permiso autorizado','Vacaciones','Retardo','Trabajo fuera de ruta','Actividad especial','Otro'];
+const ABSENCE_REASONS=['Falta justificada','Falta injustificada','Incapacidad','Permiso autorizado','Vacaciones','Descanso','Retardo','Trabajo fuera de ruta','Actividad especial','Otro'];
 const PERMISO_TIPOS=['Trabajo fuera de ruta','Salida anticipada','Actividad especial','Otro'];
 const TIPOS_CON_COMPROMISO=['Trabajo fuera de ruta','Actividad especial'];
 const FEEDBACK_TIPOS=['Acompañamiento','Feedback 1 a 1','Revisión semanal','Incidencia operativa','Incidencia crítica','Retroalimentación','Evidencia de asignación externa','Otro'];
@@ -1222,9 +1222,11 @@ function LoginScreen({onLogin,aviso}){
 function ArranqueTab({data,setData,team,toast,session,refreshKey}){
   const esLider=session.role==='lider';
   // Coach Promovendedor Punto de Venta: arranca en un punto de venta, oficina o con su líder
-  // (foto de grupo normal), pero además visita el punto de venta de CADA vendedor a su cargo —
-  // ahí necesita una foto (con sello) por vendedor, presente o ausente, como evidencia de la
-  // visita, y no puede guardar hasta tener la foto de todos.
+  // (foto de grupo normal), pero además cada vendedor a su cargo tiene que quedar resuelto: o sube
+  // la foto de entrada de ese vendedor en su punto de venta, o lo marca ausente con el motivo
+  // (falta, descanso, etc.). Ninguno se puede dejar pasar, y hasta que todos estén resueltos se
+  // habilita el botón de guardar. La foto del vendedor es solo de galería (no se toma con cámara:
+  // el vendedor la manda) pero sí lleva sello, porque es la evidencia de la entrada.
   const esCoachPDV=(session.user.posicion||'').toUpperCase().includes('PROMOVENDEDOR');
   const[form,setForm]=useState({date:today(),time:now(),photo:null,photoSubida:null,presentes:[],ausentes:[],fotosVendedores:{},notas:''});
   useEffect(()=>{setForm(f=>({...f,presentes:team.map(m=>m.nombre),ausentes:[]}));},[team]);
@@ -1256,13 +1258,14 @@ function ArranqueTab({data,setData,team,toast,session,refreshKey}){
   const planLiderSemana=esLider?data.records.find(r=>r.type==='plan'&&r.registradoPor===session.user.nombre&&r.semanaInicio===semanaIniHoy):null;
   const coachesPrioridadHoy=planLiderSemana?.zonas?.[diaHoyKey]?.entradas?.map(e=>e.cluster)||[];
 
+  // Vendedores del coach PDV que todavía no están resueltos: siguen marcados como presentes y no
+  // tienen foto de entrada. Los ausentes ya quedan justificados por el motivo de su box.
+  const pendientesPDV=esCoachPDV?team.filter(m=>form.presentes.includes(m.nombre)&&!form.fotosVendedores[m.nombre]):[];
+
   const guardar=async()=>{
     if(session.soloLectura)return; // vista prestada del director: solo consulta
     if(!form.photo){alert(esLider?'Agrega la foto con el coach prioridad del día para poder guardar el arranque':'Agrega la foto de grupo para poder guardar el arranque');return;}
-    if(esCoachPDV){
-      const faltantes=team.filter(m=>!form.fotosVendedores[m.nombre]);
-      if(faltantes.length){alert('Falta la foto del punto de venta de: '+faltantes.map(m=>m.nombre).join(', ')+'. Cada vendedor necesita su foto para poder guardar el arranque.');return;}
-    }
+    if(pendientesPDV.length){alert('Falta resolver a: '+pendientesPDV.map(m=>m.nombre).join(', ')+'. De cada vendedor sube su foto de entrada o márcalo ausente con el motivo (falta, descanso, etc.) para poder guardar el arranque.');return;}
     const rec={id:uid(),type:'arranque',...form,registradoPor:session.user.nombre,rolRegistro:session.role,token:session.token,savedAt:new Date().toISOString()};
     const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast,setData);toast('✅ Arranque guardado');
     setForm({date:today(),time:now(),photo:null,photoSubida:null,presentes:team.map(m=>m.nombre),ausentes:[],fotosVendedores:{},notas:''});
@@ -1312,6 +1315,15 @@ function ArranqueTab({data,setData,team,toast,session,refreshKey}){
       </Card>
     </>:
       <Card title={`Asistencia (${team.length})`}>
+        {esCoachPDV&&team.length>0&&
+          <p style={{fontSize:13,fontWeight:600,marginBottom:10,padding:'8px 10px',borderRadius:8,
+            border:`1.5px solid ${pendientesPDV.length?'var(--red)':'var(--green)'}`,
+            background:pendientesPDV.length?'var(--rbg)':'var(--gbg)',
+            color:pendientesPDV.length?'var(--red)':'var(--green)'}}>
+            {pendientesPDV.length
+              ?`${team.length-pendientesPDV.length} de ${team.length} resueltos — falta subir la foto de entrada o marcar ausente a: ${pendientesPDV.map(m=>m.nombre).join(', ')}`
+              :`✓ Los ${team.length} vendedores están resueltos (foto de entrada o justificación)`}
+          </p>}
         {team.length===0?<p style={{color:'var(--dim)',fontSize:15}}>Sin integrantes asignados.</p>:
         team.map(m=>{
           const present=form.presentes.includes(m.nombre);
@@ -1336,15 +1348,19 @@ function ArranqueTab({data,setData,team,toast,session,refreshKey}){
               {!esCoachPDV&&<PhotoCapture photo={aus.photo} onCapture={p=>updAus(m.nombre,'photo',p)} label="📷 Agregar evidencia (foto/plática)"/>}
             </div>}
             {esCoachPDV&&<div style={{marginTop:6}}>
-              <PhotoCaptureGeo photo={fotoVendedor} onCapture={p=>setFotoVendedor(m.nombre,p)} coachName={session.user.nombre} toast={toast} label="📷 Foto en el punto de venta (con sello, obligatoria)"/>
-              {form.photo&&!fotoVendedor&&<button type="button" onClick={()=>setFotoVendedor(m.nombre,form.photo)} style={{marginTop:4,fontSize:13,background:'none',border:'none',color:'var(--accent)',cursor:'pointer',textDecoration:'underline',padding:0}}>📎 Usar la misma foto del Arranque del día</button>}
+              <PhotoCaptureGeo modo="galeria" photo={fotoVendedor} onCapture={p=>setFotoVendedor(m.nombre,p)} coachName={session.user.nombre} toast={toast}
+                label={present?'🖼️ Subir foto de entrada en el punto de venta (obligatoria)':'🖼️ Subir foto (opcional — ya quedó justificado arriba)'}/>
+              {present&&form.photo&&!fotoVendedor&&<button type="button" onClick={()=>setFotoVendedor(m.nombre,form.photo)} style={{marginTop:4,fontSize:13,background:'none',border:'none',color:'var(--accent)',cursor:'pointer',textDecoration:'underline',padding:0}}>📎 Usar la misma foto del Arranque del día</button>}
             </div>}
           </div>;
         })}
       </Card>
     }
     <Card title="Notas"><Textarea value={form.notas} onChange={e=>setForm({...form,notas:e.target.value})} placeholder="Prioridades, situaciones especiales..."/></Card>
-    {session.soloLectura?<AvisoSoloLectura nombre={session.user.nombre}/>:<Btn onClick={guardar} style={{width:'100%'}}>💾 Guardar arranque</Btn>}
+    {session.soloLectura?<AvisoSoloLectura nombre={session.user.nombre}/>:<>
+      <Btn onClick={guardar} disabled={pendientesPDV.length>0} style={{width:'100%'}}>💾 Guardar arranque</Btn>
+      {pendientesPDV.length>0&&<p style={{fontSize:13,color:'var(--dim)',textAlign:'center',marginTop:6}}>Se habilita cuando los {team.length} vendedores tengan foto de entrada o justificación.</p>}
+    </>}
   </div>;
 }
 
