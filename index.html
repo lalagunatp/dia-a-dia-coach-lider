@@ -124,8 +124,15 @@ async function saveAndSync(data,record,toast,setData){
       // Guardar en cola pendiente para reintentar
       const pending=JSON.parse(localStorage.getItem('sv2-pending')||'[]');
       pending.push(record);
-      localStorage.setItem('sv2-pending',JSON.stringify(pending));
-      toast?.('⚠️ Guardado local — sin conexión al Sheet');
+      // Si el almacenamiento está lleno esto truena, y hasta ahora se llevaba de corbata al
+      // guardado completo — el registro ya quedó en `data`, así que se avisa y se sigue.
+      try{
+        localStorage.setItem('sv2-pending',JSON.stringify(pending));
+        toast?.('⚠️ Guardado local — sin conexión al Sheet');
+      }catch(e){
+        console.error('No se pudo encolar el registro pendiente:',e);
+        toast?.('⚠️ Sin conexión y sin espacio para la cola — vuelve a guardarlo con señal');
+      }
     }else if(setData&&(result.fotoGrupoUrl||result.fotosAusentes||result.fotoUrl||result.fotosEvidencia)){
       // Ya se subieron a Drive: se reemplaza la foto pesada (base64) local por la liga,
       // para que no se quede ocupando espacio en el teléfono.
@@ -182,7 +189,7 @@ async function retryPending(toast,setData){
       });
     }
   }
-  localStorage.setItem('sv2-pending',JSON.stringify(still));
+  try{localStorage.setItem('sv2-pending',JSON.stringify(still));}catch(e){console.error('No se pudo actualizar la cola de pendientes:',e);}
   if(still.length===0&&pending.length>0)toast?.('✅ Registros pendientes sincronizados');
 }
 // Cuando el Director está viendo la app "como" uno de sus líderes/coaches, todas las lecturas
@@ -551,22 +558,33 @@ function revivirFechasSesion(session){
 }
 
 // La sesión del Director trae el distrito completo (cientos de vendedores con sus ventas de 3
-// meses) y puede pasarse del límite de localStorage. Si no cabe, se guarda una versión ligera —
-// la misma sesión sin ventas ni cuentas — para conservar el arranque sin señal: al abrir con
-// datos, el refresco automático la vuelve a llenar. Antes un fallo aquí tronaba el login entero.
+// meses): son varios MB, y localStorage da ~5MB por sitio para TODO — ahí también viven los
+// registros capturados en el teléfono (con fotos en base64 mientras no se suben a Drive). Si la
+// sesión se acapara ese espacio, la siguiente escritura truena; cuando eso pasaba en el login,
+// el error salía por el catch de handleLogin y la app decía "Error al conectar con la base de
+// datos": el director no podía ni entrar. Por eso se decide POR TAMAÑO antes de escribir, en vez
+// de provocar el error para atraparlo: si no cabe holgada, se guarda la misma sesión sin ventas
+// ni cuentas (el refresco automático al abrir las vuelve a traer en cuanto hay señal).
+const LIMITE_SESION_BYTES=2000000;
 function guardarSesionLocal(sesion){
   const sinVentas=m=>({...m,ventas:[],cuentasCom:[],asignacionesPorOS:{}});
+  const ligera=()=>JSON.stringify({...sesion,
+    team:(sesion.team||[]).map(sinVentas),
+    coaches:(sesion.coaches||[]).map(sinVentas),
+    lideres:(sesion.lideres||[]).map(sinVentas),
+    sinVentasGuardadas:true, // para avisar al abrir por qué arranca en ceros mientras refresca
+  });
   try{
-    localStorage.setItem('sv2-session',JSON.stringify(sesion));
+    const completa=JSON.stringify(sesion);
+    if(completa.length<=LIMITE_SESION_BYTES){localStorage.setItem('sv2-session',completa);return;}
+    localStorage.setItem('sv2-session',ligera());
+    console.warn(`Sesión de ${(completa.length/1048576).toFixed(1)} MB: se guardó sin ventas para no llenar el almacenamiento.`);
   }catch(e){
     try{
-      localStorage.setItem('sv2-session',JSON.stringify({...sesion,
-        team:(sesion.team||[]).map(sinVentas),
-        coaches:(sesion.coaches||[]).map(sinVentas),
-        lideres:(sesion.lideres||[]).map(sinVentas),
-      }));
-      console.warn('Sesión guardada sin ventas: no cabía completa en este dispositivo.');
+      localStorage.setItem('sv2-session',ligera());
     }catch(e2){
+      // Ni la ligera cabe: se borra lo que hubiera para no dejar una sesión a medias que reviva mal.
+      try{localStorage.removeItem('sv2-session');}catch(e3){}
       console.error('No se pudo guardar la sesión localmente:',e2);
     }
   }
@@ -1098,8 +1116,8 @@ function LoginScreen({onLogin,aviso}){
       // Ventas y comisiones del equipo (semana/mes en curso, rechazos, asignaciones, cuentas sin pagar)
       // Base de Datos y Comisiones no siempre etiqueta "Num Vendedor" con la misma columna de ID
       // (a veces D/numEmp, a veces B/numEmpB según la persona) — se consultan ambas y se cruzan las dos al final.
-      const{user,team,coaches,role}=await enriquecerSesion(login,login.token);
-      const session={user,team,coaches,role,token:login.token,loginTime:new Date().toISOString()};
+      const{user,team,coaches,lideres,role}=await enriquecerSesion(login,login.token);
+      const session={user,team,coaches,lideres,role,token:login.token,loginTime:new Date().toISOString()};
       // localStorage (no sessionStorage): sobrevive a que se cierre por completo el navegador/PWA,
       // para poder seguir trabajando con los últimos datos aunque no haya señal al reabrir la app
       // en campo — el botón "Actualizar información" refresca en cuanto vuelve la conexión.
@@ -3515,6 +3533,10 @@ function App(){
       const parsed=JSON.parse(s);
       if(parsed&&parsed.token&&parsed.user&&parsed.role){
         const revivida=revivirFechasSesion(parsed);
+        // Sesión que se guardó sin ventas por tamaño (ver guardarSesionLocal): arranca en ceros
+        // hasta que termine el refresco de abajo, y eso hay que decirlo — reusa el mismo aviso
+        // que cuando la lectura de ventas falla.
+        if(parsed.sinVentasGuardadas)revivida.avisoDatos='las ventas no se guardaron en este dispositivo por su tamaño, se están volviendo a cargar';
         setSession(revivida);
         // La app ya abre al instante con lo guardado — de fondo, sin bloquear ni avisar, se
         // refresca contra el servidor. Así una sesión que quedó con ventas/ranking vacíos (por
