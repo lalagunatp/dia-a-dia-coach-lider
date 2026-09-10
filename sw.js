@@ -1,4 +1,9 @@
-const CACHE='sv2-shell-v4';
+// Subir este número obliga a que TODOS los dispositivos tiren la copia guardada del shell y se
+// bajen la nueva: al activarse se borran las cachés con otro nombre (ver el listener 'activate').
+// Se subió a v5 porque varios teléfonos se quedaron sirviendo un index.html viejo de la caché
+// (la navegación usa red primero, pero con señal lenta cae a la copia guardada) y seguían
+// tronando con un error que ya estaba corregido en el archivo publicado.
+const CACHE='sv2-shell-v5';
 // React/ReactDOM/Babel ahora viven en ./vendor (mismo origen, servidos por GitHub Pages) en vez de
 // bajarse de unpkg.com — un solo origen decide si la app arranca, no dos. Se cachean aquí junto con
 // el resto del shell, con el mismo camino simple que ./index.html (ya no hace falta el manejo
