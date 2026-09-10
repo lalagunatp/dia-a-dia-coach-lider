@@ -28,6 +28,47 @@ function letraColumna(i) {
   return s;
 }
 
+// ─── Diagnóstico de "el Rendimiento de la tarjeta no cuadra" ───
+// Los "Últimos 3 meses" salen de las columnas "VENTAS EN EL DISTRITO <MES>" de la pestaña RANKING.
+// Esto imprime qué columnas encontró por encabezado y qué valores tiene esa persona en cada una,
+// para poder compararlo a ojo contra la hoja. Uso: diagnosticoRendimiento('RAMIREZ GUERRERO CECILIA')
+// (funciona con el nombre tal cual está en la columna D, o con su número de empleado).
+function diagnosticoRendimiento(quien) {
+  const log = [];
+  const linea = function (s) { log.push(s); console.log(s); };
+  try {
+    const sheet = hojaBaseLagunaPorGid(RANKING_GID);
+    const rows = sheet.getRange(1, 1, sheet.getLastRow(), sheet.getLastColumn()).getValues();
+    const h2 = rows[1] || [];
+    const mesCols = [];
+    h2.forEach(function (v, i) { if (String(v || '').trim().toUpperCase().indexOf('VENTAS EN EL DISTRITO') === 0) mesCols.push(i); });
+    linea('COLUMNAS DE MESES ENCONTRADAS (' + mesCols.length + '): ' +
+      (mesCols.length ? mesCols.map(function (i) { return letraColumna(i) + '="' + String(h2[i]).trim() + '"'; }).join(' | ')
+                      : '★ NINGUNA — el encabezado cambió de texto y se está usando el respaldo por posición ★'));
+
+    const buscado = String(quien || '').trim().toUpperCase();
+    if (!buscado) { linea('(Pasa un nombre o número: diagnosticoRendimiento("APELLIDO NOMBRE"))'); return log.join('\n'); }
+    const fila = rows.filter(function (r, ri) {
+      return ri >= 2 && (String(r[3] || '').trim().toUpperCase() === buscado ||
+        [0, 1, 2].some(function (c) { return String(r[c] || '').trim() === buscado; }));
+    })[0];
+    if (!fila) { linea('✘ No encontré "' + quien + '" en la pestaña RANKING'); return log.join('\n'); }
+
+    linea('');
+    linea('EN LA HOJA — ' + String(fila[3]).trim() + ':');
+    mesCols.forEach(function (i) { linea('  ' + letraColumna(i) + ' ' + String(h2[i]).trim() + ' = ' + fila[i]); });
+    const rm = leerRankingMensual()[String(fila[0] || '').trim()] || leerRankingMensual()[String(fila[1] || '').trim()];
+    linea('');
+    linea('LO QUE LA APP VA A MOSTRAR: últimos 3 meses = ' + (rm ? rm.ultimos3meses.join(' → ') : '—') +
+          ' · promedio = ' + (rm ? rm.promedioMensual : '—'));
+    linea('Si esos 3 números no son los últimos 3 de la lista de arriba (sin contar ceros finales), el arreglo no está desplegado.');
+    return log.join('\n');
+  } catch (err) {
+    linea('✘ EXCEPCIÓN: ' + err.message);
+    return log.join('\n');
+  }
+}
+
 function diagnosticoVentas(numEmpArg) {
   const log = [];
   const linea = function (s) { log.push(s); console.log(s); };

@@ -578,6 +578,15 @@ function leerRankingMensual() {
   const idxObs = (idxRankingActual != null && String(h2[idxRankingActual + 1] || '').trim().toUpperCase() === 'OBSERVACIONES') ? idxRankingActual + 1 : null;
   const installsEnd = rankingCols.length ? rankingCols[0] : undefined;
 
+  // Meses de instalaciones: se buscan POR ENCABEZADO, no por posición. Antes se barría
+  // r.slice(14, installsEnd) de dos en dos asumiendo que cada mes ocupaba un par de columnas;
+  // en la hoja real los meses van en columnas consecutivas (GW..GZ) y el barrido con paso 2
+  // se saltaba la mitad de los meses y seguía de largo hasta meter la columna vacía y
+  // INCAPACIDADES como si fueran instalaciones (Cecilia Ramírez salía 21→0→6 en vez de
+  // 22→21→21, porque el 6 era su columna de incapacidades).
+  const mesCols = [];
+  h2.forEach(function (v, i) { if (String(v || '').trim().toUpperCase().indexOf('VENTAS EN EL DISTRITO') === 0) mesCols.push(i); });
+
   const ventaSanaCols = [];
   h2.forEach(function (v, i) { if (String(v || '').trim().toUpperCase().indexOf('VENTA SANA ') === 0) ventaSanaCols.push(i); });
   const idxVentaSana = ventaSanaCols.length ? ventaSanaCols[ventaSanaCols.length - 1] : null;
@@ -610,11 +619,21 @@ function leerRankingMensual() {
     const numC = String(r[2] || '').trim();
     const nombre = String(r[3] || '').trim();
     if (!nombre || nombre === 'EMPLEADO' || nombre === 'VACANTE') return;
-    const vals = r.slice(14, installsEnd);
     const installs = [];
-    for (let i = 0; i < vals.length; i += 2) {
-      const v = Number(vals[i]);
-      if (!isNaN(v)) installs.push(v);
+    if (mesCols.length) {
+      // Las celdas sin dato traen "-" (aún no estaba en el puesto ese mes): se ignoran, no
+      // cuentan como un mes de 0 instalaciones.
+      mesCols.forEach(function (i) {
+        const v = Number(r[i]);
+        if (String(r[i] || '').trim() !== '' && !isNaN(v)) installs.push(v);
+      });
+    } else {
+      // Respaldo por si algún día cambia el texto del encabezado: el barrido viejo por posición.
+      const vals = r.slice(14, installsEnd);
+      for (let i = 0; i < vals.length; i += 2) {
+        const v = Number(vals[i]);
+        if (!isNaN(v)) installs.push(v);
+      }
     }
     let lastNonZero = installs.length - 1;
     while (lastNonZero >= 0 && installs[lastNonZero] === 0) lastNonZero--;
