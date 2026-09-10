@@ -85,8 +85,12 @@ const TABS=[
   {id:'feedback',icon:'💬',label:'Hallazgos'},
   {id:'historial',icon:'📁',label:'Historial'},
 ];
-const ABSENCE_REASONS=['Falta justificada','Falta injustificada','Incapacidad','Permiso autorizado','Vacaciones','Retardo','Otro'];
-const PERMISO_TIPOS=['Trabajo fuera de ruta','Trabajo por su cuenta','Salida anticipada','Llegada tardía','Cambio de zona','Actividad especial','Otro'];
+// "Trabajo fuera de ruta" y "Actividad especial" no son ausencias: el vendedor sí trabaja, solo que
+// fuera de su ruta. Por eso aparecen tanto aquí (Arranque) como en Permisos, y en los dos lados son
+// los únicos que piden el compromiso del día — el resto de motivos no tiene nada que comprometer.
+const ABSENCE_REASONS=['Falta justificada','Falta injustificada','Incapacidad','Permiso autorizado','Vacaciones','Retardo','Trabajo fuera de ruta','Actividad especial','Otro'];
+const PERMISO_TIPOS=['Trabajo fuera de ruta','Salida anticipada','Actividad especial','Otro'];
+const TIPOS_CON_COMPROMISO=['Trabajo fuera de ruta','Actividad especial'];
 const FEEDBACK_TIPOS=['Acompañamiento','Feedback 1 a 1','Revisión semanal','Incidencia operativa','Incidencia crítica','Retroalimentación','Evidencia de asignación externa','Otro'];
 // Tipos de hallazgo que requieren foto sellada (como en Arranque) obligatoria.
 const FEEDBACK_TIPOS_CON_FOTO=['Acompañamiento','Evidencia de asignación externa'];
@@ -133,7 +137,7 @@ async function saveAndSync(data,record,toast,setData){
         console.error('No se pudo encolar el registro pendiente:',e);
         toast?.('⚠️ Sin conexión y sin espacio para la cola — vuelve a guardarlo con señal');
       }
-    }else if(setData&&(result.fotoGrupoUrl||result.fotosAusentes||result.fotoUrl||result.fotosEvidencia)){
+    }else if(setData&&(result.fotoGrupoUrl||result.fotoGrupoSubidaUrl||result.fotosAusentes||result.fotoUrl||result.fotosEvidencia)){
       // Ya se subieron a Drive: se reemplaza la foto pesada (base64) local por la liga,
       // para que no se quede ocupando espacio en el teléfono.
       setData(d=>{
@@ -141,6 +145,7 @@ async function saveAndSync(data,record,toast,setData){
           if(r.id!==record.id)return r;
           const upd={...r};
           if(result.fotoGrupoUrl)upd.photo=result.fotoGrupoUrl;
+          if(result.fotoGrupoSubidaUrl)upd.photoSubida=result.fotoGrupoSubidaUrl;
           if(result.fotoUrl)upd.photo=result.fotoUrl;
           if(result.fotosEvidencia)upd.fotos=result.fotosEvidencia;
           if(result.fotosAusentes&&upd.ausentes){
@@ -167,12 +172,13 @@ async function retryPending(toast,setData){
   for(const rec of pending){
     const r=await sendToSheet(rec);
     if(!r.ok){still.push(rec);continue;}
-    if(setData&&(r.fotoGrupoUrl||r.fotosAusentes||r.fotoUrl||r.fotosEvidencia)){
+    if(setData&&(r.fotoGrupoUrl||r.fotoGrupoSubidaUrl||r.fotosAusentes||r.fotoUrl||r.fotosEvidencia)){
       setData(d=>{
         const records=d.records.map(x=>{
           if(x.id!==rec.id)return x;
           const upd={...x};
           if(r.fotoGrupoUrl)upd.photo=r.fotoGrupoUrl;
+          if(r.fotoGrupoSubidaUrl)upd.photoSubida=r.fotoGrupoSubidaUrl;
           if(r.fotoUrl)upd.photo=r.fotoUrl;
           if(r.fotosEvidencia)upd.fotos=r.fotosEvidencia;
           if(r.fotosAusentes&&upd.ausentes){
@@ -284,7 +290,7 @@ function recordDesdeFila(tipo,f){
           return{name:nombre,reason:(partes[0]||'').trim(),detail:(partes[1]||'').trim(),
             photo:(fotosAus.find(x=>x.nombre===nombre)||{}).url||null};
         }),
-        notas:f['Notas']||'',photo:f['Foto grupo']||null,fotosVendedores};
+        notas:f['Notas']||'',photo:f['Foto grupo']||null,photoSubida:f['Foto grupo subida']||null,fotosVendedores};
     }
     case'permiso':
       return{...base,vendedor:f['Integrante']||'',tipo:f['Tipo']||'',motivo:f['Motivo']||'',
@@ -906,9 +912,13 @@ function MemberInfo({m,expanded,onToggle}){
   </div>;
 }
 // ═══ PHOTO CAPTURE ═══
-function PhotoCapture({photo,onCapture,label}){
+// `modo`: 'ambos' (por defecto), 'camara' (solo tomar) o 'galeria' (solo subir). Cuando ya hay foto,
+// los botones de arriba a la derecha son los que permiten cambiarla, y respetan el mismo modo.
+// `onQuitar` agrega una ✕ para vaciar la foto (solo se usa donde la foto es opcional).
+function PhotoCapture({photo,onCapture,label,modo='ambos',onQuitar}){
   const refCam=useRef();
   const refGal=useRef();
+  const verCam=modo!=='galeria',verGal=modo!=='camara';
   const handle=e=>{const f=e.target.files?.[0];if(!f)return;const r=new FileReader();r.onload=ev=>{const img=new Image();img.onload=()=>{const c=document.createElement('canvas');const M=800;let w=img.width,h=img.height;if(w>M){h=h*(M/w);w=M;}c.width=w;c.height=h;c.getContext('2d').drawImage(img,0,0,w,h);onCapture(c.toDataURL('image/jpeg',.7));};img.src=ev.target.result;};r.readAsDataURL(f);e.target.value='';};
   return <div>
     <input ref={refCam} type="file" accept="image/*" capture="environment" onChange={handle} style={{display:'none'}}/>
@@ -917,23 +927,43 @@ function PhotoCapture({photo,onCapture,label}){
       <div style={{position:'relative'}}>
         <img src={photo} alt="" style={{width:'100%',maxHeight:220,objectFit:'cover',borderRadius:10,border:'1px solid var(--border)'}}/>
         <div style={{position:'absolute',top:6,right:6,display:'flex',gap:4}}>
-          <Btn onClick={()=>refCam.current.click()} variant="ghost" style={{background:'rgba(0,0,0,.55)',color:'#fff',borderRadius:8,fontSize:12,padding:'5px 9px'}}>📷</Btn>
-          <Btn onClick={()=>refGal.current.click()} variant="ghost" style={{background:'rgba(0,0,0,.55)',color:'#fff',borderRadius:8,fontSize:12,padding:'5px 9px'}}>🖼️</Btn>
+          {verCam&&<Btn onClick={()=>refCam.current.click()} variant="ghost" style={{background:'rgba(0,0,0,.55)',color:'#fff',borderRadius:8,fontSize:12,padding:'5px 9px'}}>📷</Btn>}
+          {verGal&&<Btn onClick={()=>refGal.current.click()} variant="ghost" style={{background:'rgba(0,0,0,.55)',color:'#fff',borderRadius:8,fontSize:12,padding:'5px 9px'}}>🖼️</Btn>}
+          {onQuitar&&<Btn onClick={onQuitar} variant="ghost" style={{background:'rgba(0,0,0,.55)',color:'#fff',borderRadius:8,fontSize:12,padding:'5px 9px'}}>✕</Btn>}
         </div>
       </div>
     :<>
       {label&&<p style={{fontSize:12,color:'var(--dim)',marginBottom:6}}>{label}</p>}
       <div style={{display:'flex',gap:8}}>
-        <button onClick={()=>refCam.current.click()} style={{flex:1,padding:'18px 10px',borderRadius:12,border:'2px dashed var(--border)',background:'var(--input)',cursor:'pointer',textAlign:'center',color:'var(--dim)',fontSize:13}}>📷 Tomar foto</button>
-        <button onClick={()=>refGal.current.click()} style={{flex:1,padding:'18px 10px',borderRadius:12,border:'2px dashed var(--border)',background:'var(--input)',cursor:'pointer',textAlign:'center',color:'var(--dim)',fontSize:13}}>🖼️ Subir foto</button>
+        {verCam&&<button onClick={()=>refCam.current.click()} style={{flex:1,padding:'18px 10px',borderRadius:12,border:'2px dashed var(--border)',background:'var(--input)',cursor:'pointer',textAlign:'center',color:'var(--dim)',fontSize:13}}>📷 Tomar foto</button>}
+        {verGal&&<button onClick={()=>refGal.current.click()} style={{flex:1,padding:'18px 10px',borderRadius:12,border:'2px dashed var(--border)',background:'var(--input)',cursor:'pointer',textAlign:'center',color:'var(--dim)',fontSize:13}}>🖼️ Subir foto</button>}
       </div>
     </>}
   </div>;
 }
+// Compromiso del día: los números que el vendedor se compromete a traer y dónde los va a trabajar.
+// Se usa igual en Permisos y en el box de ausencia del Arranque, por eso vive aquí y no dentro de
+// una de las dos pestañas.
+function CompromisoDelDia({compromiso,colonia,onCompromiso,onColonia,zonasData,compacto}){
+  const todasColonias=Object.keys(zonasData?.coloniaToCluster||{}).sort();
+  const c=compromiso||{cuentas:'',ventas:'',instalaciones:''};
+  return <div style={{marginBottom:compacto?0:12,padding:10,border:'1px solid var(--border)',borderRadius:8,background:compacto?'var(--nest-bg)':'var(--bg)'}}>
+    <div style={{fontSize:12,fontWeight:700,color:'var(--dim)',marginBottom:8}}>🎯 Compromiso del día</div>
+    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+      <Field label="Cuentas"><Input type="number" value={c.cuentas} onChange={e=>onCompromiso({...c,cuentas:e.target.value})}/></Field>
+      <Field label="Ventas"><Input type="number" value={c.ventas} onChange={e=>onCompromiso({...c,ventas:e.target.value})}/></Field>
+      <Field label="Instalaciones"><Input type="number" value={c.instalaciones} onChange={e=>onCompromiso({...c,instalaciones:e.target.value})}/></Field>
+    </div>
+    <Field label="Colonia donde va a trabajar">
+      <Autocomplete value={colonia||''} onChange={onColonia} placeholder="Buscar colonia..." options={todasColonias.map(x=>({value:x,label:`${x} (${zonasData.coloniaToCluster[x]})`}))}/>
+    </Field>
+  </div>;
+}
 // Foto con sello de coach, día/fecha/hora, dirección y coordenadas (geolocalización del dispositivo).
-function PhotoCaptureGeo({photo,onCapture,coachName,toast,label}){
+function PhotoCaptureGeo({photo,onCapture,coachName,toast,label,modo='ambos'}){
   const refCam=useRef();
   const refGal=useRef();
+  const verCam=modo!=='galeria',verGal=modo!=='camara';
   const[loading,setLoading]=useState(false);
   const handle=e=>{
     const f=e.target.files?.[0];if(!f)return;
@@ -1004,19 +1034,19 @@ function PhotoCaptureGeo({photo,onCapture,coachName,toast,label}){
       <div style={{position:'relative'}}>
         <img src={photo} alt="" style={{width:'100%',maxHeight:200,objectFit:'cover',borderRadius:8,border:'1px solid var(--border)'}}/>
         <div style={{position:'absolute',top:6,right:6,display:'flex',gap:4}}>
-          <Btn onClick={()=>refCam.current.click()} variant="ghost" style={{background:'rgba(0,0,0,.55)',color:'#fff',borderRadius:8,fontSize:11,padding:'4px 8px'}}>📷</Btn>
-          <Btn onClick={()=>refGal.current.click()} variant="ghost" style={{background:'rgba(0,0,0,.55)',color:'#fff',borderRadius:8,fontSize:11,padding:'4px 8px'}}>🖼️</Btn>
+          {verCam&&<Btn onClick={()=>refCam.current.click()} variant="ghost" style={{background:'rgba(0,0,0,.55)',color:'#fff',borderRadius:8,fontSize:11,padding:'4px 8px'}}>📷</Btn>}
+          {verGal&&<Btn onClick={()=>refGal.current.click()} variant="ghost" style={{background:'rgba(0,0,0,.55)',color:'#fff',borderRadius:8,fontSize:11,padding:'4px 8px'}}>🖼️</Btn>}
         </div>
       </div>
     :<>
       {label&&<p style={{fontSize:12,color:'var(--dim)',marginBottom:6}}>{label}</p>}
       <div style={{display:'flex',gap:8}}>
-        <button onClick={()=>refCam.current.click()} disabled={loading} style={{flex:1,padding:'10px 12px',borderRadius:8,border:'2px dashed var(--border)',background:'var(--input)',cursor:loading?'wait':'pointer',textAlign:'center',color:'var(--dim)',fontSize:12}}>
+        {verCam&&<button onClick={()=>refCam.current.click()} disabled={loading} style={{flex:1,padding:'10px 12px',borderRadius:8,border:'2px dashed var(--border)',background:'var(--input)',cursor:loading?'wait':'pointer',textAlign:'center',color:'var(--dim)',fontSize:12}}>
           {loading?'📍 Obteniendo ubicación...':'📷 Tomar foto'}
-        </button>
-        <button onClick={()=>refGal.current.click()} disabled={loading} style={{flex:1,padding:'10px 12px',borderRadius:8,border:'2px dashed var(--border)',background:'var(--input)',cursor:loading?'wait':'pointer',textAlign:'center',color:'var(--dim)',fontSize:12}}>
+        </button>}
+        {verGal&&<button onClick={()=>refGal.current.click()} disabled={loading} style={{flex:1,padding:'10px 12px',borderRadius:8,border:'2px dashed var(--border)',background:'var(--input)',cursor:loading?'wait':'pointer',textAlign:'center',color:'var(--dim)',fontSize:12}}>
           {loading?'📍 Obteniendo ubicación...':'🖼️ Subir foto'}
-        </button>
+        </button>}
       </div>
     </>}
   </div>;
@@ -1172,10 +1202,18 @@ function ArranqueTab({data,setData,team,toast,session,refreshKey}){
   // ahí necesita una foto (con sello) por vendedor, presente o ausente, como evidencia de la
   // visita, y no puede guardar hasta tener la foto de todos.
   const esCoachPDV=(session.user.posicion||'').toUpperCase().includes('PROMOVENDEDOR');
-  const[form,setForm]=useState({date:today(),time:now(),photo:null,presentes:[],ausentes:[],fotosVendedores:{},notas:''});
+  const[form,setForm]=useState({date:today(),time:now(),photo:null,photoSubida:null,presentes:[],ausentes:[],fotosVendedores:{},notas:''});
   useEffect(()=>{setForm(f=>({...f,presentes:team.map(m=>m.nombre),ausentes:[]}));},[team]);
-  const toggle=name=>{setForm(f=>{const p=f.presentes.includes(name);return{...f,presentes:p?f.presentes.filter(n=>n!==name):[...f.presentes,name],ausentes:p?[...f.ausentes,{name,reason:'Falta justificada',detail:'',photo:null}]:f.ausentes.filter(a=>a.name!==name)};});};
+  // Catálogo de colonias: lo necesita el compromiso del día de "Trabajo fuera de ruta"/"Actividad
+  // especial", igual que en Permisos.
+  const[zonasData,setZonasData]=useState({clusterToColonias:{},coloniaToCluster:{},clusters:[]});
+  useEffect(()=>{fetchClustersColonias(session.token).then(list=>setZonasData(buildClusterMap(list)));},[]);
+  const toggle=name=>{setForm(f=>{const p=f.presentes.includes(name);return{...f,presentes:p?f.presentes.filter(n=>n!==name):[...f.presentes,name],ausentes:p?[...f.ausentes,{name,reason:'Falta justificada',detail:'',photo:null,compromiso:{cuentas:'',ventas:'',instalaciones:''},colonia:''}]:f.ausentes.filter(a=>a.name!==name)};});};
   const updAus=(name,field,val)=>setForm(f=>({...f,ausentes:f.ausentes.map(a=>a.name===name?{...a,[field]:val}:a)}));
+  // Igual que en Permisos: si el motivo deja de ser uno de los que llevan compromiso, se limpia para
+  // no arrastrar números de una selección anterior.
+  const updMotivoAus=(name,val)=>setForm(f=>({...f,ausentes:f.ausentes.map(a=>a.name!==name?a:(
+    TIPOS_CON_COMPROMISO.includes(val)?{...a,reason:val}:{...a,reason:val,compromiso:{cuentas:'',ventas:'',instalaciones:''},colonia:''}))}));
   const setFotoVendedor=(name,photo)=>setForm(f=>({...f,fotosVendedores:{...f.fotosVendedores,[name]:photo}}));
 
   // Líder: estatus de arranque de hoy de cada coach (leído del Sheet, cada coach lo guarda en su
@@ -1203,7 +1241,7 @@ function ArranqueTab({data,setData,team,toast,session,refreshKey}){
     }
     const rec={id:uid(),type:'arranque',...form,registradoPor:session.user.nombre,rolRegistro:session.role,token:session.token,savedAt:new Date().toISOString()};
     const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast,setData);toast('✅ Arranque guardado');
-    setForm({date:today(),time:now(),photo:null,presentes:team.map(m=>m.nombre),ausentes:[],fotosVendedores:{},notas:''});
+    setForm({date:today(),time:now(),photo:null,photoSubida:null,presentes:team.map(m=>m.nombre),ausentes:[],fotosVendedores:{},notas:''});
   };
   return <div>
     <Card title="☀️ Arranque del día">
@@ -1211,9 +1249,17 @@ function ArranqueTab({data,setData,team,toast,session,refreshKey}){
         <Field label="Fecha"><Input type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})}/></Field>
         <Field label="Hora"><Input value={form.time} readOnly style={{background:'var(--bg)'}}/></Field>
       </div>
+      {/* Dos fotos separadas: la del momento (cámara, sellada, obligatoria) es la evidencia real, y
+          la subida es un apoyo opcional de la galería — sin sello, porque no se tomó ahí ni entonces
+          y sellarla con la hora/ubicación de ahorita sería falsear la evidencia. Cada una se cambia
+          por su lado con los botones de la esquina. */}
       <Field label={esLider?'Foto con coach prioridad del día (obligatoria)':'Foto de grupo (obligatoria)'}>
         {esLider&&coachesPrioridadHoy.length>0&&<p style={{fontSize:11,color:'var(--accent)',marginBottom:6}}>👤 Hoy toca: <b>{coachesPrioridadHoy.join(', ')}</b> (según tu Plan de la semana)</p>}
-        <PhotoCaptureGeo photo={form.photo} onCapture={p=>setForm({...form,photo:p})} coachName={session.user.nombre} toast={toast} label={esLider?'📷 Tomar foto con el coach (con sello)':'📷 Tomar foto de grupo (con sello)'}/>
+        <PhotoCaptureGeo modo="camara" photo={form.photo} onCapture={p=>setForm({...form,photo:p})} coachName={session.user.nombre} toast={toast} label={esLider?'📷 Tomar foto con el coach (con sello)':'📷 Tomar foto de grupo (con sello)'}/>
+      </Field>
+      <Field label="Foto adicional subida (opcional)">
+        <PhotoCapture modo="galeria" photo={form.photoSubida} onCapture={p=>setForm({...form,photoSubida:p})}
+          onQuitar={()=>setForm({...form,photoSubida:null})} label="🖼️ Subir foto de la galería (sin sello)"/>
       </Field>
     </Card>
     {esLider?<>
@@ -1235,6 +1281,7 @@ function ArranqueTab({data,setData,team,toast,session,refreshKey}){
             <div style={{fontWeight:700,fontSize:13,marginBottom:4}}>{coach.nombre} <span style={{fontWeight:400,fontSize:11,color:'var(--dim)'}}>· {row['Hora']}</span></div>
             <p style={{fontSize:12,margin:'2px 0'}}><b>Presentes:</b> {row['Presentes']} · <b>Ausentes:</b> {row['Ausentes']}</p>
             {row['Detalle ausentes']&&<p style={{fontSize:11,color:'var(--red)',margin:'2px 0'}}>{row['Detalle ausentes']}</p>}
+            {row['Compromisos del día']&&<p style={{fontSize:11,margin:'2px 0'}}>🎯 {row['Compromisos del día']}</p>}
             {row['Notas']&&<p style={{fontSize:12,color:'var(--dim)',margin:'2px 0'}}>{row['Notas']}</p>}
           </div>
         )}
@@ -1256,9 +1303,12 @@ function ArranqueTab({data,setData,team,toast,session,refreshKey}){
             </div>
             {aus&&<div style={{marginTop:6,display:'flex',flexDirection:'column',gap:6}}>
               <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
-                <Select value={aus.reason} onChange={v=>updAus(m.nombre,'reason',v)} options={ABSENCE_REASONS} style={{flex:1,minWidth:130}}/>
+                <Select value={aus.reason} onChange={v=>updMotivoAus(m.nombre,v)} options={ABSENCE_REASONS} style={{flex:1,minWidth:130}}/>
                 <Input placeholder="Detalle..." value={aus.detail} onChange={e=>updAus(m.nombre,'detail',e.target.value)} style={{flex:2,minWidth:130}}/>
               </div>
+              {TIPOS_CON_COMPROMISO.includes(aus.reason)&&
+                <CompromisoDelDia compacto compromiso={aus.compromiso} colonia={aus.colonia} zonasData={zonasData}
+                  onCompromiso={c=>updAus(m.nombre,'compromiso',c)} onColonia={v=>updAus(m.nombre,'colonia',v)}/>}
               {!esCoachPDV&&<PhotoCapture photo={aus.photo} onCapture={p=>updAus(m.nombre,'photo',p)} label="📷 Agregar evidencia (foto/plática)"/>}
             </div>}
             {esCoachPDV&&<div style={{marginTop:6}}>
@@ -1304,7 +1354,11 @@ function PermisosTab({data,setData,team,toast,session,refreshKey}){
     const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast,setData);toast('✅ Permiso documentado');
     setForm({date:today(),vendedor:'',tipo:'Trabajo fuera de ruta',motivo:'',compromiso:{cuentas:'',ventas:'',instalaciones:''},colonia:'',autorizado_por:session.user.nombre,notas:'',photo:null});
   };
-  const todasColonias=Object.keys(zonasData.coloniaToCluster).sort();
+  // Al cambiar a un tipo que no lleva compromiso se limpia, para no guardar en el Sheet los números
+  // que hayan quedado escritos de un tipo anterior.
+  const cambiarTipo=v=>setForm(f=>TIPOS_CON_COMPROMISO.includes(v)
+    ?{...f,tipo:v}
+    :{...f,tipo:v,compromiso:{cuentas:'',ventas:'',instalaciones:''},colonia:''});
   return <div>
     {esLider&&<Card title={`🗂️ Permisos otorgados por coach — este mes (${totalPermisosMes})`}>
       {cargandoPermisosEquipo?<div style={{textAlign:'center',padding:20}}><Spinner/></div>:
@@ -1335,19 +1389,11 @@ function PermisosTab({data,setData,team,toast,session,refreshKey}){
     <Card title="📋 Documentar permiso">
       <Field label="Fecha"><Input type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})}/></Field>
       <Field label="Integrante"><Select value={form.vendedor} onChange={v=>setForm({...form,vendedor:v})} options={[{value:'',label:'— Seleccionar —'},...team.map(m=>({value:m.nombre,label:m.nombre+(isCoach(m.posicion)?' (Coach)':'')}))]}/></Field>
-      <Field label="Tipo"><Select value={form.tipo} onChange={v=>setForm({...form,tipo:v})} options={PERMISO_TIPOS}/></Field>
+      <Field label="Tipo"><Select value={form.tipo} onChange={cambiarTipo} options={PERMISO_TIPOS}/></Field>
       <Field label="Motivo"><Textarea value={form.motivo} onChange={e=>setForm({...form,motivo:e.target.value})} placeholder="Motivo del permiso..."/></Field>
-      <div style={{marginBottom:12,padding:10,border:'1px solid var(--border)',borderRadius:8,background:'var(--bg)'}}>
-        <div style={{fontSize:12,fontWeight:700,color:'var(--dim)',marginBottom:8}}>🎯 Compromiso del día</div>
-        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
-          <Field label="Cuentas"><Input type="number" value={form.compromiso.cuentas} onChange={e=>setForm({...form,compromiso:{...form.compromiso,cuentas:e.target.value}})}/></Field>
-          <Field label="Ventas"><Input type="number" value={form.compromiso.ventas} onChange={e=>setForm({...form,compromiso:{...form.compromiso,ventas:e.target.value}})}/></Field>
-          <Field label="Instalaciones"><Input type="number" value={form.compromiso.instalaciones} onChange={e=>setForm({...form,compromiso:{...form.compromiso,instalaciones:e.target.value}})}/></Field>
-        </div>
-        <Field label="Colonia donde va a trabajar">
-          <Autocomplete value={form.colonia} onChange={v=>setForm({...form,colonia:v})} placeholder="Buscar colonia..." options={todasColonias.map(c=>({value:c,label:`${c} (${zonasData.coloniaToCluster[c]})`}))}/>
-        </Field>
-      </div>
+      {TIPOS_CON_COMPROMISO.includes(form.tipo)&&
+        <CompromisoDelDia compromiso={form.compromiso} colonia={form.colonia} zonasData={zonasData}
+          onCompromiso={c=>setForm(f=>({...f,compromiso:c}))} onColonia={v=>setForm(f=>({...f,colonia:v}))}/>}
       <Field label="Autorizado por"><Input value={form.autorizado_por} onChange={e=>setForm({...form,autorizado_por:e.target.value})}/></Field>
       <Field label="Evidencia (obligatoria)"><PhotoCapture photo={form.photo} onCapture={p=>setForm({...form,photo:p})} label="Foto o conversación del motivo del permiso"/></Field>
       <Field label="Notas"><Textarea value={form.notas} onChange={e=>setForm({...form,notas:e.target.value})} placeholder="Observaciones..." style={{minHeight:50}}/></Field>
@@ -3086,8 +3132,12 @@ function HistorialTab({data,setData,toast,session}){
         return <>
           <p style={{fontSize:13}}><b>Presentes:</b> {r['Presentes']} · <b>Ausentes:</b> {r['Ausentes']}</p>
           {r['Detalle ausentes']&&<p style={{fontSize:12,color:'var(--red)',margin:'2px 0'}}>{r['Detalle ausentes']}</p>}
+          {r['Compromisos del día']&&<p style={{fontSize:12,margin:'2px 0'}}>🎯 {r['Compromisos del día']}</p>}
           {r['Notas']&&<p style={{fontSize:13,marginTop:4}}>{r['Notas']}</p>}
-          {r['Foto grupo']&&<div style={{marginTop:6}}><FotoMini src={r['Foto grupo']}/></div>}
+          {(r['Foto grupo']||r['Foto grupo subida'])&&<div style={{marginTop:6,display:'flex',gap:6}}>
+            {r['Foto grupo']&&<FotoMini src={r['Foto grupo']}/>}
+            {r['Foto grupo subida']&&<FotoMini src={r['Foto grupo subida']}/>}
+          </div>}
           {fotosAus.length>0&&<div style={{marginTop:6,display:'flex',flexWrap:'wrap',gap:6}}>
             {fotosAus.map((f,j)=><a key={j} href={f.url} target="_blank" rel="noopener noreferrer" style={{display:'inline-flex',alignItems:'center',gap:6,padding:'6px 10px',borderRadius:8,background:'var(--rbg)',color:'var(--red)',fontSize:11,fontWeight:700,textDecoration:'none'}}>📷 {f.nombre}</a>)}
           </div>}

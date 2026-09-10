@@ -855,7 +855,8 @@ const SHEET_CONFIG = {
       'ID', 'Fecha', 'Hora', 'Registrado por', 'Rol',
       'Presentes', 'Ausentes', 'Detalle ausentes', 'Notas',
       'Con foto', 'Foto grupo', 'Fotos evidencia ausentes', 'Fotos por vendedor',
-      'Timestamp'
+      'Timestamp',
+      'Compromisos del día', 'Foto grupo subida'
     ]
   },
   PERMISO: {
@@ -993,8 +994,22 @@ function buildRow(type, d) {
       const fotoGrupoUrl = d.photo
         ? subirFotoADrive(d.photo, `Grupo_${fechaHora}.jpg`)
         : '';
+      // Foto opcional subida de la galería: va sin sello y en su propia columna, para que se
+      // distinga de la foto de grupo del momento (que sí es evidencia sellada).
+      const fotoGrupoSubidaUrl = d.photoSubida
+        ? subirFotoADrive(d.photoSubida, `GrupoSubida_${fechaHora}.jpg`)
+        : '';
       const ausentesTxt = (d.ausentes || [])
         .map(a => `${a.name}: ${a.reason}${a.detail ? ' — ' + a.detail : ''}`)
+        .join('; ');
+      // "Trabajo fuera de ruta"/"Actividad especial" no son ausencias: llevan compromiso del día,
+      // igual que en Permisos. Se guardan aparte para poder contrastarlos contra lo que entregaron.
+      const compromisosTxt = (d.ausentes || [])
+        .filter(a => a.compromiso && (a.compromiso.cuentas || a.compromiso.ventas || a.compromiso.instalaciones || a.colonia))
+        .map(a => {
+          const c = a.compromiso;
+          return `${a.name} (${a.reason}): ${c.cuentas || 0} cuentas, ${c.ventas || 0} ventas, ${c.instalaciones || 0} instalaciones${a.colonia ? ' en ' + a.colonia : ''}`;
+        })
         .join('; ');
       const fotosAusentes = (d.ausentes || [])
         .filter(a => a.photo)
@@ -1024,10 +1039,14 @@ function buildRow(type, d) {
         fotoGrupoUrl,
         fotosAusentesTxt,       // "nombre: liga; nombre: liga"
         fotosVendedoresTxt,     // "nombre: liga; nombre: liga"
-        ts
+        ts,
+        // Columnas nuevas: van DESPUÉS de Timestamp a propósito. Insertarlas en medio recorrería
+        // todas las filas ya guardadas y el histórico quedaría leído de columnas equivocadas.
+        compromisosTxt,
+        fotoGrupoSubidaUrl
       ];
       // Se regresan las ligas para que la app las use en vez de la foto local.
-      return { row: row, extra: { fotoGrupoUrl: fotoGrupoUrl, fotosAusentes: fotosAusentes, fotosVendedores: fotosVendedores } };
+      return { row: row, extra: { fotoGrupoUrl: fotoGrupoUrl, fotoGrupoSubidaUrl: fotoGrupoSubidaUrl, fotosAusentes: fotosAusentes, fotosVendedores: fotosVendedores } };
     }
 
     case 'permiso': {
