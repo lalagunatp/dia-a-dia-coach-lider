@@ -908,6 +908,16 @@ const SHEET_CONFIG = {
       'Transcripción', 'Notas', 'Con foto', 'Foto evidencia',
       'Registrado por', 'Timestamp'
     ]
+  },
+  // El semáforo se pone desde el panel Equipo del Dashboard, no dentro de un hallazgo. Vive en su
+  // propia hoja para que marcarlo sea un acto de un toque, sin obligar a capturar un hallazgo
+  // completo, y para que quede el historial de cómo fue cambiando cada vendedor.
+  SEMAFORO: {
+    name: 'SEMAFORO',
+    headers: [
+      'ID', 'Fecha', 'Integrante', 'Semáforo', 'Nota',
+      'Registrado por', 'Timestamp'
+    ]
   }
 };
 
@@ -1129,6 +1139,13 @@ function buildRow(type, d) {
       ];
       const extra = fotosEvidencia ? { fotosEvidencia: fotosEvidencia } : { fotoUrl: fotoUrl };
       return { row: row, extra: extra };
+    }
+
+    case 'semaforo': {
+      return { row: [
+        d.id, d.date, d.vendedor || '', d.semaforo || '', d.nota || '',
+        d.registradoPor || '', ts
+      ] };
     }
 
     default:

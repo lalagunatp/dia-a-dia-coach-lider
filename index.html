@@ -24,7 +24,10 @@
 <script src="./vendor/babel.min.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:#f0f2f8;color:#1a1d29;-webkit-font-smoothing:antialiased}
+/* 15px de base: lo que se lee cómodo en un celular a pleno sol y en una laptop sin acercarse.
+   Casi todo el texto trae su tamaño en línea, pero esto fija el piso de lo que no lo trae y evita
+   que algo herede los 16px del navegador y se vea fuera de escala. */
+body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:#f0f2f8;color:#1a1d29;-webkit-font-smoothing:antialiased;font-size:15px;line-height:1.45}
 :root{--bg:#f0f2f8;--card:#fff;--text:#1a1d29;--dim:#6b7086;--border:#e2e4ec;--accent:#1e40af;--accent2:#3b82f6;--accent-light:#dbeafe;--input:#f8f9fc;--green:#16a34a;--yellow:#ca8a04;--red:#dc2626;--gbg:#f0fdf4;--ybg:#fefce8;--rbg:#fef2f2;--nest-bg:#f7f3ec;--nest-border:#d9c9a8}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
 @keyframes spin{to{transform:rotate(360deg)}}
@@ -76,6 +79,14 @@ const STATUS={
   amarillo:{bg:'var(--ybg)',border:'var(--yellow)',label:'Amarillo'},
   rojo:{bg:'var(--rbg)',border:'var(--red)',label:'Rojo'},
 };
+// El color solo no dice qué hacer. Cada uno lleva su significado y su emoji para que marcarlo no
+// dependa de que cada coach se acuerde del criterio.
+const SEM_EMOJI={verde:'🟢',amarillo:'🟡',rojo:'🔴'};
+const SEM_OPCIONES=[
+  {valor:'verde',emoji:'🟢',titulo:'Va bien',ayuda:'Cumple meta y ritmo'},
+  {valor:'amarillo',emoji:'🟡',titulo:'Ojo',ayuda:'Se está quedando corto'},
+  {valor:'rojo',emoji:'🔴',titulo:'Urgente',ayuda:'Necesita plan de acción'},
+];
 const TABS=[
   {id:'dashboard',icon:'📈',label:'Dashboard'},
   {id:'plan',icon:'📊',label:'Plan'},
@@ -96,7 +107,6 @@ const FEEDBACK_TIPOS=['Acompañamiento','Feedback 1 a 1','Revisión semanal','In
 const FEEDBACK_TIPOS_CON_FOTO=['Acompañamiento','Evidencia de asignación externa'];
 const DIAS_SEMANA=['lunes','martes','miercoles','jueves','viernes','sabado','domingo'];
 const DIAS_SEMANA_LABEL={lunes:'Lunes',martes:'Martes',miercoles:'Miércoles',jueves:'Jueves',viernes:'Viernes',sabado:'Sábado',domingo:'Domingo'};
-const cycleS=c=>{const o=['verde','amarillo','rojo'];return o[(o.indexOf(c)+1)%3];};
 // Compromiso vs. meta oficial: rojo si se comprometen por debajo, negro si es igual, verde si es mayor.
 const colorVsMeta=(val,meta)=>{const v=Number(val)||0;if(!meta)return'var(--text)';if(v<meta)return'var(--red)';if(v>meta)return'var(--green)';return'#000';};
 
@@ -234,7 +244,7 @@ function parseFotosAusentes(txt){
 // Dos cosas no se pueden reconstruir porque el Sheet no las guarda: los NOMBRES de los presentes
 // en un arranque (solo queda el total, que es lo que se muestra) y las fotos, que llegan como
 // liga de Drive en vez de la imagen embebida (la app ya sabe abrir ambas, ver FotoMini).
-const HOJA_POR_TIPO={arranque:'ARRANQUE',permiso:'PERMISO',cierre:'CIERRE',plan:'PLAN',plan_resultado:'PLAN_RESULTADO',feedback:'FEEDBACK'};
+const HOJA_POR_TIPO={arranque:'ARRANQUE',permiso:'PERMISO',cierre:'CIERRE',plan:'PLAN',plan_resultado:'PLAN_RESULTADO',feedback:'FEEDBACK',semaforo:'SEMAFORO'};
 const nNum=v=>Number(v)||0;
 // "Nombre: resto; Nombre: resto" → [{nombre,resto}] — el formato de lista que usa buildRow.
 function partirLista(txt){
@@ -331,8 +341,22 @@ function recordDesdeFila(tipo,f){
         grabado:String(f['Grabado']||'').toUpperCase().startsWith('S'),transcript:f['Transcripción']||'',
         notas:f['Notas']||'',photo:fotos.length?null:(col||null),fotos};
     }
+    case'semaforo':
+      return{...base,vendedor:f['Integrante']||'',semaforo:f['Semáforo']||'',nota:f['Nota']||''};
     default:return null;
   }
+}
+// Semáforo vigente de cada vendedor. Sale de dos lados: los hallazgos viejos, que traían el
+// semáforo adentro, y los registros nuevos de tipo 'semaforo' que se ponen desde el Dashboard.
+// Se ordena todo junto por savedAt y gana el más reciente, así que a quien ya estaba semaforizado
+// por un hallazgo se le sigue viendo su color hasta que alguien lo cambie desde el panel Equipo.
+function construirSemaforoMap(records){
+  const map={};
+  (records||[])
+    .filter(r=>(r.type==='feedback'||r.type==='semaforo')&&r.vendedor&&r.semaforo)
+    .sort((a,b)=>String(a.savedAt||'').localeCompare(String(b.savedAt||'')))
+    .forEach(r=>{map[r.vendedor]={valor:r.semaforo,fecha:r.date||'',porQuien:r.registradoPor||'',desde:r.type};});
+  return map;
 }
 // Los registros que capturó ESA persona (los suyos, no los de su equipo), de las 6 hojas.
 async function fetchRegistrosPropiosDelSheet(session){
@@ -831,49 +855,49 @@ function isCoach(p){return(p||'').toUpperCase().includes('COACH');}
 // ═══ UI COMPONENTS ═══
 function StatusBadge({status,onClick,small}){
   const s=STATUS[status]||STATUS.verde;
-  return <button onClick={onClick} style={{display:'inline-flex',alignItems:'center',gap:5,padding:small?'2px 8px':'4px 12px',borderRadius:16,border:`2px solid ${s.border}`,background:s.bg,cursor:onClick?'pointer':'default',fontSize:small?11:12,fontWeight:700,color:s.border}}><span style={{width:7,height:7,borderRadius:'50%',background:s.border}}/>{s.label}</button>;
+  return <button onClick={onClick} style={{display:'inline-flex',alignItems:'center',gap:5,padding:small?'2px 8px':'4px 12px',borderRadius:16,border:`2px solid ${s.border}`,background:s.bg,cursor:onClick?'pointer':'default',fontSize:small?13:13,fontWeight:700,color:s.border}}><span style={{width:7,height:7,borderRadius:'50%',background:s.border}}/>{s.label}</button>;
 }
-function Field({label,children}){return <div style={{marginBottom:12}}><label style={{display:'block',fontSize:11,fontWeight:700,color:'var(--dim)',marginBottom:3,textTransform:'uppercase',letterSpacing:'.5px'}}>{label}</label>{children}</div>;}
-function Input(p){return <input {...p} style={{width:'100%',padding:'10px 12px',borderRadius:8,border:'1.5px solid var(--border)',background:'var(--input)',fontSize:14,color:'var(--text)',outline:'none',boxSizing:'border-box',...p.style}} onFocus={e=>{e.target.style.borderColor='var(--accent)';p.onFocus?.(e);}} onBlur={e=>{e.target.style.borderColor='var(--border)';p.onBlur?.(e);}}/>;}
-function Textarea(p){return <textarea {...p} style={{width:'100%',padding:'10px 12px',borderRadius:8,border:'1.5px solid var(--border)',background:'var(--input)',fontSize:14,color:'var(--text)',outline:'none',minHeight:80,fontFamily:'inherit',boxSizing:'border-box',...p.style}} onFocus={e=>{e.target.style.borderColor='var(--accent)';p.onFocus?.(e);}} onBlur={e=>{e.target.style.borderColor='var(--border)';p.onBlur?.(e);}}/>;}
+function Field({label,children}){return <div style={{marginBottom:12}}><label style={{display:'block',fontSize:13,fontWeight:700,color:'var(--dim)',marginBottom:3,textTransform:'uppercase',letterSpacing:'.5px'}}>{label}</label>{children}</div>;}
+function Input(p){return <input {...p} style={{width:'100%',padding:'10px 12px',borderRadius:8,border:'1.5px solid var(--border)',background:'var(--input)',fontSize:15,color:'var(--text)',outline:'none',boxSizing:'border-box',...p.style}} onFocus={e=>{e.target.style.borderColor='var(--accent)';p.onFocus?.(e);}} onBlur={e=>{e.target.style.borderColor='var(--border)';p.onBlur?.(e);}}/>;}
+function Textarea(p){return <textarea {...p} style={{width:'100%',padding:'10px 12px',borderRadius:8,border:'1.5px solid var(--border)',background:'var(--input)',fontSize:15,color:'var(--text)',outline:'none',minHeight:80,fontFamily:'inherit',boxSizing:'border-box',...p.style}} onFocus={e=>{e.target.style.borderColor='var(--accent)';p.onFocus?.(e);}} onBlur={e=>{e.target.style.borderColor='var(--border)';p.onBlur?.(e);}}/>;}
 // Input numérico con "$" fijo a la izquierda, para valores de moneda (ARPU).
 function InputMoney(p){return <div style={{position:'relative'}}>
-  <span style={{position:'absolute',left:12,top:'50%',transform:'translateY(-50%)',color:'var(--dim)',fontSize:14,pointerEvents:'none'}}>$</span>
+  <span style={{position:'absolute',left:12,top:'50%',transform:'translateY(-50%)',color:'var(--dim)',fontSize:15,pointerEvents:'none'}}>$</span>
   <Input type="number" step="0.01" min="0" inputMode="decimal" placeholder="0.00" {...p} style={{paddingLeft:24,...p.style}}/>
 </div>;}
 function Btn({children,onClick,variant='primary',style:s,disabled}){
   const v={primary:{background:'var(--accent)',color:'#fff'},secondary:{background:'var(--card)',color:'var(--text)',border:'1.5px solid var(--border)'},danger:{background:'var(--red)',color:'#fff'},ghost:{background:'transparent',color:'var(--accent)',padding:'6px 10px'},success:{background:'var(--green)',color:'#fff'}};
-  return <button onClick={onClick} disabled={disabled} style={{padding:'10px 18px',borderRadius:8,border:'none',fontSize:14,fontWeight:600,cursor:disabled?'not-allowed':'pointer',opacity:disabled?.5:1,...v[variant],...s}}>{children}</button>;
+  return <button onClick={onClick} disabled={disabled} style={{padding:'10px 18px',borderRadius:8,border:'none',fontSize:15,fontWeight:600,cursor:disabled?'not-allowed':'pointer',opacity:disabled?.5:1,...v[variant],...s}}>{children}</button>;
 }
-function Card({children,title,actions,style:s}){return <div className="anim" style={{background:'var(--card)',borderRadius:12,border:'1px solid var(--border)',padding:18,marginBottom:14,...s}}>{(title||actions)&&<div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>{title&&<h3 style={{margin:0,fontSize:15,fontWeight:700}}>{title}</h3>}{actions}</div>}{children}</div>;}
+function Card({children,title,actions,style:s}){return <div className="anim" style={{background:'var(--card)',borderRadius:12,border:'1px solid var(--border)',padding:18,marginBottom:14,...s}}>{(title||actions)&&<div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>{title&&<h3 style={{margin:0,fontSize:16,fontWeight:700}}>{title}</h3>}{actions}</div>}{children}</div>;}
 // Tarjeta que colapsa/expande todo su contenido al tocar el título.
 function PanelAcordeon({title,abierto,onToggle,children}){
   return <Card>
     <div onClick={onToggle} style={{display:'flex',justifyContent:'space-between',alignItems:'center',cursor:'pointer',marginBottom:abierto?12:0}}>
-      <h3 style={{margin:0,fontSize:15,fontWeight:700}}>{title}</h3>
-      <span style={{fontSize:12,color:'var(--dim)'}}>{abierto?'▲':'▼'}</span>
+      <h3 style={{margin:0,fontSize:16,fontWeight:700}}>{title}</h3>
+      <span style={{fontSize:13,color:'var(--dim)'}}>{abierto?'▲':'▼'}</span>
     </div>
     {abierto&&children}
   </Card>;
 }
-function Select({value,onChange,options,style:s}){return <select value={value} onChange={e=>onChange(e.target.value)} style={{padding:'10px 12px',borderRadius:8,border:'1.5px solid var(--border)',background:'var(--input)',fontSize:14,color:'var(--text)',outline:'none',width:'100%',boxSizing:'border-box',...s}}>{options.map(o=><option key={typeof o==='string'?o:o.value} value={typeof o==='string'?o:o.value}>{typeof o==='string'?o:o.label}</option>)}</select>;}
+function Select({value,onChange,options,style:s}){return <select value={value} onChange={e=>onChange(e.target.value)} style={{padding:'10px 12px',borderRadius:8,border:'1.5px solid var(--border)',background:'var(--input)',fontSize:15,color:'var(--text)',outline:'none',width:'100%',boxSizing:'border-box',...s}}>{options.map(o=><option key={typeof o==='string'?o:o.value} value={typeof o==='string'?o:o.value}>{typeof o==='string'?o:o.label}</option>)}</select>;}
 // Vista prestada del Director (solo lectura): toma el lugar del botón de guardar en cada
 // pestaña de captura. El director ve exactamente lo que ve el líder/coach, pero el registro
 // tiene que capturarlo esa persona desde su propia sesión — si no, quedaría a nombre de
 // alguien que no estuvo ahí (el servidor tampoco lo permitiría: doPost siempre usa el token).
 function AvisoSoloLectura({nombre}){
   const corto=nombre?nombre.split(' ').slice(0,3).join(' '):'esa persona';
-  return <p style={{background:'var(--ybg)',color:'var(--yellow)',fontSize:12,fontWeight:600,textAlign:'center',padding:'10px 12px',borderRadius:8,margin:0}}>
+  return <p style={{background:'var(--ybg)',color:'var(--yellow)',fontSize:13,fontWeight:600,textAlign:'center',padding:'10px 12px',borderRadius:8,margin:0}}>
     👁️ Vista de consulta — este registro solo lo puede guardar {corto} desde su propia sesión
   </p>;
 }
-function Toast({msg,onClose}){useEffect(()=>{const t=setTimeout(onClose,2500);return()=>clearTimeout(t);},[]);return <div style={{position:'fixed',bottom:80,left:'50%',transform:'translateX(-50%)',background:'#1a1d29',color:'#fff',padding:'10px 20px',borderRadius:10,fontSize:14,fontWeight:600,zIndex:9999,boxShadow:'0 4px 20px rgba(0,0,0,.25)',whiteSpace:'nowrap'}}>{msg}</div>;}
+function Toast({msg,onClose}){useEffect(()=>{const t=setTimeout(onClose,2500);return()=>clearTimeout(t);},[]);return <div style={{position:'fixed',bottom:80,left:'50%',transform:'translateX(-50%)',background:'#1a1d29',color:'#fff',padding:'10px 20px',borderRadius:10,fontSize:15,fontWeight:600,zIndex:9999,boxShadow:'0 4px 20px rgba(0,0,0,.25)',whiteSpace:'nowrap'}}>{msg}</div>;}
 function Spinner(){return <div style={{width:28,height:28,border:'3px solid var(--border)',borderTop:'3px solid var(--accent)',borderRadius:'50%',animation:'spin .8s linear infinite',margin:'0 auto'}}/>;}
 
 function RankBadge({badge}){
   if(!badge)return null;
   const rc=RANK_COLORS[badge]||{bg:'#F3F4F6',color:'#6B7280',icon:'📊'};
-  return <span style={{fontSize:10,fontWeight:700,padding:'1px 6px',borderRadius:8,background:rc.bg,color:rc.color,marginLeft:4}}>{rc.icon} {badge}</span>;
+  return <span style={{fontSize:12,fontWeight:700,padding:'1px 6px',borderRadius:8,background:rc.bg,color:rc.color,marginLeft:4}}>{rc.icon} {badge}</span>;
 }
 
 function MemberInfo({m,expanded,onToggle}){
@@ -883,10 +907,10 @@ function MemberInfo({m,expanded,onToggle}){
   if(!hasInfo)return null;
   return <div style={{marginTop:6}}>
     {!expanded?
-      <button onClick={onToggle} style={{fontSize:11,color:'var(--accent)',background:'none',border:'none',cursor:'pointer',padding:0}}>📊 Ver datos →</button>
+      <button onClick={onToggle} style={{fontSize:13,color:'var(--accent)',background:'none',border:'none',cursor:'pointer',padding:0}}>📊 Ver datos →</button>
     :
-      <div style={{background:'var(--bg)',borderRadius:8,padding:10,fontSize:12}}>
-        <button onClick={onToggle} style={{fontSize:11,color:'var(--dim)',background:'none',border:'none',cursor:'pointer',padding:0,marginBottom:4}}>▲ Cerrar</button>
+      <div style={{background:'var(--bg)',borderRadius:8,padding:10,fontSize:13}}>
+        <button onClick={onToggle} style={{fontSize:13,color:'var(--dim)',background:'none',border:'none',cursor:'pointer',padding:0,marginBottom:4}}>▲ Cerrar</button>
         {re&&<div style={{marginBottom:6}}>
           <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:4}}>
             {re.ranking&&<span style={{fontWeight:700}}>{RANK_COLORS[re.ranking]?.icon||'📊'} {re.ranking}</span>}
@@ -894,10 +918,10 @@ function MemberInfo({m,expanded,onToggle}){
           </div>
           {(re.certActitud||re.certSist1||re.certSist2||re.certSist3)&&
             <div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
-              {re.certActitud==='APROBADO'&&<span style={{background:'var(--gbg)',color:'var(--green)',padding:'1px 5px',borderRadius:6,fontSize:10}}>✓ Actitud</span>}
-              {re.certSist1==='APROBADO'&&<span style={{background:'var(--gbg)',color:'var(--green)',padding:'1px 5px',borderRadius:6,fontSize:10}}>✓ Sist I</span>}
-              {re.certSist2==='APROBADO'&&<span style={{background:'var(--gbg)',color:'var(--green)',padding:'1px 5px',borderRadius:6,fontSize:10}}>✓ Sist II</span>}
-              {re.certSist3==='APROBADO'&&<span style={{background:'var(--gbg)',color:'var(--green)',padding:'1px 5px',borderRadius:6,fontSize:10}}>✓ Sist III</span>}
+              {re.certActitud==='APROBADO'&&<span style={{background:'var(--gbg)',color:'var(--green)',padding:'1px 5px',borderRadius:6,fontSize:12}}>✓ Actitud</span>}
+              {re.certSist1==='APROBADO'&&<span style={{background:'var(--gbg)',color:'var(--green)',padding:'1px 5px',borderRadius:6,fontSize:12}}>✓ Sist I</span>}
+              {re.certSist2==='APROBADO'&&<span style={{background:'var(--gbg)',color:'var(--green)',padding:'1px 5px',borderRadius:6,fontSize:12}}>✓ Sist II</span>}
+              {re.certSist3==='APROBADO'&&<span style={{background:'var(--gbg)',color:'var(--green)',padding:'1px 5px',borderRadius:6,fontSize:12}}>✓ Sist III</span>}
             </div>
           }
           {re.obs&&re.obs!=='-'&&<p style={{margin:'4px 0 0',color:'var(--dim)',fontStyle:'italic'}}>{re.obs}</p>}
@@ -927,16 +951,16 @@ function PhotoCapture({photo,onCapture,label,modo='ambos',onQuitar}){
       <div style={{position:'relative'}}>
         <img src={photo} alt="" style={{width:'100%',maxHeight:220,objectFit:'cover',borderRadius:10,border:'1px solid var(--border)'}}/>
         <div style={{position:'absolute',top:6,right:6,display:'flex',gap:4}}>
-          {verCam&&<Btn onClick={()=>refCam.current.click()} variant="ghost" style={{background:'rgba(0,0,0,.55)',color:'#fff',borderRadius:8,fontSize:12,padding:'5px 9px'}}>📷</Btn>}
-          {verGal&&<Btn onClick={()=>refGal.current.click()} variant="ghost" style={{background:'rgba(0,0,0,.55)',color:'#fff',borderRadius:8,fontSize:12,padding:'5px 9px'}}>🖼️</Btn>}
-          {onQuitar&&<Btn onClick={onQuitar} variant="ghost" style={{background:'rgba(0,0,0,.55)',color:'#fff',borderRadius:8,fontSize:12,padding:'5px 9px'}}>✕</Btn>}
+          {verCam&&<Btn onClick={()=>refCam.current.click()} variant="ghost" style={{background:'rgba(0,0,0,.55)',color:'#fff',borderRadius:8,fontSize:13,padding:'5px 9px'}}>📷</Btn>}
+          {verGal&&<Btn onClick={()=>refGal.current.click()} variant="ghost" style={{background:'rgba(0,0,0,.55)',color:'#fff',borderRadius:8,fontSize:13,padding:'5px 9px'}}>🖼️</Btn>}
+          {onQuitar&&<Btn onClick={onQuitar} variant="ghost" style={{background:'rgba(0,0,0,.55)',color:'#fff',borderRadius:8,fontSize:13,padding:'5px 9px'}}>✕</Btn>}
         </div>
       </div>
     :<>
-      {label&&<p style={{fontSize:12,color:'var(--dim)',marginBottom:6}}>{label}</p>}
+      {label&&<p style={{fontSize:13,color:'var(--dim)',marginBottom:6}}>{label}</p>}
       <div style={{display:'flex',gap:8}}>
-        {verCam&&<button onClick={()=>refCam.current.click()} style={{flex:1,padding:'18px 10px',borderRadius:12,border:'2px dashed var(--border)',background:'var(--input)',cursor:'pointer',textAlign:'center',color:'var(--dim)',fontSize:13}}>📷 Tomar foto</button>}
-        {verGal&&<button onClick={()=>refGal.current.click()} style={{flex:1,padding:'18px 10px',borderRadius:12,border:'2px dashed var(--border)',background:'var(--input)',cursor:'pointer',textAlign:'center',color:'var(--dim)',fontSize:13}}>🖼️ Subir foto</button>}
+        {verCam&&<button onClick={()=>refCam.current.click()} style={{flex:1,padding:'18px 10px',borderRadius:12,border:'2px dashed var(--border)',background:'var(--input)',cursor:'pointer',textAlign:'center',color:'var(--dim)',fontSize:14}}>📷 Tomar foto</button>}
+        {verGal&&<button onClick={()=>refGal.current.click()} style={{flex:1,padding:'18px 10px',borderRadius:12,border:'2px dashed var(--border)',background:'var(--input)',cursor:'pointer',textAlign:'center',color:'var(--dim)',fontSize:14}}>🖼️ Subir foto</button>}
       </div>
     </>}
   </div>;
@@ -948,7 +972,7 @@ function CompromisoDelDia({compromiso,colonia,onCompromiso,onColonia,zonasData,c
   const todasColonias=Object.keys(zonasData?.coloniaToCluster||{}).sort();
   const c=compromiso||{cuentas:'',ventas:'',instalaciones:''};
   return <div style={{marginBottom:compacto?0:12,padding:10,border:'1px solid var(--border)',borderRadius:8,background:compacto?'var(--nest-bg)':'var(--bg)'}}>
-    <div style={{fontSize:12,fontWeight:700,color:'var(--dim)',marginBottom:8}}>🎯 Compromiso del día</div>
+    <div style={{fontSize:13,fontWeight:700,color:'var(--dim)',marginBottom:8}}>🎯 Compromiso del día</div>
     <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
       <Field label="Cuentas"><Input type="number" value={c.cuentas} onChange={e=>onCompromiso({...c,cuentas:e.target.value})}/></Field>
       <Field label="Ventas"><Input type="number" value={c.ventas} onChange={e=>onCompromiso({...c,ventas:e.target.value})}/></Field>
@@ -1034,17 +1058,17 @@ function PhotoCaptureGeo({photo,onCapture,coachName,toast,label,modo='ambos'}){
       <div style={{position:'relative'}}>
         <img src={photo} alt="" style={{width:'100%',maxHeight:200,objectFit:'cover',borderRadius:8,border:'1px solid var(--border)'}}/>
         <div style={{position:'absolute',top:6,right:6,display:'flex',gap:4}}>
-          {verCam&&<Btn onClick={()=>refCam.current.click()} variant="ghost" style={{background:'rgba(0,0,0,.55)',color:'#fff',borderRadius:8,fontSize:11,padding:'4px 8px'}}>📷</Btn>}
-          {verGal&&<Btn onClick={()=>refGal.current.click()} variant="ghost" style={{background:'rgba(0,0,0,.55)',color:'#fff',borderRadius:8,fontSize:11,padding:'4px 8px'}}>🖼️</Btn>}
+          {verCam&&<Btn onClick={()=>refCam.current.click()} variant="ghost" style={{background:'rgba(0,0,0,.55)',color:'#fff',borderRadius:8,fontSize:13,padding:'4px 8px'}}>📷</Btn>}
+          {verGal&&<Btn onClick={()=>refGal.current.click()} variant="ghost" style={{background:'rgba(0,0,0,.55)',color:'#fff',borderRadius:8,fontSize:13,padding:'4px 8px'}}>🖼️</Btn>}
         </div>
       </div>
     :<>
-      {label&&<p style={{fontSize:12,color:'var(--dim)',marginBottom:6}}>{label}</p>}
+      {label&&<p style={{fontSize:13,color:'var(--dim)',marginBottom:6}}>{label}</p>}
       <div style={{display:'flex',gap:8}}>
-        {verCam&&<button onClick={()=>refCam.current.click()} disabled={loading} style={{flex:1,padding:'10px 12px',borderRadius:8,border:'2px dashed var(--border)',background:'var(--input)',cursor:loading?'wait':'pointer',textAlign:'center',color:'var(--dim)',fontSize:12}}>
+        {verCam&&<button onClick={()=>refCam.current.click()} disabled={loading} style={{flex:1,padding:'10px 12px',borderRadius:8,border:'2px dashed var(--border)',background:'var(--input)',cursor:loading?'wait':'pointer',textAlign:'center',color:'var(--dim)',fontSize:13}}>
           {loading?'📍 Obteniendo ubicación...':'📷 Tomar foto'}
         </button>}
-        {verGal&&<button onClick={()=>refGal.current.click()} disabled={loading} style={{flex:1,padding:'10px 12px',borderRadius:8,border:'2px dashed var(--border)',background:'var(--input)',cursor:loading?'wait':'pointer',textAlign:'center',color:'var(--dim)',fontSize:12}}>
+        {verGal&&<button onClick={()=>refGal.current.click()} disabled={loading} style={{flex:1,padding:'10px 12px',borderRadius:8,border:'2px dashed var(--border)',background:'var(--input)',cursor:loading?'wait':'pointer',textAlign:'center',color:'var(--dim)',fontSize:13}}>
           {loading?'📍 Obteniendo ubicación...':'🖼️ Subir foto'}
         </button>}
       </div>
@@ -1078,13 +1102,13 @@ function PhotoCaptureMulti({photos,onChange,label}){
     {photos&&photos.length>0&&<div style={{display:'flex',flexWrap:'wrap',gap:8,marginBottom:8}}>
       {photos.map((p,i)=><div key={i} style={{position:'relative',width:90,height:90}}>
         <img src={p} alt="" style={{width:'100%',height:'100%',objectFit:'cover',borderRadius:8,border:'1px solid var(--border)'}}/>
-        <button onClick={()=>quitar(i)} style={{position:'absolute',top:-6,right:-6,width:22,height:22,borderRadius:'50%',border:'none',background:'var(--red)',color:'#fff',fontSize:12,cursor:'pointer',lineHeight:'22px',padding:0}}>✕</button>
+        <button onClick={()=>quitar(i)} style={{position:'absolute',top:-6,right:-6,width:22,height:22,borderRadius:'50%',border:'none',background:'var(--red)',color:'#fff',fontSize:13,cursor:'pointer',lineHeight:'22px',padding:0}}>✕</button>
       </div>)}
     </div>}
-    {label&&<p style={{fontSize:12,color:'var(--dim)',marginBottom:6}}>{label}</p>}
+    {label&&<p style={{fontSize:13,color:'var(--dim)',marginBottom:6}}>{label}</p>}
     <div style={{display:'flex',gap:8}}>
-      <button onClick={()=>refCam.current.click()} style={{flex:1,padding:'14px 10px',borderRadius:12,border:'2px dashed var(--border)',background:'var(--input)',cursor:'pointer',textAlign:'center',color:'var(--dim)',fontSize:13}}>📷 Tomar foto</button>
-      <button onClick={()=>refGal.current.click()} style={{flex:1,padding:'14px 10px',borderRadius:12,border:'2px dashed var(--border)',background:'var(--input)',cursor:'pointer',textAlign:'center',color:'var(--dim)',fontSize:13}}>🖼️ Subir foto</button>
+      <button onClick={()=>refCam.current.click()} style={{flex:1,padding:'14px 10px',borderRadius:12,border:'2px dashed var(--border)',background:'var(--input)',cursor:'pointer',textAlign:'center',color:'var(--dim)',fontSize:14}}>📷 Tomar foto</button>
+      <button onClick={()=>refGal.current.click()} style={{flex:1,padding:'14px 10px',borderRadius:12,border:'2px dashed var(--border)',background:'var(--input)',cursor:'pointer',textAlign:'center',color:'var(--dim)',fontSize:14}}>🖼️ Subir foto</button>
     </div>
   </div>;
 }
@@ -1123,7 +1147,7 @@ function AudioRecorder({onTranscript}){
     r.onerror=()=>setRec(false);r.onend=()=>{if(rec)try{r.start();}catch{}};
     rr.current=r;r.start();setRec(true);
   };
-  return <div><div style={{display:'flex',gap:8,alignItems:'center',marginBottom:8}}><Btn onClick={toggle} disabled={preparando} variant={rec?'danger':'primary'} style={{display:'flex',alignItems:'center',gap:6}}>{rec?<><span style={{width:10,height:10,borderRadius:'50%',background:'#fff',animation:'pulse 1s infinite'}}/>Detener</>:preparando?<>🔔 Suena el tono...</>:<>🎙️ Grabar</>}</Btn>{rec&&<span style={{fontSize:12,color:'var(--red)',fontWeight:600}}>● Escuchando...</span>}</div>{txt&&<Textarea value={txt} onChange={e=>{setTxt(e.target.value);onTranscript(e.target.value);}} style={{minHeight:100}}/>}</div>;
+  return <div><div style={{display:'flex',gap:8,alignItems:'center',marginBottom:8}}><Btn onClick={toggle} disabled={preparando} variant={rec?'danger':'primary'} style={{display:'flex',alignItems:'center',gap:6}}>{rec?<><span style={{width:10,height:10,borderRadius:'50%',background:'#fff',animation:'pulse 1s infinite'}}/>Detener</>:preparando?<>🔔 Suena el tono...</>:<>🎙️ Grabar</>}</Btn>{rec&&<span style={{fontSize:13,color:'var(--red)',fontWeight:600}}>● Escuchando...</span>}</div>{txt&&<Textarea value={txt} onChange={e=>{setTxt(e.target.value);onTranscript(e.target.value);}} style={{minHeight:100}}/>}</div>;
 }
 
 // ═══════════════════════════════════════
@@ -1166,13 +1190,13 @@ function LoginScreen({onLogin,aviso}){
         <div style={{textAlign:'center',marginBottom:28}}>
           <div style={{fontSize:48,marginBottom:8}}>📋</div>
           <h1 style={{fontSize:22,fontWeight:800,color:'var(--text)',marginBottom:4}}>Supervisión 2.0</h1>
-          <p style={{fontSize:13,color:'var(--dim)'}}>Plan de Trabajo y Seguimiento</p>
+          <p style={{fontSize:14,color:'var(--dim)'}}>Plan de Trabajo y Seguimiento</p>
         </div>
-        {aviso&&<p style={{background:'var(--ybg)',color:'var(--yellow)',fontSize:12,fontWeight:600,textAlign:'center',padding:'8px 10px',borderRadius:8,marginBottom:16}}>{aviso}</p>}
+        {aviso&&<p style={{background:'var(--ybg)',color:'var(--yellow)',fontSize:13,fontWeight:600,textAlign:'center',padding:'8px 10px',borderRadius:8,marginBottom:16}}>{aviso}</p>}
         <Field label="Número de empleado">
           <Input value={numEmp} onChange={e=>setNumEmp(e.target.value)} placeholder="Ej: 17091931"
             onKeyDown={e=>e.key==='Enter'&&document.getElementById('pin-input')?.focus()}
-            style={{fontSize:16,textAlign:'center',letterSpacing:1}}/>
+            style={{fontSize:17,textAlign:'center',letterSpacing:1}}/>
         </Field>
         <Field label="PIN">
           <Input id="pin-input" type="password" inputMode="numeric" maxLength={4} value={pin}
@@ -1180,11 +1204,11 @@ function LoginScreen({onLogin,aviso}){
             placeholder="••••" onKeyDown={e=>e.key==='Enter'&&handleLogin()}
             style={{fontSize:24,textAlign:'center',letterSpacing:8}}/>
         </Field>
-        {error&&<p style={{color:'var(--red)',fontSize:13,textAlign:'center',marginBottom:12,fontWeight:600}}>{error}</p>}
-        <Btn onClick={handleLogin} disabled={loading} style={{width:'100%',padding:14,fontSize:16,marginTop:8,borderRadius:12}}>
+        {error&&<p style={{color:'var(--red)',fontSize:14,textAlign:'center',marginBottom:12,fontWeight:600}}>{error}</p>}
+        <Btn onClick={handleLogin} disabled={loading} style={{width:'100%',padding:14,fontSize:17,marginTop:8,borderRadius:12}}>
           {loading?<Spinner/>:'Iniciar sesión'}
         </Btn>
-        <p style={{fontSize:11,color:'var(--dim)',textAlign:'center',marginTop:16}}>Distrito La Laguna · Totalplay</p>
+        <p style={{fontSize:13,color:'var(--dim)',textAlign:'center',marginTop:16}}>Distrito La Laguna · Totalplay</p>
       </div>
     </div>
   );
@@ -1254,7 +1278,7 @@ function ArranqueTab({data,setData,team,toast,session,refreshKey}){
           y sellarla con la hora/ubicación de ahorita sería falsear la evidencia. Cada una se cambia
           por su lado con los botones de la esquina. */}
       <Field label={esLider?'Foto con coach prioridad del día (obligatoria)':'Foto de grupo (obligatoria)'}>
-        {esLider&&coachesPrioridadHoy.length>0&&<p style={{fontSize:11,color:'var(--accent)',marginBottom:6}}>👤 Hoy toca: <b>{coachesPrioridadHoy.join(', ')}</b> (según tu Plan de la semana)</p>}
+        {esLider&&coachesPrioridadHoy.length>0&&<p style={{fontSize:13,color:'var(--accent)',marginBottom:6}}>👤 Hoy toca: <b>{coachesPrioridadHoy.join(', ')}</b> (según tu Plan de la semana)</p>}
         <PhotoCaptureGeo modo="camara" photo={form.photo} onCapture={p=>setForm({...form,photo:p})} coachName={session.user.nombre} toast={toast} label={esLider?'📷 Tomar foto con el coach (con sello)':'📷 Tomar foto de grupo (con sello)'}/>
       </Field>
       <Field label="Foto adicional subida (opcional)">
@@ -1265,41 +1289,41 @@ function ArranqueTab({data,setData,team,toast,session,refreshKey}){
     {esLider?<>
       <Card title="Asistencia — ¿ya guardaron su arranque hoy?">
         {cargandoArranquesEquipo?<div style={{textAlign:'center',padding:20}}><Spinner/></div>:
-        (session.coaches||[]).length===0?<p style={{color:'var(--dim)',fontSize:14}}>Sin coaches asignados.</p>:
+        (session.coaches||[]).length===0?<p style={{color:'var(--dim)',fontSize:15}}>Sin coaches asignados.</p>:
         coachesArranqueHoy.map(({coach,row})=>
           <div key={coach.nombre} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 10px',borderRadius:8,marginBottom:6,border:`1.5px solid ${row?'var(--green)':'var(--red)'}`,background:row?'var(--gbg)':'var(--rbg)'}}>
-            <span style={{fontWeight:600,fontSize:13}}>{coach.nombre}</span>
-            <span style={{fontWeight:800,fontSize:15,color:row?'var(--green)':'var(--red)'}}>{row?'✓':'✗'}</span>
+            <span style={{fontWeight:600,fontSize:14}}>{coach.nombre}</span>
+            <span style={{fontWeight:800,fontSize:16,color:row?'var(--green)':'var(--red)'}}>{row?'✓':'✗'}</span>
           </div>
         )}
       </Card>
       <Card title="📋 Reporte de asistencia por coach">
         {cargandoArranquesEquipo?<div style={{textAlign:'center',padding:20}}><Spinner/></div>:
-        coachesArranqueHoy.filter(x=>x.row).length===0?<p style={{color:'var(--dim)',fontSize:14}}>Ningún coach ha guardado su arranque todavía.</p>:
+        coachesArranqueHoy.filter(x=>x.row).length===0?<p style={{color:'var(--dim)',fontSize:15}}>Ningún coach ha guardado su arranque todavía.</p>:
         coachesArranqueHoy.filter(x=>x.row).map(({coach,row})=>
           <div key={coach.nombre} style={{marginBottom:10,padding:10,border:'1px solid var(--border)',borderRadius:8}}>
-            <div style={{fontWeight:700,fontSize:13,marginBottom:4}}>{coach.nombre} <span style={{fontWeight:400,fontSize:11,color:'var(--dim)'}}>· {row['Hora']}</span></div>
-            <p style={{fontSize:12,margin:'2px 0'}}><b>Presentes:</b> {row['Presentes']} · <b>Ausentes:</b> {row['Ausentes']}</p>
-            {row['Detalle ausentes']&&<p style={{fontSize:11,color:'var(--red)',margin:'2px 0'}}>{row['Detalle ausentes']}</p>}
-            {row['Compromisos del día']&&<p style={{fontSize:11,margin:'2px 0'}}>🎯 {row['Compromisos del día']}</p>}
-            {row['Notas']&&<p style={{fontSize:12,color:'var(--dim)',margin:'2px 0'}}>{row['Notas']}</p>}
+            <div style={{fontWeight:700,fontSize:14,marginBottom:4}}>{coach.nombre} <span style={{fontWeight:400,fontSize:13,color:'var(--dim)'}}>· {row['Hora']}</span></div>
+            <p style={{fontSize:13,margin:'2px 0'}}><b>Presentes:</b> {row['Presentes']} · <b>Ausentes:</b> {row['Ausentes']}</p>
+            {row['Detalle ausentes']&&<p style={{fontSize:13,color:'var(--red)',margin:'2px 0'}}>{row['Detalle ausentes']}</p>}
+            {row['Compromisos del día']&&<p style={{fontSize:13,margin:'2px 0'}}>🎯 {row['Compromisos del día']}</p>}
+            {row['Notas']&&<p style={{fontSize:13,color:'var(--dim)',margin:'2px 0'}}>{row['Notas']}</p>}
           </div>
         )}
       </Card>
     </>:
       <Card title={`Asistencia (${team.length})`}>
-        {team.length===0?<p style={{color:'var(--dim)',fontSize:14}}>Sin integrantes asignados.</p>:
+        {team.length===0?<p style={{color:'var(--dim)',fontSize:15}}>Sin integrantes asignados.</p>:
         team.map(m=>{
           const present=form.presentes.includes(m.nombre);
           const aus=form.ausentes.find(a=>a.name===m.nombre);
           const fotoVendedor=form.fotosVendedores[m.nombre]||null;
           return <div key={m.numEmp||m.nombre} style={{padding:'8px 10px',borderRadius:8,marginBottom:6,border:`1.5px solid ${present?'var(--green)':'var(--red)'}`,background:present?'var(--gbg)':'var(--rbg)'}}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-              <div><span style={{fontWeight:600,fontSize:13}}>{m.nombre}</span>
-                {isCoach(m.posicion)&&<span style={{marginLeft:6,fontSize:10,background:'var(--accent-light)',color:'var(--accent)',padding:'1px 6px',borderRadius:8,fontWeight:700}}>COACH</span>}
+              <div><span style={{fontWeight:600,fontSize:14}}>{m.nombre}</span>
+                {isCoach(m.posicion)&&<span style={{marginLeft:6,fontSize:12,background:'var(--accent-light)',color:'var(--accent)',padding:'1px 6px',borderRadius:8,fontWeight:700}}>COACH</span>}
                 <RankBadge badge={m.badge}/>
               </div>
-              <Btn onClick={()=>toggle(m.nombre)} variant={present?'success':'danger'} style={{padding:'3px 12px',fontSize:11}}>{present?'✓':'✗'}</Btn>
+              <Btn onClick={()=>toggle(m.nombre)} variant={present?'success':'danger'} style={{padding:'3px 12px',fontSize:13}}>{present?'✓':'✗'}</Btn>
             </div>
             {aus&&<div style={{marginTop:6,display:'flex',flexDirection:'column',gap:6}}>
               <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
@@ -1313,7 +1337,7 @@ function ArranqueTab({data,setData,team,toast,session,refreshKey}){
             </div>}
             {esCoachPDV&&<div style={{marginTop:6}}>
               <PhotoCaptureGeo photo={fotoVendedor} onCapture={p=>setFotoVendedor(m.nombre,p)} coachName={session.user.nombre} toast={toast} label="📷 Foto en el punto de venta (con sello, obligatoria)"/>
-              {form.photo&&!fotoVendedor&&<button type="button" onClick={()=>setFotoVendedor(m.nombre,form.photo)} style={{marginTop:4,fontSize:11,background:'none',border:'none',color:'var(--accent)',cursor:'pointer',textDecoration:'underline',padding:0}}>📎 Usar la misma foto del Arranque del día</button>}
+              {form.photo&&!fotoVendedor&&<button type="button" onClick={()=>setFotoVendedor(m.nombre,form.photo)} style={{marginTop:4,fontSize:13,background:'none',border:'none',color:'var(--accent)',cursor:'pointer',textDecoration:'underline',padding:0}}>📎 Usar la misma foto del Arranque del día</button>}
             </div>}
           </div>;
         })}
@@ -1362,24 +1386,24 @@ function PermisosTab({data,setData,team,toast,session,refreshKey}){
   return <div>
     {esLider&&<Card title={`🗂️ Permisos otorgados por coach — este mes (${totalPermisosMes})`}>
       {cargandoPermisosEquipo?<div style={{textAlign:'center',padding:20}}><Spinner/></div>:
-      (session.coaches||[]).length===0?<p style={{color:'var(--dim)',fontSize:14}}>Sin coaches asignados.</p>:
+      (session.coaches||[]).length===0?<p style={{color:'var(--dim)',fontSize:15}}>Sin coaches asignados.</p>:
       permisosPorCoach.map(({coach,permisos})=>
         <div key={coach.nombre} style={{marginBottom:12}}>
-          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'6px 10px',borderRadius:8,background:'var(--bg)',fontWeight:700,fontSize:13,marginBottom:6}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'6px 10px',borderRadius:8,background:'var(--bg)',fontWeight:700,fontSize:14,marginBottom:6}}>
             <span>{coach.nombre}</span>
-            <span style={{fontSize:12,color:'var(--dim)'}}>{permisos.length} permiso{permisos.length!==1?'s':''}</span>
+            <span style={{fontSize:13,color:'var(--dim)'}}>{permisos.length} permiso{permisos.length!==1?'s':''}</span>
           </div>
-          {permisos.length===0?<p style={{fontSize:12,color:'var(--dim)',padding:'0 10px 4px'}}>Sin permisos este mes.</p>:
+          {permisos.length===0?<p style={{fontSize:13,color:'var(--dim)',padding:'0 10px 4px'}}>Sin permisos este mes.</p>:
           permisos.map((p,i)=>
             <div key={i} style={{marginLeft:10,marginBottom:6,padding:8,border:'1px solid var(--nest-border)',background:'var(--nest-bg)',borderRadius:8}}>
-              <div style={{display:'flex',justifyContent:'space-between',fontSize:12,fontWeight:600}}>
+              <div style={{display:'flex',justifyContent:'space-between',fontSize:13,fontWeight:600}}>
                 <span>{p['Integrante']}</span>
                 <span style={{color:'var(--dim)',fontWeight:400}}>{fmt(p['Fecha'])}</span>
               </div>
-              <p style={{fontSize:11,color:'var(--dim)',margin:'2px 0'}}>{p['Tipo']}{p['Motivo']?' · '+p['Motivo']:''}</p>
+              <p style={{fontSize:13,color:'var(--dim)',margin:'2px 0'}}>{p['Tipo']}{p['Motivo']?' · '+p['Motivo']:''}</p>
               {(p['Compromiso Cuentas']||p['Compromiso Ventas']||p['Compromiso Instalaciones'])&&
-                <p style={{fontSize:11,margin:'2px 0'}}>🎯 Compromiso: {p['Compromiso Cuentas']||0} cuentas · {p['Compromiso Ventas']||0} ventas · {p['Compromiso Instalaciones']||0} instal.{p['Colonia']?` en ${p['Colonia']}`:''}</p>}
-              {p['Autorizado por']&&<p style={{fontSize:11,color:'var(--dim)',margin:'2px 0'}}>Autorizó: {p['Autorizado por']}</p>}
+                <p style={{fontSize:13,margin:'2px 0'}}>🎯 Compromiso: {p['Compromiso Cuentas']||0} cuentas · {p['Compromiso Ventas']||0} ventas · {p['Compromiso Instalaciones']||0} instal.{p['Colonia']?` en ${p['Colonia']}`:''}</p>}
+              {p['Autorizado por']&&<p style={{fontSize:13,color:'var(--dim)',margin:'2px 0'}}>Autorizó: {p['Autorizado por']}</p>}
             </div>
           )}
         </div>
@@ -1446,9 +1470,9 @@ function CierreTab({data,setData,team,toast,session,refreshKey}){
   };
   return <div>
     {ultimoGuardado&&<Card style={{borderLeft:'4px solid var(--green)'}}>
-      <p style={{fontSize:13,fontWeight:700,marginBottom:8}}>✅ Cierre guardado</p>
+      <p style={{fontSize:14,fontWeight:700,marginBottom:8}}>✅ Cierre guardado</p>
       <a href={whatsappUrl(textoCierre(ultimoGuardado))} target="_blank" rel="noopener noreferrer"
-        style={{display:'inline-flex',alignItems:'center',gap:6,padding:'8px 14px',borderRadius:8,background:'#25D366',color:'#fff',fontSize:13,fontWeight:700,textDecoration:'none'}}>
+        style={{display:'inline-flex',alignItems:'center',gap:6,padding:'8px 14px',borderRadius:8,background:'#25D366',color:'#fff',fontSize:14,fontWeight:700,textDecoration:'none'}}>
         📲 Enviar cierre por WhatsApp
       </a>
     </Card>}
@@ -1461,26 +1485,26 @@ function CierreTab({data,setData,team,toast,session,refreshKey}){
     {esLider?
     <Card title="📊 Resultado del día por coach">
       {cargandoCierresEquipo?<div style={{textAlign:'center',padding:20}}><Spinner/></div>:
-      (session.coaches||[]).length===0?<p style={{color:'var(--dim)',fontSize:14}}>Sin coaches asignados.</p>:
+      (session.coaches||[]).length===0?<p style={{color:'var(--dim)',fontSize:15}}>Sin coaches asignados.</p>:
       coachesCierreHoy.map(({coach,row})=>
         <div key={coach.nombre} style={{marginBottom:8,padding:10,borderRadius:8,border:`1.5px solid ${row?'var(--green)':'var(--red)'}`,background:row?'var(--gbg)':'var(--rbg)'}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-            <span style={{fontWeight:700,fontSize:13}}>{coach.nombre}</span>
-            <span style={{fontWeight:800,fontSize:15,color:row?'var(--green)':'var(--red)'}}>{row?'✓':'✗'}</span>
+            <span style={{fontWeight:700,fontSize:14}}>{coach.nombre}</span>
+            <span style={{fontWeight:800,fontSize:16,color:row?'var(--green)':'var(--red)'}}>{row?'✓':'✗'}</span>
           </div>
           {row?<>
-            {row['Resultados por vendedor']&&<p style={{fontSize:11,margin:'4px 0 0'}}>{row['Resultados por vendedor']}</p>}
-            {row['Incidencias']&&<p style={{fontSize:11,color:'var(--red)',margin:'2px 0 0'}}>⚠️ {row['Incidencias']}</p>}
-          </>:<p style={{fontSize:11,color:'var(--dim)',margin:'4px 0 0'}}>Aún no ha cargado el cierre de hoy.</p>}
+            {row['Resultados por vendedor']&&<p style={{fontSize:13,margin:'4px 0 0'}}>{row['Resultados por vendedor']}</p>}
+            {row['Incidencias']&&<p style={{fontSize:13,color:'var(--red)',margin:'2px 0 0'}}>⚠️ {row['Incidencias']}</p>}
+          </>:<p style={{fontSize:13,color:'var(--dim)',margin:'4px 0 0'}}>Aún no ha cargado el cierre de hoy.</p>}
         </div>
       )}
     </Card>
     :
     <Card title={`📊 Resultado del día por vendedor (${vendedores.length})`}>
-      {vendedores.length===0?<p style={{color:'var(--dim)',fontSize:14}}>Sin integrantes asignados.</p>:
+      {vendedores.length===0?<p style={{color:'var(--dim)',fontSize:15}}>Sin integrantes asignados.</p>:
       form.resultados.map(r=>
         <div key={r.nombre} style={{border:'1px solid var(--border)',borderRadius:8,padding:10,marginBottom:8}}>
-          <div style={{fontWeight:600,fontSize:13,marginBottom:6}}>{r.nombre}</div>
+          <div style={{fontWeight:600,fontSize:14,marginBottom:6}}>{r.nombre}</div>
           <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:6,marginBottom:6}}>
             <Field label="Oport."><Input type="number" value={r.oportunidades} onChange={e=>updResultado(r.nombre,'oportunidades',Number(e.target.value))} style={{padding:'6px 8px'}}/></Field>
             <Field label="Valid."><Input type="number" value={r.validadas} onChange={e=>updResultado(r.nombre,'validadas',Number(e.target.value))} style={{padding:'6px 8px'}}/></Field>
@@ -1490,7 +1514,7 @@ function CierreTab({data,setData,team,toast,session,refreshKey}){
           <Field label="Pendiente para mañana"><Input value={r.pendiente} onChange={e=>updResultado(r.nombre,'pendiente',e.target.value)} placeholder="..."/></Field>
         </div>
       )}
-      <p style={{fontSize:11,color:'var(--dim)'}}>Oportunidades, validaciones e instalaciones se precargan del día — ajústalas si hace falta. "Pagadas hoy" son cuentas que hoy se confirmaron como ya pagadas (dejaron de estar en NPPF).</p>
+      <p style={{fontSize:13,color:'var(--dim)'}}>Oportunidades, validaciones e instalaciones se precargan del día — ajústalas si hace falta. "Pagadas hoy" son cuentas que hoy se confirmaron como ya pagadas (dejaron de estar en NPPF).</p>
     </Card>
     }
     <Card title="Incidencias">
@@ -1499,18 +1523,18 @@ function CierreTab({data,setData,team,toast,session,refreshKey}){
     {esLider?
     <Card title="Seguimiento mañana — por coach">
       {cargandoCierresEquipo?<div style={{textAlign:'center',padding:20}}><Spinner/></div>:
-      (session.coaches||[]).length===0?<p style={{color:'var(--dim)',fontSize:14}}>Sin coaches asignados.</p>:
+      (session.coaches||[]).length===0?<p style={{color:'var(--dim)',fontSize:15}}>Sin coaches asignados.</p>:
       coachesCierreHoy.map(({coach,row})=>
         <div key={coach.nombre} style={{marginBottom:10,padding:8,border:'1px solid var(--border)',borderRadius:8}}>
-          <div style={{fontWeight:700,fontSize:13,marginBottom:4}}>{coach.nombre}</div>
-          {row&&row['Seguimiento mañana']?<p style={{fontSize:12}}>{row['Seguimiento mañana']}</p>:
-          <p style={{fontSize:12,color:'var(--dim)'}}>{row?'Sin vendedores señalados para seguimiento.':'Aún no ha cargado el cierre de hoy.'}</p>}
+          <div style={{fontWeight:700,fontSize:14,marginBottom:4}}>{coach.nombre}</div>
+          {row&&row['Seguimiento mañana']?<p style={{fontSize:13}}>{row['Seguimiento mañana']}</p>:
+          <p style={{fontSize:13,color:'var(--dim)'}}>{row?'Sin vendedores señalados para seguimiento.':'Aún no ha cargado el cierre de hoy.'}</p>}
         </div>
       )}
     </Card>
     :
     <Card title="Seguimiento mañana">
-      {vendedores.length===0?<p style={{color:'var(--dim)',fontSize:14}}>Sin integrantes asignados.</p>:<>
+      {vendedores.length===0?<p style={{color:'var(--dim)',fontSize:15}}>Sin integrantes asignados.</p>:<>
       {vendedores.map(m=>{
         const sel=form.seguimiento.find(s=>s.name===m.nombre);
         const fSem=funnelPeriodo(m.ventas,semanaIni,semanaFin);
@@ -1522,16 +1546,16 @@ function CierreTab({data,setData,team,toast,session,refreshKey}){
         };
         return <div key={m.numEmp||m.nombre} style={{marginBottom:6}}>
           <div onClick={()=>toggleSeguimiento(m.nombre)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 10px',borderRadius:8,border:`1.5px solid ${sel?'var(--accent)':'var(--border)'}`,background:sel?'var(--accent-light)':'transparent',cursor:'pointer'}}>
-            <span style={{fontSize:13,fontWeight:600}}>{m.nombre}</span>
-            <span style={{fontSize:12,color:sel?'var(--accent)':'var(--dim)'}}>{sel?'✓ Seguimiento':'+ Agregar'}</span>
+            <span style={{fontSize:14,fontWeight:600}}>{m.nombre}</span>
+            <span style={{fontSize:13,color:sel?'var(--accent)':'var(--dim)'}}>{sel?'✓ Seguimiento':'+ Agregar'}</span>
           </div>
-          <div style={{fontSize:11,color:'var(--dim)',padding:'3px 10px 0'}}>
+          <div style={{fontSize:13,color:'var(--dim)',padding:'3px 10px 0'}}>
             📊 Semana: <b>{resumen.oportunidades}</b> oport. · <b>{resumen.validadas}</b> valid. · <b>{resumen.instaladas}</b> instal.
           </div>
           {sel&&<Input placeholder="Motivo del seguimiento..." value={sel.motivo} onChange={e=>updSeguimiento(m.nombre,e.target.value)} style={{marginTop:4}}/>}
         </div>;
       })}
-      <p style={{fontSize:11,color:'var(--dim)',marginTop:4}}>Resumen de la semana en curso: lo que ya está en sistema + lo capturado arriba en "Resultado del día". Es solo informativo (referencia de cómo van), no se usa para ninguna métrica oficial.</p>
+      <p style={{fontSize:13,color:'var(--dim)',marginTop:4}}>Resumen de la semana en curso: lo que ya está en sistema + lo capturado arriba en "Resultado del día". Es solo informativo (referencia de cómo van), no se usa para ninguna métrica oficial.</p>
       </>}
     </Card>
     }
@@ -1563,7 +1587,7 @@ function Autocomplete({value,onChange,options,placeholder}){
     <Input value={query} placeholder={placeholder} onFocus={()=>setOpen(true)}
       onChange={e=>{setQuery(e.target.value);setOpen(true);if(!e.target.value&&value)onChange('');}}/>
     {open&&<div style={{position:'absolute',zIndex:30,top:'calc(100% + 2px)',left:0,right:0,background:'var(--card)',border:'1.5px solid var(--border)',borderRadius:8,maxHeight:170,overflowY:'auto',boxShadow:'0 6px 16px rgba(0,0,0,.15)'}}>
-      {filtradas.length===0&&<div style={{padding:'8px 10px',fontSize:12,color:'var(--dim)'}}>Sin coincidencias</div>}
+      {filtradas.length===0&&<div style={{padding:'8px 10px',fontSize:13,color:'var(--dim)'}}>Sin coincidencias</div>}
       {filtradas.slice(0,60).map(o=><AutocompleteOpcion key={o.value} label={o.label} onClick={()=>{onChange(o.value);setQuery(o.label);setOpen(false);}}/>)}
     </div>}
   </div>;
@@ -1571,7 +1595,7 @@ function Autocomplete({value,onChange,options,placeholder}){
 function AutocompleteOpcion({label,onClick}){
   const[hover,setHover]=useState(false);
   return <div onClick={onClick} onMouseDown={e=>e.preventDefault()} onMouseEnter={()=>setHover(true)} onMouseLeave={()=>setHover(false)}
-    style={{padding:'8px 10px',fontSize:13,cursor:'pointer',background:hover?'var(--accent-light)':'transparent'}}>{label}</div>;
+    style={{padding:'8px 10px',fontSize:14,cursor:'pointer',background:hover?'var(--accent-light)':'transparent'}}>{label}</div>;
 }
 
 // ─── Plan: selector de zonas de un día (cluster y/o colonia, con cruce colonia↔cluster) ───
@@ -1605,24 +1629,24 @@ function ZonaDia({label,dia,zonasData,onChange}){
   const toggleColonia=c=>setColoniasSel(s=>s.includes(c)?s.filter(x=>x!==c):[...s,c]);
 
   return <div style={{marginBottom:10,padding:8,border:'1px solid var(--border)',borderRadius:8}}>
-    <div style={{fontWeight:700,fontSize:12,marginBottom:6}}>{label}</div>
+    <div style={{fontWeight:700,fontSize:13,marginBottom:6}}>{label}</div>
     {entradas.length>0&&<div style={{display:'flex',flexWrap:'wrap',gap:4,marginBottom:6}}>
-      {entradas.map((e,i)=><span key={i} style={{display:'inline-flex',alignItems:'center',gap:4,background:'var(--accent-light)',color:'var(--accent)',padding:'2px 8px',borderRadius:10,fontSize:11,fontWeight:600}}>
+      {entradas.map((e,i)=><span key={i} style={{display:'inline-flex',alignItems:'center',gap:4,background:'var(--accent-light)',color:'var(--accent)',padding:'2px 8px',borderRadius:10,fontSize:13,fontWeight:600}}>
         {e.colonia?`${e.colonia} (${e.cluster})`:`${e.cluster} · todo`}
         <span onClick={()=>quitar(i)} style={{cursor:'pointer',fontWeight:800}}>✕</span>
       </span>)}
     </div>}
     <div style={{display:'flex',gap:4,marginBottom:6}}>
-      <button onClick={()=>setModo('cluster')} style={{flex:1,padding:'5px 6px',fontSize:11,fontWeight:700,borderRadius:6,border:'1.5px solid var(--border)',background:modo==='cluster'?'var(--accent)':'var(--card)',color:modo==='cluster'?'#fff':'var(--dim)',cursor:'pointer'}}>Por Cluster</button>
-      <button onClick={()=>setModo('colonia')} style={{flex:1,padding:'5px 6px',fontSize:11,fontWeight:700,borderRadius:6,border:'1.5px solid var(--border)',background:modo==='colonia'?'var(--accent)':'var(--card)',color:modo==='colonia'?'#fff':'var(--dim)',cursor:'pointer'}}>Por Colonia</button>
+      <button onClick={()=>setModo('cluster')} style={{flex:1,padding:'5px 6px',fontSize:13,fontWeight:700,borderRadius:6,border:'1.5px solid var(--border)',background:modo==='cluster'?'var(--accent)':'var(--card)',color:modo==='cluster'?'#fff':'var(--dim)',cursor:'pointer'}}>Por Cluster</button>
+      <button onClick={()=>setModo('colonia')} style={{flex:1,padding:'5px 6px',fontSize:13,fontWeight:700,borderRadius:6,border:'1.5px solid var(--border)',background:modo==='colonia'?'var(--accent)':'var(--card)',color:modo==='colonia'?'#fff':'var(--dim)',cursor:'pointer'}}>Por Colonia</button>
     </div>
     {modo==='cluster'?<>
       <div style={{marginBottom:6}}>
         <Autocomplete value={clusterSel} onChange={v=>{setClusterSel(v);setColoniasSel([]);}} placeholder="Buscar cluster..." options={zonasData.clusters.map(c=>({value:c,label:c}))}/>
       </div>
       {clusterSel&&coloniasDelCluster.length>0&&<div style={{maxHeight:120,overflowY:'auto',border:'1px solid var(--border)',borderRadius:6,padding:6,marginBottom:6}}>
-        <p style={{fontSize:10,color:'var(--dim)',margin:'0 0 4px'}}>Opcional: marca colonias específicas (si no marcas ninguna, aplica a todo el cluster)</p>
-        {coloniasDelCluster.map(c=><label key={c} style={{display:'flex',alignItems:'center',gap:6,fontSize:12,padding:'2px 0',cursor:'pointer'}}>
+        <p style={{fontSize:12,color:'var(--dim)',margin:'0 0 4px'}}>Opcional: marca colonias específicas (si no marcas ninguna, aplica a todo el cluster)</p>
+        {coloniasDelCluster.map(c=><label key={c} style={{display:'flex',alignItems:'center',gap:6,fontSize:13,padding:'2px 0',cursor:'pointer'}}>
           <input type="checkbox" checked={coloniasSel.includes(c)} onChange={()=>toggleColonia(c)}/>{c}
         </label>)}
       </div>}
@@ -1631,13 +1655,13 @@ function ZonaDia({label,dia,zonasData,onChange}){
         <Autocomplete value={coloniaSel} onChange={setColoniaSel} placeholder="Buscar colonia..." options={todasColonias.map(c=>({value:c,label:`${c} (${zonasData.coloniaToCluster[c]})`}))}/>
       </div>
     }
-    <Btn variant="secondary" onClick={agregar} style={{width:'100%',fontSize:12,padding:'6px 10px'}}>+ Agregar</Btn>
+    <Btn variant="secondary" onClick={agregar} style={{width:'100%',fontSize:13,padding:'6px 10px'}}>+ Agregar</Btn>
     <div style={{marginTop:8,paddingTop:8,borderTop:'1px dashed var(--border)'}}>
       <Field label="📍 Punto de reunión / Carpa">
-        <Input value={dia.direccion||''} onChange={e=>onChange({...dia,direccion:e.target.value})} placeholder="Dirección o referencia..." style={{fontSize:13}}/>
+        <Input value={dia.direccion||''} onChange={e=>onChange({...dia,direccion:e.target.value})} placeholder="Dirección o referencia..." style={{fontSize:14}}/>
       </Field>
       <Field label="💬 Comentarios adicionales">
-        <Textarea value={dia.comentarios||''} onChange={e=>onChange({...dia,comentarios:e.target.value})} placeholder="Notas para este día..." style={{minHeight:50,fontSize:13}}/>
+        <Textarea value={dia.comentarios||''} onChange={e=>onChange({...dia,comentarios:e.target.value})} placeholder="Notas para este día..." style={{minHeight:50,fontSize:14}}/>
       </Field>
     </div>
   </div>;
@@ -1656,9 +1680,9 @@ function CoachDiaSelector({label,dia,coachesDisponibles,onChange}){
   };
   const quitar=i=>onChange({...dia,entradas:entradas.filter((_,idx)=>idx!==i)});
   return <div style={{marginBottom:10,padding:8,border:'1px solid var(--border)',borderRadius:8}}>
-    <div style={{fontWeight:700,fontSize:12,marginBottom:6}}>{label}</div>
+    <div style={{fontWeight:700,fontSize:13,marginBottom:6}}>{label}</div>
     {entradas.length>0&&<div style={{display:'flex',flexWrap:'wrap',gap:4,marginBottom:6}}>
-      {entradas.map((e,i)=><span key={i} style={{display:'inline-flex',alignItems:'center',gap:4,background:'var(--accent-light)',color:'var(--accent)',padding:'2px 8px',borderRadius:10,fontSize:11,fontWeight:600}}>
+      {entradas.map((e,i)=><span key={i} style={{display:'inline-flex',alignItems:'center',gap:4,background:'var(--accent-light)',color:'var(--accent)',padding:'2px 8px',borderRadius:10,fontSize:13,fontWeight:600}}>
         {e.cluster}
         <span onClick={()=>quitar(i)} style={{cursor:'pointer',fontWeight:800}}>✕</span>
       </span>)}
@@ -1666,10 +1690,10 @@ function CoachDiaSelector({label,dia,coachesDisponibles,onChange}){
     <div style={{marginBottom:6}}>
       <Autocomplete value={coachSel} onChange={setCoachSel} placeholder="Buscar coach..." options={coachesDisponibles.map(c=>({value:c.nombre,label:c.nombre}))}/>
     </div>
-    <Btn variant="secondary" onClick={agregar} style={{width:'100%',fontSize:12,padding:'6px 10px'}}>+ Agregar</Btn>
+    <Btn variant="secondary" onClick={agregar} style={{width:'100%',fontSize:13,padding:'6px 10px'}}>+ Agregar</Btn>
     <div style={{marginTop:8,paddingTop:8,borderTop:'1px dashed var(--border)'}}>
       <Field label="💬 Comentario adicional">
-        <Textarea value={dia.comentarios||''} onChange={e=>onChange({...dia,comentarios:e.target.value})} placeholder="Notas para este día..." style={{minHeight:50,fontSize:13}}/>
+        <Textarea value={dia.comentarios||''} onChange={e=>onChange({...dia,comentarios:e.target.value})} placeholder="Notas para este día..." style={{minHeight:50,fontSize:14}}/>
       </Field>
     </div>
   </div>;
@@ -1689,9 +1713,9 @@ function PDVDia({label,dia,puntosDisponibles,onChange}){
   };
   const quitar=i=>onChange({...dia,entradas:entradas.filter((_,idx)=>idx!==i)});
   return <div style={{marginBottom:10,padding:8,border:'1px solid var(--border)',borderRadius:8}}>
-    <div style={{fontWeight:700,fontSize:12,marginBottom:6}}>{label}</div>
+    <div style={{fontWeight:700,fontSize:13,marginBottom:6}}>{label}</div>
     {entradas.length>0&&<div style={{display:'flex',flexWrap:'wrap',gap:4,marginBottom:6}}>
-      {entradas.map((e,i)=><span key={i} style={{display:'inline-flex',alignItems:'center',gap:4,background:'var(--accent-light)',color:'var(--accent)',padding:'2px 8px',borderRadius:10,fontSize:11,fontWeight:600}}>
+      {entradas.map((e,i)=><span key={i} style={{display:'inline-flex',alignItems:'center',gap:4,background:'var(--accent-light)',color:'var(--accent)',padding:'2px 8px',borderRadius:10,fontSize:13,fontWeight:600}}>
         {e.cluster}
         <span onClick={()=>quitar(i)} style={{cursor:'pointer',fontWeight:800}}>✕</span>
       </span>)}
@@ -1699,10 +1723,10 @@ function PDVDia({label,dia,puntosDisponibles,onChange}){
     <div style={{marginBottom:6}}>
       <Autocomplete value={pdvSel} onChange={setPdvSel} placeholder="Buscar punto de venta..." options={puntosDisponibles.map(p=>({value:p,label:p}))}/>
     </div>
-    <Btn variant="secondary" onClick={agregar} style={{width:'100%',fontSize:12,padding:'6px 10px'}}>+ Agregar</Btn>
+    <Btn variant="secondary" onClick={agregar} style={{width:'100%',fontSize:13,padding:'6px 10px'}}>+ Agregar</Btn>
     <div style={{marginTop:8,paddingTop:8,borderTop:'1px dashed var(--border)'}}>
       <Field label="💬 Comentarios adicionales">
-        <Textarea value={dia.comentarios||''} onChange={e=>onChange({...dia,comentarios:e.target.value})} placeholder="Notas para este día..." style={{minHeight:50,fontSize:13}}/>
+        <Textarea value={dia.comentarios||''} onChange={e=>onChange({...dia,comentarios:e.target.value})} placeholder="Notas para este día..." style={{minHeight:50,fontSize:14}}/>
       </Field>
     </div>
   </div>;
@@ -1849,29 +1873,29 @@ function PlanTab({data,setData,team,toast,session,refreshKey}){
     {esLider&&
       <Card title={`📊 Planes del equipo — Semana ${semanaLabel}`}>
         {cargandoPlanesEquipo?<div style={{textAlign:'center',padding:20}}><Spinner/></div>:
-        (session.coaches||[]).length===0?<p style={{fontSize:12,color:'var(--dim)'}}>Sin coaches asignados.</p>:
+        (session.coaches||[]).length===0?<p style={{fontSize:13,color:'var(--dim)'}}>Sin coaches asignados.</p>:
         coachesPlanEstado.map(({coach,estado,pct})=>{
           const color=estado==='completo'?'var(--green)':estado==='parcial'?'var(--yellow)':'var(--red)';
           const bg=estado==='completo'?'var(--gbg)':estado==='parcial'?'var(--ybg)':'var(--rbg)';
           const texto=estado==='sin'?'Sin capturar':`${pct}%`;
           return <div key={coach.nombre} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 10px',borderRadius:8,marginBottom:6,background:bg,border:`1px solid ${color}`}}>
-            <span style={{fontSize:13,fontWeight:600}}>{coach.nombre.split(' ').slice(0,3).join(' ')}</span>
-            <span style={{fontSize:12,fontWeight:700,color}}>{texto}</span>
+            <span style={{fontSize:14,fontWeight:600}}>{coach.nombre.split(' ').slice(0,3).join(' ')}</span>
+            <span style={{fontSize:13,fontWeight:700,color}}>{texto}</span>
           </div>;
         })}
-        <p style={{fontSize:10,color:'var(--dim)',marginTop:4}}>🟢 100% capturado · 🟡 capturado parcial · 🔴 sin capturar</p>
+        <p style={{fontSize:12,color:'var(--dim)',marginTop:4}}>🟢 100% capturado · 🟡 capturado parcial · 🔴 sin capturar</p>
       </Card>
     }
     {retraso&&<Card style={{borderLeft:'4px solid var(--red)'}}>
-      <p style={{fontSize:13,fontWeight:700,color:'var(--red)',margin:0}}>⚠️ Aún no se ha capturado el plan de esta semana — debía quedar listo el lunes.</p>
+      <p style={{fontSize:14,fontWeight:700,color:'var(--red)',margin:0}}>⚠️ Aún no se ha capturado el plan de esta semana — debía quedar listo el lunes.</p>
     </Card>}
     {!planActual&&!retraso&&<Card style={{borderLeft:`4px solid ${esLunes?'var(--yellow)':'var(--border)'}`}}>
-      <p style={{fontSize:12,color:'var(--dim)',margin:0}}>{esLunes?'📌 Hoy es lunes — captura el objetivo comprometido para esta semana.':'Plan de la semana aún no capturado.'}</p>
+      <p style={{fontSize:13,color:'var(--dim)',margin:0}}>{esLunes?'📌 Hoy es lunes — captura el objetivo comprometido para esta semana.':'Plan de la semana aún no capturado.'}</p>
     </Card>}
 
     {planPendiente&&resForm&&
       <Card title={`📌 Resultado pendiente — Semana ${planPendiente.semanaLabel}`} style={{borderLeft:'4px solid var(--yellow)'}}>
-        <p style={{fontSize:11,color:'var(--dim)',marginBottom:8}}>Se precargó de lo que hay en sistema para esa semana — ajústalo si hace falta y guarda el resultado real.</p>
+        <p style={{fontSize:13,color:'var(--dim)',marginBottom:8}}>Se precargó de lo que hay en sistema para esa semana — ajústalo si hace falta y guarda el resultado real.</p>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
           {KPIS.map(kpi=>{
             const obj=Number(planPendiente.objetivos?.[kpi.k])||0;
@@ -1879,7 +1903,7 @@ function PlanTab({data,setData,team,toast,session,refreshKey}){
             const p=obj?Math.round(real/obj*100):null;
             return <Field key={kpi.k} label={`${kpi.label} (obj: ${obj})`}>
               <Input type="number" value={resForm[kpi.k]} onChange={e=>setResForm(f=>({...f,[kpi.k]:e.target.value}))}/>
-              {p!=null&&<p style={{fontSize:11,fontWeight:700,margin:'2px 0 0',color:p>=95?'var(--green)':p>=60?'var(--yellow)':'var(--red)'}}>{p}%</p>}
+              {p!=null&&<p style={{fontSize:13,fontWeight:700,margin:'2px 0 0',color:p>=95?'var(--green)':p>=60?'var(--yellow)':'var(--red)'}}>{p}%</p>}
             </Field>;
           })}
           <Field label={`Cuentas recuperadas NPPF (obj: ${planPendiente.objetivos?.cuentasRecuperadas||0})`}>
@@ -1895,40 +1919,40 @@ function PlanTab({data,setData,team,toast,session,refreshKey}){
 
     {planActual?
       <Card title={`✅ Plan de la semana — ${planActual.semanaLabel}`} style={{borderLeft:'4px solid var(--green)'}}>
-        <p style={{fontSize:12,color:'var(--dim)',marginBottom:6}}>Ya se capturó el objetivo de esta semana.</p>
-        {KPIS.map(kpi=><div key={kpi.k} style={{display:'flex',justifyContent:'space-between',fontSize:13,padding:'3px 0'}}>
+        <p style={{fontSize:13,color:'var(--dim)',marginBottom:6}}>Ya se capturó el objetivo de esta semana.</p>
+        {KPIS.map(kpi=><div key={kpi.k} style={{display:'flex',justifyContent:'space-between',fontSize:14,padding:'3px 0'}}>
           <span>{kpi.label}</span>
           <b style={{color:colorVsMeta(planActual.objetivos?.[kpi.k],planActual.metaOficial?.[kpi.k])}}>{planActual.objetivos?.[kpi.k]||0} <span style={{color:'var(--dim)',fontWeight:400}}>/ meta {planActual.metaOficial?.[kpi.k]??'-'}</span></b>
         </div>)}
-        <div style={{display:'flex',justifyContent:'space-between',fontSize:13,padding:'3px 0'}}><span>Cuentas recuperadas NPPF</span><b>{planActual.objetivos?.cuentasRecuperadas||0}</b></div>
-        <div style={{display:'flex',justifyContent:'space-between',fontSize:13,padding:'3px 0'}}><span>ARPU</span><b>{fmtMoney(planActual.objetivos?.arpu)}</b></div>
+        <div style={{display:'flex',justifyContent:'space-between',fontSize:14,padding:'3px 0'}}><span>Cuentas recuperadas NPPF</span><b>{planActual.objetivos?.cuentasRecuperadas||0}</b></div>
+        <div style={{display:'flex',justifyContent:'space-between',fontSize:14,padding:'3px 0'}}><span>ARPU</span><b>{fmtMoney(planActual.objetivos?.arpu)}</b></div>
         {DIAS_SEMANA.some(d=>{const dz=diaZonas(planActual.zonas,d);return dz.entradas.length||dz.direccion||dz.comentarios;})&&<div style={{marginTop:10,paddingTop:10,borderTop:'1px solid var(--border)'}}>
-          <div style={{fontSize:12,fontWeight:700,color:'var(--dim)',marginBottom:4}}>🗺️ Zonas de la semana</div>
+          <div style={{fontSize:13,fontWeight:700,color:'var(--dim)',marginBottom:4}}>🗺️ Zonas de la semana</div>
           {DIAS_SEMANA.filter(d=>{const dz=diaZonas(planActual.zonas,d);return dz.entradas.length||dz.direccion||dz.comentarios;}).map(d=>{
             const dz=diaZonas(planActual.zonas,d);
             return <div key={d} style={{marginBottom:4}}>
-              {dz.entradas.length>0&&<p style={{fontSize:12,margin:'2px 0'}}><b>{DIAS_SEMANA_LABEL[d]}:</b> {dz.entradas.map(e=>e.colonia?`${e.colonia} (${e.cluster})`:`${e.cluster} (todo)`).join(', ')}</p>}
-              {!dz.entradas.length&&<p style={{fontSize:12,margin:'2px 0'}}><b>{DIAS_SEMANA_LABEL[d]}</b></p>}
-              {dz.direccion&&<p style={{fontSize:11,color:'var(--dim)',margin:'0 0 0 10px'}}>📍 {dz.direccion}</p>}
-              {dz.comentarios&&<p style={{fontSize:11,color:'var(--dim)',margin:'0 0 0 10px'}}>💬 {dz.comentarios}</p>}
+              {dz.entradas.length>0&&<p style={{fontSize:13,margin:'2px 0'}}><b>{DIAS_SEMANA_LABEL[d]}:</b> {dz.entradas.map(e=>e.colonia?`${e.colonia} (${e.cluster})`:`${e.cluster} (todo)`).join(', ')}</p>}
+              {!dz.entradas.length&&<p style={{fontSize:13,margin:'2px 0'}}><b>{DIAS_SEMANA_LABEL[d]}</b></p>}
+              {dz.direccion&&<p style={{fontSize:13,color:'var(--dim)',margin:'0 0 0 10px'}}>📍 {dz.direccion}</p>}
+              {dz.comentarios&&<p style={{fontSize:13,color:'var(--dim)',margin:'0 0 0 10px'}}>💬 {dz.comentarios}</p>}
             </div>;
           })}
         </div>}
         <div style={{display:'flex',gap:8,marginTop:10,flexWrap:'wrap'}}>
           <a href={whatsappUrl(textoPlan(planActual))} target="_blank" rel="noopener noreferrer"
-            style={{display:'inline-flex',alignItems:'center',gap:6,padding:'8px 14px',borderRadius:8,background:'#25D366',color:'#fff',fontSize:13,fontWeight:700,textDecoration:'none'}}>
+            style={{display:'inline-flex',alignItems:'center',gap:6,padding:'8px 14px',borderRadius:8,background:'#25D366',color:'#fff',fontSize:14,fontWeight:700,textDecoration:'none'}}>
             📲 Enviar plan al líder por WhatsApp
           </a>
-          <Btn variant="secondary" onClick={()=>window.scrollTo({top:0,behavior:'smooth'})} style={{fontSize:13}}>← Volver al Plan</Btn>
+          <Btn variant="secondary" onClick={()=>window.scrollTo({top:0,behavior:'smooth'})} style={{fontSize:14}}>← Volver al Plan</Btn>
         </div>
       </Card>
     :<>
       {esLider?<>
         <Card title="🎯 Objetivo de la semana (de tus coaches)">
-          <p style={{fontSize:11,color:'var(--dim)',marginBottom:8}}>Semana {semanaLabel}. Se llena solo con lo que cada coach ya capturó en su propio plan.</p>
-          {(session.coaches||[]).length===0?<p style={{fontSize:12,color:'var(--dim)'}}>Sin coaches asignados.</p>:
+          <p style={{fontSize:13,color:'var(--dim)',marginBottom:8}}>Semana {semanaLabel}. Se llena solo con lo que cada coach ya capturó en su propio plan.</p>
+          {(session.coaches||[]).length===0?<p style={{fontSize:13,color:'var(--dim)'}}>Sin coaches asignados.</p>:
           <div style={{overflowX:'auto'}}>
-            <table style={{width:'100%',borderCollapse:'collapse',fontSize:11}}>
+            <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
               <thead><tr style={{borderBottom:'2px solid var(--border)'}}>
                 <th style={{textAlign:'left',padding:'4px'}}>Coach</th>
                 <th style={{textAlign:'right',padding:'4px'}}>Op.</th>
@@ -1954,7 +1978,7 @@ function PlanTab({data,setData,team,toast,session,refreshKey}){
                   <td style={{textAlign:'right',padding:'4px'}}>{objetivosEquipo.cuentasRecuperadas}</td>
                   <td style={{textAlign:'right',padding:'4px'}}>{fmtMoney(objetivosEquipo.arpu)}</td>
                 </tr>
-                <tr style={{fontSize:10,color:'var(--dim)'}}>
+                <tr style={{fontSize:12,color:'var(--dim)'}}>
                   <td style={{padding:'2px 4px'}}>Meta</td>
                   <td style={{textAlign:'right',padding:'2px 4px'}}>{metaOportOficial}</td>
                   <td style={{textAlign:'right',padding:'2px 4px'}}>{metaVentasOficial}</td>
@@ -1966,27 +1990,27 @@ function PlanTab({data,setData,team,toast,session,refreshKey}){
           </div>}
         </Card>
         <Card title="Prioridades (de tus coaches)">
-          {(session.coaches||[]).length===0?<p style={{fontSize:12,color:'var(--dim)'}}>Sin coaches asignados.</p>:
-          coachesPlanDatos.map(c=><p key={c.coach.nombre} style={{fontSize:12,margin:'4px 0'}}>• <b>{c.coach.nombre.split(' ').slice(0,2).join(' ')}:</b> {c.prioridades||<span style={{color:'var(--dim)',fontStyle:'italic'}}>sin capturar</span>}</p>)}
+          {(session.coaches||[]).length===0?<p style={{fontSize:13,color:'var(--dim)'}}>Sin coaches asignados.</p>:
+          coachesPlanDatos.map(c=><p key={c.coach.nombre} style={{fontSize:13,margin:'4px 0'}}>• <b>{c.coach.nombre.split(' ').slice(0,2).join(' ')}:</b> {c.prioridades||<span style={{color:'var(--dim)',fontStyle:'italic'}}>sin capturar</span>}</p>)}
         </Card>
         <Card title="Acompañamientos (de tus coaches)">
-          {(session.coaches||[]).length===0?<p style={{fontSize:12,color:'var(--dim)'}}>Sin coaches asignados.</p>:
-          coachesPlanDatos.map(c=><p key={c.coach.nombre} style={{fontSize:12,margin:'4px 0'}}>• <b>{c.coach.nombre.split(' ').slice(0,2).join(' ')}:</b> {c.acompanamientos||<span style={{color:'var(--dim)',fontStyle:'italic'}}>sin capturar</span>}</p>)}
+          {(session.coaches||[]).length===0?<p style={{fontSize:13,color:'var(--dim)'}}>Sin coaches asignados.</p>:
+          coachesPlanDatos.map(c=><p key={c.coach.nombre} style={{fontSize:13,margin:'4px 0'}}>• <b>{c.coach.nombre.split(' ').slice(0,2).join(' ')}:</b> {c.acompanamientos||<span style={{color:'var(--dim)',fontStyle:'italic'}}>sin capturar</span>}</p>)}
         </Card>
         <Card title="🤝 Coach a priorizar en la semana">
-          <p style={{fontSize:11,color:'var(--dim)',marginBottom:8}}>Elige con qué coach vas a trabajar cada día, y agrega un comentario si hace falta.</p>
+          <p style={{fontSize:13,color:'var(--dim)',marginBottom:8}}>Elige con qué coach vas a trabajar cada día, y agrega un comentario si hace falta.</p>
           {DIAS_SEMANA.map(d=><CoachDiaSelector key={d} label={DIAS_SEMANA_LABEL[d]} dia={form.zonas[d]} coachesDisponibles={session.coaches||[]} onChange={nuevoDia=>setForm(f=>({...f,zonas:{...f.zonas,[d]:nuevoDia}}))}/>)}
         </Card>
       </>:<>
         <Card title="🎯 Objetivo de la semana">
-          <p style={{fontSize:11,color:'var(--dim)',marginBottom:8}}>Semana {semanaLabel} (lunes a domingo). Compromiso del equipo al cierre de la semana (domingo).</p>
+          <p style={{fontSize:13,color:'var(--dim)',marginBottom:8}}>Semana {semanaLabel} (lunes a domingo). Compromiso del equipo al cierre de la semana (domingo).</p>
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
             {KPIS.map(kpi=>{
               const val=form.objetivos[kpi.k];
               const color=colorVsMeta(val,kpi.meta);
               return <Field key={kpi.k} label={kpi.label}>
                 <Input type="number" value={val} onChange={e=>updObjetivo(kpi.k,e.target.value)} style={{color,fontWeight:700}}/>
-                <p style={{fontSize:10,color:'var(--dim)',margin:'2px 0 0'}}>Meta: <b>{kpi.meta}</b> — <span style={{color}}>{color==='var(--red)'?'debajo':color==='var(--green)'?'arriba':'igual'}</span></p>
+                <p style={{fontSize:12,color:'var(--dim)',margin:'2px 0 0'}}>Meta: <b>{kpi.meta}</b> — <span style={{color}}>{color==='var(--red)'?'debajo':color==='var(--green)'?'arriba':'igual'}</span></p>
               </Field>;
             })}
             <Field label="Cuentas recuperadas (NPPF)"><Input type="number" value={form.objetivos.cuentasRecuperadas} onChange={e=>updObjetivo('cuentasRecuperadas',e.target.value)}/></Field>
@@ -2001,12 +2025,12 @@ function PlanTab({data,setData,team,toast,session,refreshKey}){
         </Card>
         {esCoachPDV?
         <Card title="🏬 Puntos de Venta a trabajar en la semana">
-          {puntosVenta.length===0?<p style={{color:'var(--dim)',fontSize:12}}>Cargando puntos de venta…</p>:
+          {puntosVenta.length===0?<p style={{color:'var(--dim)',fontSize:13}}>Cargando puntos de venta…</p>:
           DIAS_SEMANA.map(d=><PDVDia key={d} label={DIAS_SEMANA_LABEL[d]} dia={form.zonas[d]} puntosDisponibles={puntosVenta} onChange={nuevoDia=>setForm(f=>({...f,zonas:{...f.zonas,[d]:nuevoDia}}))}/>)}
         </Card>
         :
         <Card title="🗺️ Zonas a trabajar en la semana">
-          {zonasData.clusters.length===0?<p style={{color:'var(--dim)',fontSize:12}}>Cargando clusters/colonias…</p>:
+          {zonasData.clusters.length===0?<p style={{color:'var(--dim)',fontSize:13}}>Cargando clusters/colonias…</p>:
           DIAS_SEMANA.map(d=><ZonaDia key={d} label={DIAS_SEMANA_LABEL[d]} dia={form.zonas[d]} zonasData={zonasData} onChange={nuevoDia=>setForm(f=>({...f,zonas:{...f.zonas,[d]:nuevoDia}}))}/>)}
         </Card>
         }
@@ -2023,7 +2047,7 @@ function PlanTab({data,setData,team,toast,session,refreshKey}){
 // ─── Feedback ───
 function FeedbackTab({data,setData,team,toast,session,refreshKey}){
   const esLider=session.role==='lider';
-  const[form,setForm]=useState({date:today(),vendedor:'',tipo:'Acompañamiento',hallazgos:'',fortalezas:'',areas_oportunidad:'',compromisos:'',fecha_revision:'',semaforo:'verde',grabado:false,transcript:'',notas:'',photo:null,fotos:[]});
+  const[form,setForm]=useState({date:today(),vendedor:'',tipo:'Acompañamiento',hallazgos:'',fortalezas:'',areas_oportunidad:'',compromisos:'',fecha_revision:'',semaforo:'',grabado:false,transcript:'',notas:'',photo:null,fotos:[]});
   const[consent,setConsent]=useState(false);
   const esAcompanamiento=form.tipo==='Acompañamiento';
   const esEvidenciaExterna=form.tipo==='Evidencia de asignación externa';
@@ -2043,34 +2067,38 @@ function FeedbackTab({data,setData,team,toast,session,refreshKey}){
     if(!form.vendedor){alert('Selecciona un integrante');return;}
     if(esAcompanamiento&&!form.photo){alert('Agrega una foto (con sello) — es obligatoria para este tipo de hallazgo');return;}
     if(esEvidenciaExterna&&!form.fotos.length){alert('Agrega al menos una foto (persona en campo y conversación del avance) — es obligatoria para este tipo de hallazgo');return;}
-    const rec={id:uid(),type:'feedback',...form,registradoPor:session.user.nombre,token:session.token,savedAt:new Date().toISOString()};
+    // El semáforo que se guarda es el vigente al momento de documentar, no uno elegido aquí.
+    const rec={id:uid(),type:'feedback',...form,semaforo:semaforoVigente,registradoPor:session.user.nombre,token:session.token,savedAt:new Date().toISOString()};
     const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast,setData);toast('✅ Hallazgo guardado');
-    setForm({date:today(),vendedor:'',tipo:'Acompañamiento',hallazgos:'',fortalezas:'',areas_oportunidad:'',compromisos:'',fecha_revision:'',semaforo:'verde',grabado:false,transcript:'',notas:'',photo:null,fotos:[]});
+    setForm({date:today(),vendedor:'',tipo:'Acompañamiento',hallazgos:'',fortalezas:'',areas_oportunidad:'',compromisos:'',fecha_revision:'',semaforo:'',grabado:false,transcript:'',notas:'',photo:null,fotos:[]});
     setConsent(false);
   };
   const selectedMember=form.vendedor?team.find(m=>m.nombre===form.vendedor):null;
+  // El semáforo ya no se elige aquí: se lee el vigente (puesto desde Dashboard → Equipo) y se
+  // guarda con el hallazgo tal cual estaba, sin poder cambiarlo desde esta pantalla.
+  const semaforoVigente=construirSemaforoMap(data.records)[form.vendedor]?.valor||'';
   // Líder: el hallazgo/feedback lo documenta sobre coaches, no directamente sobre vendedores
   // (eso le toca a cada coach) — la lista de integrantes se limita a sus coaches.
   const integrantesDisponibles=esLider?team.filter(m=>isCoach(m.posicion)):team;
   return <div>
     {esLider&&<Card title="💬 Hallazgos y feedback por coach — hoy">
       {cargandoFeedbackEquipo?<div style={{textAlign:'center',padding:20}}><Spinner/></div>:
-      (session.coaches||[]).length===0?<p style={{color:'var(--dim)',fontSize:14}}>Sin coaches asignados.</p>:
+      (session.coaches||[]).length===0?<p style={{color:'var(--dim)',fontSize:15}}>Sin coaches asignados.</p>:
       coachesFeedbackHoy.map(({coach,rows})=>
         <div key={coach.nombre} style={{marginBottom:8,padding:10,borderRadius:8,border:`1.5px solid ${rows.length?'var(--green)':'var(--red)'}`,background:rows.length?'var(--gbg)':'var(--rbg)'}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-            <span style={{fontWeight:700,fontSize:13}}>{coach.nombre}</span>
-            <span style={{fontWeight:800,fontSize:15,color:rows.length?'var(--green)':'var(--red)'}}>{rows.length?`✓ (${rows.length})`:'✗'}</span>
+            <span style={{fontWeight:700,fontSize:14}}>{coach.nombre}</span>
+            <span style={{fontWeight:800,fontSize:16,color:rows.length?'var(--green)':'var(--red)'}}>{rows.length?`✓ (${rows.length})`:'✗'}</span>
           </div>
-          {rows.length===0?<p style={{fontSize:11,color:'var(--dim)',margin:'4px 0 0'}}>Aún no ha cargado hallazgos hoy.</p>:
+          {rows.length===0?<p style={{fontSize:13,color:'var(--dim)',margin:'4px 0 0'}}>Aún no ha cargado hallazgos hoy.</p>:
           rows.map((r,i)=>
             <div key={i} style={{marginTop:6,padding:8,border:'1px solid var(--nest-border)',background:'var(--nest-bg)',borderRadius:8}}>
-              <div style={{display:'flex',justifyContent:'space-between',fontSize:12,fontWeight:600}}>
+              <div style={{display:'flex',justifyContent:'space-between',fontSize:13,fontWeight:600}}>
                 <span>{r['Integrante']} · {r['Tipo']}</span>
                 <span style={{color:r['Semáforo']==='rojo'?'var(--red)':r['Semáforo']==='amarillo'?'var(--yellow)':'var(--green)'}}>●</span>
               </div>
-              {r['Hallazgos']&&<p style={{fontSize:11,margin:'2px 0'}}>{r['Hallazgos']}</p>}
-              {r['Compromisos']&&<p style={{fontSize:11,color:'var(--dim)',margin:'2px 0'}}>✅ {r['Compromisos']}</p>}
+              {r['Hallazgos']&&<p style={{fontSize:13,margin:'2px 0'}}>{r['Hallazgos']}</p>}
+              {r['Compromisos']&&<p style={{fontSize:13,color:'var(--dim)',margin:'2px 0'}}>✅ {r['Compromisos']}</p>}
             </div>
           )}
         </div>
@@ -2084,15 +2112,15 @@ function FeedbackTab({data,setData,team,toast,session,refreshKey}){
       <Field label="Integrante"><Select value={form.vendedor} onChange={v=>setForm({...form,vendedor:v})} options={[{value:'',label:'— Seleccionar —'},...integrantesDisponibles.map(m=>({value:m.nombre,label:m.nombre+(isCoach(m.posicion)?' (Coach)':'')+(m.badge?' — '+m.badge:'')}))]}/></Field>
       {selectedMember&&(selectedMember.rankingEnt||selectedMember.rankingMen)&&
         <div style={{background:'var(--bg)',borderRadius:10,padding:12,marginBottom:12,border:'1px solid var(--border)'}}>
-          <div style={{fontSize:12,fontWeight:700,color:'var(--dim)',marginBottom:6}}>📊 CONTEXTO DEL INTEGRANTE</div>
+          <div style={{fontSize:13,fontWeight:700,color:'var(--dim)',marginBottom:6}}>📊 CONTEXTO DEL INTEGRANTE</div>
           <div style={{display:'flex',flexWrap:'wrap',gap:8,alignItems:'center',marginBottom:8}}>
-            <span style={{fontWeight:700,fontSize:14}}>{selectedMember.nombre}</span>
+            <span style={{fontWeight:700,fontSize:15}}>{selectedMember.nombre}</span>
             <RankBadge badge={selectedMember.badge}/>
-            {selectedMember.mesesEnRanking>0&&<span style={{fontSize:10,color:'var(--dim)',fontWeight:600}}>{selectedMember.mesesEnRanking} meses en este nivel</span>}
+            {selectedMember.mesesEnRanking>0&&<span style={{fontSize:12,color:'var(--dim)',fontWeight:600}}>{selectedMember.mesesEnRanking} meses en este nivel</span>}
           </div>
 
           {/* Performance */}
-          {selectedMember.rankingMen&&<div style={{fontSize:12,marginBottom:6,padding:'6px 8px',background:'var(--card)',borderRadius:6}}>
+          {selectedMember.rankingMen&&<div style={{fontSize:13,marginBottom:6,padding:'6px 8px',background:'var(--card)',borderRadius:6}}>
             <div style={{display:'flex',justifyContent:'space-between'}}>
               <span>Promedio mensual:</span><b>{selectedMember.rankingMen.promedioMensual} instalaciones</b>
             </div>
@@ -2107,7 +2135,7 @@ function FeedbackTab({data,setData,team,toast,session,refreshKey}){
           </div>}
 
           {/* Entrenamiento data */}
-          {selectedMember.rankingEnt&&<div style={{fontSize:12,marginBottom:6,padding:'6px 8px',background:'var(--card)',borderRadius:6}}>
+          {selectedMember.rankingEnt&&<div style={{fontSize:13,marginBottom:6,padding:'6px 8px',background:'var(--card)',borderRadius:6}}>
             <div style={{display:'flex',justifyContent:'space-between'}}>
               <span>Inst. últimas 4 sem:</span><b>{selectedMember.rankingEnt.insUlt4}</b>
             </div>
@@ -2119,32 +2147,43 @@ function FeedbackTab({data,setData,team,toast,session,refreshKey}){
 
           {/* Certifications - approved */}
           {selectedMember.rankingEnt&&<div style={{display:'flex',gap:4,flexWrap:'wrap',marginBottom:4}}>
-            {selectedMember.rankingEnt.certActitud==='APROBADO'&&<span style={{background:'var(--gbg)',color:'var(--green)',padding:'1px 5px',borderRadius:6,fontSize:10,fontWeight:600}}>✓ Actitud</span>}
-            {selectedMember.rankingEnt.certSist1==='APROBADO'&&<span style={{background:'var(--gbg)',color:'var(--green)',padding:'1px 5px',borderRadius:6,fontSize:10,fontWeight:600}}>✓ Sistémica I</span>}
-            {selectedMember.rankingEnt.certSist2==='APROBADO'&&<span style={{background:'var(--gbg)',color:'var(--green)',padding:'1px 5px',borderRadius:6,fontSize:10,fontWeight:600}}>✓ Sistémica II</span>}
-            {selectedMember.rankingEnt.certSist3==='APROBADO'&&<span style={{background:'var(--gbg)',color:'var(--green)',padding:'1px 5px',borderRadius:6,fontSize:10,fontWeight:600}}>✓ Sistémica III</span>}
+            {selectedMember.rankingEnt.certActitud==='APROBADO'&&<span style={{background:'var(--gbg)',color:'var(--green)',padding:'1px 5px',borderRadius:6,fontSize:12,fontWeight:600}}>✓ Actitud</span>}
+            {selectedMember.rankingEnt.certSist1==='APROBADO'&&<span style={{background:'var(--gbg)',color:'var(--green)',padding:'1px 5px',borderRadius:6,fontSize:12,fontWeight:600}}>✓ Sistémica I</span>}
+            {selectedMember.rankingEnt.certSist2==='APROBADO'&&<span style={{background:'var(--gbg)',color:'var(--green)',padding:'1px 5px',borderRadius:6,fontSize:12,fontWeight:600}}>✓ Sistémica II</span>}
+            {selectedMember.rankingEnt.certSist3==='APROBADO'&&<span style={{background:'var(--gbg)',color:'var(--green)',padding:'1px 5px',borderRadius:6,fontSize:12,fontWeight:600}}>✓ Sistémica III</span>}
           </div>}
 
           {/* Missing certifications */}
           {selectedMember.certFaltantes&&selectedMember.certFaltantes.length>0&&
-            <div style={{fontSize:11,color:'var(--red)',fontWeight:600,marginBottom:4,padding:'4px 8px',background:'var(--rbg)',borderRadius:6}}>
+            <div style={{fontSize:13,color:'var(--red)',fontWeight:600,marginBottom:4,padding:'4px 8px',background:'var(--rbg)',borderRadius:6}}>
               📚 Cursos faltantes: {selectedMember.certFaltantes.join(', ')}
             </div>
           }
 
           {/* Observations */}
           {(()=>{const obs=selectedMember.rankingEnt?.obs||selectedMember.rankingMen?.obsOficial;
-            return obs&&obs!=='-'&&<p style={{fontSize:11,color:'var(--yellow)',fontStyle:'italic',marginTop:4}}>⚠️ {obs}</p>;
+            return obs&&obs!=='-'&&<p style={{fontSize:13,color:'var(--yellow)',fontStyle:'italic',marginTop:4}}>⚠️ {obs}</p>;
           })()}
         </div>
       }
-      <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:12}}><span style={{fontSize:11,fontWeight:700,color:'var(--dim)'}}>SEMÁFORO:</span><StatusBadge status={form.semaforo} onClick={()=>setForm({...form,semaforo:cycleS(form.semaforo)})}/></div>
+      {/* Solo informativo: el semáforo se pone en Dashboard → Equipo, que es donde se ve el
+          rendimiento contra la meta. Aquí se muestra el vigente y se guarda con el hallazgo como
+          foto del momento, para saber en qué estaba la persona cuando se documentó. */}
+      <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:12,flexWrap:'wrap'}}>
+        <span style={{fontSize:13,fontWeight:700,color:'var(--dim)'}}>SEMÁFORO:</span>
+        {form.vendedor
+          ? (semaforoVigente
+              ? <StatusBadge status={semaforoVigente}/>
+              : <span style={{fontSize:14,color:'var(--yellow)',fontWeight:600}}>⚪ Sin semáforo</span>)
+          : <span style={{fontSize:14,color:'var(--dim)'}}>Selecciona un integrante</span>}
+        <span style={{fontSize:13,color:'var(--dim)'}}>· se pone en Dashboard → Equipo</span>
+      </div>
     </Card>
     {esAcompanamiento&&<Card title="📷 Evidencia (obligatoria)">
       <PhotoCaptureGeo photo={form.photo} onCapture={p=>setForm({...form,photo:p})} coachName={session.user.nombre} toast={toast} label="📷 Tomar foto (con sello)"/>
     </Card>}
     {esEvidenciaExterna&&<Card title="📷 Evidencia (obligatoria)">
-      <p style={{fontSize:12,color:'var(--dim)',marginBottom:8}}>Sube foto(s) de la persona en campo y de la conversación con el avance al momento (sin sello).</p>
+      <p style={{fontSize:13,color:'var(--dim)',marginBottom:8}}>Sube foto(s) de la persona en campo y de la conversación con el avance al momento (sin sello).</p>
       <PhotoCaptureMulti photos={form.fotos} onChange={fotos=>setForm({...form,fotos})} label="Agregar foto"/>
     </Card>}
     {!esEvidenciaExterna&&<>
@@ -2158,15 +2197,15 @@ function FeedbackTab({data,setData,team,toast,session,refreshKey}){
         <Field label="Fecha de revisión"><Input type="date" value={form.fecha_revision} onChange={e=>setForm({...form,fecha_revision:e.target.value})}/></Field>
       </Card>
       <Card title="🎙️ Grabación de voz">
-        <p style={{fontSize:12,color:'var(--dim)',margin:'0 0 10px'}}>Transcribe lo que se hable a texto en tiempo real (no guarda audio). Requiere autorización previa.</p>
+        <p style={{fontSize:13,color:'var(--dim)',margin:'0 0 10px'}}>Transcribe lo que se hable a texto en tiempo real (no guarda audio). Requiere autorización previa.</p>
         {!consent?<div style={{textAlign:'center',padding:12}}>
-          <p style={{fontSize:13,marginBottom:8,textAlign:'left'}}>Antes de grabar, pide a los participantes que:</p>
-          <ul style={{textAlign:'left',fontSize:13,margin:'0 0 12px',paddingLeft:18,color:'var(--text)'}}>
+          <p style={{fontSize:14,marginBottom:8,textAlign:'left'}}>Antes de grabar, pide a los participantes que:</p>
+          <ul style={{textAlign:'left',fontSize:14,margin:'0 0 12px',paddingLeft:18,color:'var(--text)'}}>
             <li>Digan su <b>nombre y puesto</b> al iniciar.</li>
             <li>Acepten en voz alta que se va a grabar este feedback.</li>
             <li>Empiecen a hablar <b>después del tono</b>.</li>
           </ul>
-          <p style={{fontSize:13,fontWeight:700,marginBottom:10}}>¿Autoriza la grabación?</p>
+          <p style={{fontSize:14,fontWeight:700,marginBottom:10}}>¿Autoriza la grabación?</p>
           <div style={{display:'flex',gap:8,justifyContent:'center'}}><Btn onClick={()=>{setConsent(true);setForm({...form,grabado:true});}}>Sí</Btn><Btn variant="secondary" onClick={()=>toast('Sin autorización')}>No</Btn></div>
         </div>:
         <AudioRecorder onTranscript={t=>setForm({...form,transcript:t})}/>}
@@ -2178,7 +2217,7 @@ function FeedbackTab({data,setData,team,toast,session,refreshKey}){
 }
 
 // ─── Dashboard ───
-function DashboardTab({data,team,coaches,session,setTab}){
+function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
   const{role}=session;
   const now=new Date();
   const mesActual=now.getMonth();const anioActual=now.getFullYear();
@@ -2189,6 +2228,7 @@ function DashboardTab({data,team,coaches,session,setTab}){
   const recs=data.records;
   const rm=recs.filter(thisMonth);
   const[expanded,setExpanded]=useState(null);
+  const[semAbierto,setSemAbierto]=useState(null); // vendedor con el selector de semáforo desplegado
 
   const arranques=rm.filter(r=>r.type==='arranque').length;
   const cierres=rm.filter(r=>r.type==='cierre').length;
@@ -2391,14 +2431,22 @@ function DashboardTab({data,team,coaches,session,setTab}){
   const coachesOrdenadosPendientes=esLider?Object.values(porCoachLider).filter(c=>c.pendientesTotal>0).sort((a,b)=>b.pendientesTotal-a.pendientesTotal):[];
   const coachesOrdenadosSinPagar=esLider?Object.values(porCoachLider).filter(c=>c.sinPagarTotal>0).sort((a,b)=>b.sinPagarTotal-a.sinPagarTotal):[];
 
-  const semaforoMap={};
-  recs.filter(r=>r.type==='feedback').sort((a,b)=>a.savedAt.localeCompare(b.savedAt)).forEach(r=>{
-    if(r.vendedor&&r.semaforo)semaforoMap[r.vendedor]=r.semaforo;
-  });
-  const verdes=vendedores.filter(m=>semaforoMap[m.nombre]==='verde').length;
-  const amarillos=vendedores.filter(m=>semaforoMap[m.nombre]==='amarillo').length;
-  const rojos=vendedores.filter(m=>semaforoMap[m.nombre]==='rojo').length;
+  const semaforoMap=construirSemaforoMap(recs);
+  const semColor=n=>semaforoMap[n]?.valor||'';
+  const verdes=vendedores.filter(m=>semColor(m.nombre)==='verde').length;
+  const amarillos=vendedores.filter(m=>semColor(m.nombre)==='amarillo').length;
+  const rojos=vendedores.filter(m=>semColor(m.nombre)==='rojo').length;
   const sinEval=vendedores.length-verdes-amarillos-rojos;
+  // Marcar el semáforo es un toque: se guarda un registro propio, sin abrir formulario.
+  const marcarSemaforo=(nombre,valor)=>{
+    if(session.soloLectura)return; // vista prestada del director: solo consulta
+    if(semColor(nombre)===valor)return; // mismo color: no se guarda un registro de más
+    const rec={id:uid(),type:'semaforo',date:today(),vendedor:nombre,semaforo:valor,nota:'',
+      registradoPor:session.user.nombre,token:session.token,savedAt:new Date().toISOString()};
+    const upd={...data,records:[...data.records,rec]};
+    setData(upd);saveAndSync(upd,rec,toast,setData);
+    toast(`${SEM_EMOJI[valor]} ${nombreCorto(nombre)} en ${STATUS[valor].label.toLowerCase()}`);
+  };
   const hoy=today();
   const compPendientes=recs.filter(r=>r.type==='feedback'&&r.compromisos&&r.fecha_revision&&r.fecha_revision<=hoy);
 
@@ -2408,8 +2456,8 @@ function DashboardTab({data,team,coaches,session,setTab}){
     const barColor=ok?'var(--green)':warn?'var(--yellow)':'var(--red)';
     return <div style={{background:'var(--card)',borderRadius:10,padding:'12px 14px',border:'1px solid var(--border)'}}>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
-        <span style={{fontSize:12,fontWeight:700,color:'var(--dim)'}}>{icon} {label}</span>
-        <span style={{fontSize:18,fontWeight:800,color:barColor}}>{value}<span style={{fontSize:12,fontWeight:600,color:'var(--dim)'}}>/{goal}</span></span>
+        <span style={{fontSize:13,fontWeight:700,color:'var(--dim)'}}>{icon} {label}</span>
+        <span style={{fontSize:18,fontWeight:800,color:barColor}}>{value}<span style={{fontSize:13,fontWeight:600,color:'var(--dim)'}}>/{goal}</span></span>
       </div>
       <div style={{height:6,background:'var(--border)',borderRadius:3,overflow:'hidden'}}>
         <div style={{width:pct+'%',height:'100%',background:barColor,borderRadius:3,transition:'width .5s'}}/>
@@ -2417,19 +2465,19 @@ function DashboardTab({data,team,coaches,session,setTab}){
     </div>;
   };
   const SemBar=()=><div style={{display:'flex',borderRadius:8,overflow:'hidden',height:28}}>
-    {verdes>0&&<div style={{flex:verdes,background:'var(--green)',display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:12,fontWeight:700}}>{verdes}</div>}
-    {amarillos>0&&<div style={{flex:amarillos,background:'var(--yellow)',display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:12,fontWeight:700}}>{amarillos}</div>}
-    {rojos>0&&<div style={{flex:rojos,background:'var(--red)',display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:12,fontWeight:700}}>{rojos}</div>}
-    {sinEval>0&&<div style={{flex:sinEval,background:'#d1d5db',display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:12,fontWeight:700}}>{sinEval}</div>}
+    {verdes>0&&<div style={{flex:verdes,background:'var(--green)',display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:13,fontWeight:700}}>{verdes}</div>}
+    {amarillos>0&&<div style={{flex:amarillos,background:'var(--yellow)',display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:13,fontWeight:700}}>{amarillos}</div>}
+    {rojos>0&&<div style={{flex:rojos,background:'var(--red)',display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:13,fontWeight:700}}>{rojos}</div>}
+    {sinEval>0&&<div style={{flex:sinEval,background:'#d1d5db',display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:13,fontWeight:700}}>{sinEval}</div>}
   </div>;
 
   // Context card for expanded member
   const ContextCard=({m})=>{
     const re=m.rankingEnt;const rm2=m.rankingMen;
-    return <div style={{background:'var(--bg)',borderRadius:8,padding:10,marginTop:6,fontSize:12,borderLeft:'3px solid var(--accent)'}}>
+    return <div style={{background:'var(--bg)',borderRadius:8,padding:10,marginTop:6,fontSize:13,borderLeft:'3px solid var(--accent)'}}>
       <div style={{display:'flex',justifyContent:'space-between',marginBottom:6}}>
         <span style={{fontWeight:700}}>{m.nombre}</span>
-        <button onClick={()=>setExpanded(null)} style={{background:'none',border:'none',cursor:'pointer',fontSize:14,color:'var(--dim)'}}>✕</button>
+        <button onClick={()=>setExpanded(null)} style={{background:'none',border:'none',cursor:'pointer',fontSize:15,color:'var(--dim)'}}>✕</button>
       </div>
       {/* Fecha de ingreso */}
       {m.fechaAlta&&<div style={{marginBottom:4,color:'var(--dim)'}}>
@@ -2438,18 +2486,18 @@ function DashboardTab({data,team,coaches,session,setTab}){
       {/* Ranking + meses */}
       <div style={{display:'flex',gap:6,alignItems:'center',marginBottom:6,flexWrap:'wrap'}}>
         <RankBadge badge={m.badge}/>
-        {m.mesesEnRanking>0&&<span style={{fontSize:10,color:'var(--dim)'}}>({m.mesesEnRanking} meses en este nivel)</span>}
+        {m.mesesEnRanking>0&&<span style={{fontSize:12,color:'var(--dim)'}}>({m.mesesEnRanking} meses en este nivel)</span>}
       </div>
-      {m.obs&&<p style={{fontSize:11,color:'var(--yellow)',fontStyle:'italic',marginBottom:6}}>⚠️ {m.obs}</p>}
+      {m.obs&&<p style={{fontSize:13,color:'var(--yellow)',fontStyle:'italic',marginBottom:6}}>⚠️ {m.obs}</p>}
       {/* Performance */}
       {rm2&&<div style={{padding:'6px 8px',background:'var(--card)',borderRadius:6,marginBottom:6}}>
-        <div style={{fontSize:11,fontWeight:700,color:'var(--dim)',marginBottom:3}}>📊 Rendimiento (últ. mes evaluado: {mesEvaluado})</div>
+        <div style={{fontSize:13,fontWeight:700,color:'var(--dim)',marginBottom:3}}>📊 Rendimiento (últ. mes evaluado: {mesEvaluado})</div>
         <div style={{display:'flex',justifyContent:'space-between'}}><span>Promedio mensual:</span><b>{rm2.promedioMensual} ins</b></div>
         <div style={{display:'flex',justifyContent:'space-between',color:'var(--dim)'}}><span>Últimos 3 meses:</span><span>{rm2.ultimos3meses.join(' → ')||'—'}</span></div>
       </div>}
       {/* Entrenamiento */}
       {re&&<div style={{padding:'6px 8px',background:'var(--card)',borderRadius:6,marginBottom:6}}>
-        <div style={{fontSize:11,fontWeight:700,color:'var(--dim)',marginBottom:3}}>🎓 Entrenamiento</div>
+        <div style={{fontSize:13,fontWeight:700,color:'var(--dim)',marginBottom:3}}>🎓 Entrenamiento</div>
         <div style={{display:'flex',justifyContent:'space-between'}}><span>Inst. últ. 4 sem:</span><b>{re.insUlt4}</b></div>
         {re.evalMes1&&re.evalMes1!=='-'&&<div style={{display:'flex',justifyContent:'space-between'}}><span>Eval Mes 1:</span><b>{re.evalMes1}</b></div>}
         {re.evalMes2&&re.evalMes2!=='-'&&<div style={{display:'flex',justifyContent:'space-between'}}><span>Eval Mes 2:</span><b>{re.evalMes2}</b></div>}
@@ -2457,15 +2505,15 @@ function DashboardTab({data,team,coaches,session,setTab}){
       {/* Certificaciones */}
       {re&&<div style={{marginBottom:6}}>
         <div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
-          {re.certActitud==='APROBADO'&&<span style={{background:'var(--gbg)',color:'var(--green)',padding:'1px 5px',borderRadius:6,fontSize:10,fontWeight:600}}>✓ Actitud</span>}
-          {re.certSist1==='APROBADO'&&<span style={{background:'var(--gbg)',color:'var(--green)',padding:'1px 5px',borderRadius:6,fontSize:10,fontWeight:600}}>✓ Sistémica I</span>}
-          {re.certSist2==='APROBADO'&&<span style={{background:'var(--gbg)',color:'var(--green)',padding:'1px 5px',borderRadius:6,fontSize:10,fontWeight:600}}>✓ Sistémica II</span>}
-          {re.certSist3==='APROBADO'&&<span style={{background:'var(--gbg)',color:'var(--green)',padding:'1px 5px',borderRadius:6,fontSize:10,fontWeight:600}}>✓ Sistémica III</span>}
+          {re.certActitud==='APROBADO'&&<span style={{background:'var(--gbg)',color:'var(--green)',padding:'1px 5px',borderRadius:6,fontSize:12,fontWeight:600}}>✓ Actitud</span>}
+          {re.certSist1==='APROBADO'&&<span style={{background:'var(--gbg)',color:'var(--green)',padding:'1px 5px',borderRadius:6,fontSize:12,fontWeight:600}}>✓ Sistémica I</span>}
+          {re.certSist2==='APROBADO'&&<span style={{background:'var(--gbg)',color:'var(--green)',padding:'1px 5px',borderRadius:6,fontSize:12,fontWeight:600}}>✓ Sistémica II</span>}
+          {re.certSist3==='APROBADO'&&<span style={{background:'var(--gbg)',color:'var(--green)',padding:'1px 5px',borderRadius:6,fontSize:12,fontWeight:600}}>✓ Sistémica III</span>}
         </div>
       </div>}
       {/* Cursos faltantes */}
       {m.certFaltantes&&m.certFaltantes.length>0&&
-        <div style={{fontSize:11,color:'var(--red)',fontWeight:600,padding:'4px 8px',background:'var(--rbg)',borderRadius:6,marginBottom:6}}>
+        <div style={{fontSize:13,color:'var(--red)',fontWeight:600,padding:'4px 8px',background:'var(--rbg)',borderRadius:6,marginBottom:6}}>
           📚 Cursos faltantes: {m.certFaltantes.join(', ')}
         </div>
       }
@@ -2479,7 +2527,7 @@ function DashboardTab({data,team,coaches,session,setTab}){
         const sinPagar=cuentasSinPagar(m.cuentasCom,now);
         if(!m.ventas?.length&&!sinPagar.length)return null;
         return <div style={{padding:'6px 8px',background:'var(--card)',borderRadius:6,marginBottom:6}}>
-          <div style={{fontSize:11,fontWeight:700,color:'var(--dim)',marginBottom:3}}>🛒 Ventas</div>
+          <div style={{fontSize:13,fontWeight:700,color:'var(--dim)',marginBottom:3}}>🛒 Ventas</div>
           <div style={{display:'flex',justifyContent:'space-between'}}><span>Semana:</span><span>{fSem.oportunidades} op · {fSem.validadas} val · {fSem.instaladas} inst{arpuSem>0?` · ARPU ${fmtMoney(arpuSem)}`:''}</span></div>
           <div style={{display:'flex',justifyContent:'space-between'}}><span>Mes:</span><span>{fMes.oportunidades} op · {fMes.validadas} val · {fMes.instaladas} inst{arpuMes>0?` · ARPU ${fmtMoney(arpuMes)}`:''}</span></div>
           {meta>0&&<div style={{display:'flex',justifyContent:'space-between'}}><span>Meta del mes:</span><b>{fMes.instaladas}/{meta}</b></div>}
@@ -2490,17 +2538,17 @@ function DashboardTab({data,team,coaches,session,setTab}){
         const pendientes=pendientesInstalar30d(m.ventas,now);
         if(!pendientes.length)return null;
         return <div style={{padding:'6px 8px',background:'var(--ybg)',borderRadius:6,marginBottom:6}}>
-          <div style={{fontSize:11,fontWeight:700,color:'var(--yellow)',marginBottom:3}}>⏳ Validadas sin instalar, últ. 30 días ({pendientes.length})</div>
+          <div style={{fontSize:13,fontWeight:700,color:'var(--yellow)',marginBottom:3}}>⏳ Validadas sin instalar, últ. 30 días ({pendientes.length})</div>
           {pendientes.map((v,i)=>{
             const dias=Math.floor((now-v.validacion)/86400000);
             const asig=(m.asignacionesPorOS||{})[v.os]||0;
-            return <div key={i} style={{fontSize:11,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:i<pendientes.length-1?'1px solid var(--border)':'none'}}>
+            return <div key={i} style={{fontSize:13,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:i<pendientes.length-1?'1px solid var(--border)':'none'}}>
               <span>{v.cuenta} · {v.os}</span>
               <span>{dias} día{dias!==1?'s':''} sin activar · {asig} asignación{asig!==1?'es':''}</span>
             </div>;
           })}
           <a href={whatsappUrl(textoPendientesInstalar(m,pendientes,now))} target="_blank" rel="noopener noreferrer"
-            style={{display:'inline-flex',alignItems:'center',gap:6,marginTop:8,padding:'6px 12px',borderRadius:8,background:'#25D366',color:'#fff',fontSize:12,fontWeight:700,textDecoration:'none'}}>
+            style={{display:'inline-flex',alignItems:'center',gap:6,marginTop:8,padding:'6px 12px',borderRadius:8,background:'#25D366',color:'#fff',fontSize:13,fontWeight:700,textDecoration:'none'}}>
             📲 Enviar por WhatsApp
           </a>
         </div>;
@@ -2512,9 +2560,9 @@ function DashboardTab({data,team,coaches,session,setTab}){
         const totalPeriodo=cuentasDelPeriodo(m.cuentasCom,now).length;
         const pct=totalPeriodo?Math.round(sinPagar.length/totalPeriodo*100):0;
         return <div style={{padding:'6px 8px',background:'var(--rbg)',borderRadius:6,marginBottom:6}}>
-          <div style={{fontSize:11,fontWeight:700,color:'var(--red)',marginBottom:3}}>💰 Cuentas sin pagar ({sinPagar.length} · {pct}% de {totalPeriodo} instaladas)</div>
+          <div style={{fontSize:13,fontWeight:700,color:'var(--red)',marginBottom:3}}>💰 Cuentas sin pagar ({sinPagar.length} · {pct}% de {totalPeriodo} instaladas)</div>
           {sinPagar.map((c,i)=>
-            <div key={i} style={{fontSize:11,color:'var(--dim)',padding:'4px 0',borderBottom:i<sinPagar.length-1?'1px solid var(--border)':'none'}}>
+            <div key={i} style={{fontSize:13,color:'var(--dim)',padding:'4px 0',borderBottom:i<sinPagar.length-1?'1px solid var(--border)':'none'}}>
               <div style={{display:'flex',justifyContent:'space-between',gap:6}}>
                 <span>{c.cuenta} · {c.cliente} · {fmtDateObj(c.fechaInstalacion)}</span>
               </div>
@@ -2525,7 +2573,7 @@ function DashboardTab({data,team,coaches,session,setTab}){
             </div>
           )}
           <a href={whatsappUrl(textoCuentasSinPagar(m,sinPagar))} target="_blank" rel="noopener noreferrer"
-            style={{display:'inline-flex',alignItems:'center',gap:6,marginTop:8,padding:'6px 12px',borderRadius:8,background:'#25D366',color:'#fff',fontSize:12,fontWeight:700,textDecoration:'none'}}>
+            style={{display:'inline-flex',alignItems:'center',gap:6,marginTop:8,padding:'6px 12px',borderRadius:8,background:'#25D366',color:'#fff',fontSize:13,fontWeight:700,textDecoration:'none'}}>
             📲 Enviar por WhatsApp
           </a>
         </div>;
@@ -2538,47 +2586,84 @@ function DashboardTab({data,team,coaches,session,setTab}){
   // nested=true: esta fila se muestra dentro de un coach expandido (vista líder) — usa un tono
   // cálido/orgánico distinto al de la tarjeta del coach, para que se note el cambio de nivel.
   const VendedorRow=({m,nested})=>{
-    const sem=semaforoMap[m.nombre];
+    const semInfo=semaforoMap[m.nombre];
+    const sem=semInfo?.valor||'';
     const isExp=expanded===m.nombre;
+    const abiertoSem=semAbierto===m.nombre;
     const lastFb=recs.filter(r=>r.type==='feedback'&&r.vendedor===m.nombre).sort((a,b)=>b.savedAt.localeCompare(a.savedAt))[0];
     const sinPagarN=cuentasSinPagar(m.cuentasCom,now).length;
     const sinPagarPct=sinPagarN?Math.round(sinPagarN/cuentasDelPeriodo(m.cuentasCom,now).length*100):0;
+    // Franja de color a la izquierda: se lee el estado de toda la lista de un vistazo, sin tener
+    // que buscar la pastilla de cada renglón. Gris cuando todavía nadie lo ha semaforizado.
+    const franja=sem?STATUS[sem].border:'#cbd0dd';
     return <div key={m.numEmp||m.nombre}>
       <div onClick={()=>setExpanded(isExp?null:m.nombre)} style={{
         display:'flex',alignItems:'center',justifyContent:'space-between',
-        padding:'8px 10px',borderRadius:isExp?'8px 8px 0 0':8,marginBottom:isExp?0:4,cursor:'pointer',
-        background:sem==='rojo'?'var(--rbg)':sem==='amarillo'?'var(--ybg)':nested?'var(--nest-bg)':'transparent',
-        border:`1px solid ${sem==='rojo'?'var(--red)':sem==='amarillo'?'var(--yellow)':nested?'var(--nest-border)':'var(--border)'}`,
+        padding:'10px 12px',borderRadius:isExp?'10px 10px 0 0':10,marginBottom:isExp?0:5,cursor:'pointer',
+        borderLeft:`5px solid ${franja}`,
+        background:sem==='rojo'?'var(--rbg)':sem==='amarillo'?'var(--ybg)':sem==='verde'?'var(--gbg)':nested?'var(--nest-bg)':'transparent',
+        border:`1px solid ${sem?STATUS[sem].border:nested?'var(--nest-border)':'var(--border)'}`,
+        borderLeftWidth:5,borderLeftColor:franja,
         borderBottom:isExp?'none':undefined,
       }}>
         <div style={{flex:1}}>
           <div style={{display:'flex',alignItems:'center',gap:4,flexWrap:'wrap'}}>
-            <span style={{fontSize:13,fontWeight:600}}>{m.nombre.split(' ').slice(0,3).join(' ')}</span>
+            <span style={{fontSize:15,fontWeight:700,lineHeight:1.3}}>{m.nombre.split(' ').slice(0,3).join(' ')}</span>
             <RankBadge badge={m.badge}/>
-            {m.obs&&<span style={{fontSize:10,fontWeight:600,color:'var(--yellow)'}}>⚠️ {m.obs}</span>}
-            {sinPagarN>0&&<span style={{fontSize:10,fontWeight:700,color:'var(--red)'}}>💰 {sinPagarN} sin pagar ({sinPagarPct}%)</span>}
+            {m.obs&&<span style={{fontSize:13,fontWeight:600,color:'var(--yellow)'}}>⚠️ {m.obs}</span>}
+            {sinPagarN>0&&<span style={{fontSize:13,fontWeight:700,color:'var(--red)'}}>💰 {sinPagarN} sin pagar ({sinPagarPct}%)</span>}
           </div>
-          {m.rankingMen&&<div style={{fontSize:10,color:'var(--dim)',marginTop:1}}>
+          {m.rankingMen&&<div style={{fontSize:13,color:'var(--dim)',marginTop:2,lineHeight:1.4}}>
             Prom: {m.rankingMen.promedioMensual} ins/mes
             {m.mesesEnRanking>0&&<span> · {m.mesesEnRanking}m en nivel</span>}
           </div>}
-          {metaMensual(m.badge)>0&&<div style={{fontSize:10,color:'var(--dim)',marginTop:1}}>
+          {metaMensual(m.badge)>0&&<div style={{fontSize:13,color:'var(--dim)',marginTop:2,lineHeight:1.4}}>
             🎯 {funnelPeriodo(m.ventas,mesIni,mesFin).instaladas}/{metaMensual(m.badge)} inst. del mes
           </div>}
-          {metaSemanal(m.badge)>0&&<div style={{fontSize:10,color:'var(--dim)',marginTop:1}}>
+          {metaSemanal(m.badge)>0&&<div style={{fontSize:13,color:'var(--dim)',marginTop:2,lineHeight:1.4}}>
             🎯 {funnelPeriodo(m.ventas,semanaIni,semanaFin).instaladas}/{metaSemanal(m.badge)} inst. de la semana
           </div>}
-          {m.rankingMen?.ventaSana&&<div style={{fontSize:10,color:'var(--dim)',marginTop:1}}>
+          {m.rankingMen?.ventaSana&&<div style={{fontSize:13,color:'var(--dim)',marginTop:2,lineHeight:1.4}}>
             % Venta sana ({m.rankingMen.ventaSana.mes}): <b>{m.rankingMen.ventaSana.valor}</b>
           </div>}
-          {lastFb&&<div style={{fontSize:10,color:'var(--dim)',marginTop:1}}>Último: {fmt(lastFb.date)} · {lastFb.tipo}</div>}
-          {!lastFb&&<div style={{fontSize:10,color:'var(--yellow)',marginTop:1}}>Sin evaluación</div>}
+          {lastFb&&<div style={{fontSize:13,color:'var(--dim)',marginTop:2,lineHeight:1.4}}>Último: {fmt(lastFb.date)} · {lastFb.tipo}</div>}
+          {!lastFb&&<div style={{fontSize:13,color:'var(--yellow)',marginTop:2,lineHeight:1.4}}>Sin evaluación</div>}
         </div>
-        <div style={{display:'flex',alignItems:'center',gap:4}}>
-          {sem?<StatusBadge status={sem} small/>:<span style={{fontSize:10,color:'#9ca3af'}}>⚪</span>}
-          <span style={{fontSize:12,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
+        <div style={{display:'flex',alignItems:'center',gap:6}}>
+          {/* El botón del semáforo NO abre el detalle del vendedor: stopPropagation, si no, cada
+              intento de marcar terminaría desplegando la ficha. En vista prestada del director no
+              se puede capturar nada, así que ahí se muestra el color pero sin invitar a tocarlo. */}
+          <button onClick={e=>{e.stopPropagation();if(!session.soloLectura)setSemAbierto(abiertoSem?null:m.nombre);}}
+            title={session.soloLectura?(sem?STATUS[sem].label:'Sin semáforo'):sem?`${STATUS[sem].label} — toca para cambiar`:'Sin semáforo — toca para marcar'}
+            style={{display:'inline-flex',alignItems:'center',gap:5,padding:'7px 11px',borderRadius:20,cursor:session.soloLectura?'default':'pointer',
+              border:`2px solid ${sem?STATUS[sem].border:'var(--yellow)'}`,
+              background:sem?STATUS[sem].bg:'var(--ybg)',
+              color:sem?STATUS[sem].border:'var(--yellow)',fontSize:14,fontWeight:700,whiteSpace:'nowrap'}}>
+            {sem?<>{SEM_EMOJI[sem]} {STATUS[sem].label}</>:session.soloLectura?<>⚪ Sin marcar</>:<>⚪ Marcar</>}
+          </button>
+          <span style={{fontSize:14,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
         </div>
       </div>
+      {abiertoSem&&<div style={{border:`1px solid ${franja}`,borderTop:'none',borderRadius:'0 0 10px 10px',padding:10,marginBottom:5,background:'var(--card)'}}>
+        <div style={{fontSize:13,fontWeight:700,color:'var(--dim)',marginBottom:8}}>¿Cómo va {nombreCorto(m.nombre)}?</div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8}}>
+          {SEM_OPCIONES.map(o=>{
+            const activo=sem===o.valor;
+            return <button key={o.valor} onClick={e=>{e.stopPropagation();marcarSemaforo(m.nombre,o.valor);setSemAbierto(null);}}
+              style={{display:'flex',flexDirection:'column',alignItems:'center',gap:2,padding:'12px 6px',borderRadius:10,cursor:'pointer',
+                border:`2px solid ${activo?STATUS[o.valor].border:'var(--border)'}`,
+                background:activo?STATUS[o.valor].bg:'var(--input)',
+                boxShadow:activo?`0 0 0 3px ${STATUS[o.valor].bg}`:'none'}}>
+              <span style={{fontSize:22,lineHeight:1}}>{o.emoji}</span>
+              <span style={{fontSize:14,fontWeight:800,color:STATUS[o.valor].border}}>{o.titulo}</span>
+              <span style={{fontSize:13,color:'var(--dim)',textAlign:'center',lineHeight:1.25}}>{o.ayuda}</span>
+            </button>;
+          })}
+        </div>
+        {semInfo&&<p style={{fontSize:13,color:'var(--dim)',marginTop:8}}>
+          Actual: <b>{STATUS[sem]?.label}</b>{semInfo.fecha?` · ${fmt(semInfo.fecha)}`:''}{semInfo.porQuien?` · ${nombreCorto(semInfo.porQuien)}`:''}
+        </p>}
+      </div>}
       {isExp&&<div style={{border:'1px solid var(--border)',borderTop:'none',borderRadius:'0 0 8px 8px',marginBottom:4}}>
         <ContextCard m={m}/>
       </div>}
@@ -2587,8 +2672,8 @@ function DashboardTab({data,team,coaches,session,setTab}){
 
   return <div>
     <Card title={`📈 Dashboard — ${MESES[mesActual]} ${anioActual}`}>
-      <p style={{fontSize:12,color:'var(--dim)',marginBottom:4}}>Día {diasTranscurridos} de {diasMes} · ~{diasLabTransc} días laborables</p>
-      <p style={{fontSize:11,color:'var(--dim)'}}>Último mes evaluado: <b>{mesEvaluado}</b></p>
+      <p style={{fontSize:13,color:'var(--dim)',marginBottom:4}}>Día {diasTranscurridos} de {diasMes} · ~{diasLabTransc} días laborables</p>
+      <p style={{fontSize:13,color:'var(--dim)'}}>Último mes evaluado: <b>{mesEvaluado}</b></p>
     </Card>
 
     <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:14}}>
@@ -2604,30 +2689,30 @@ function DashboardTab({data,team,coaches,session,setTab}){
         {l:'Inc. Operativas',v:incOp,c:'var(--yellow)',icon:'⚠️'},
         {l:'Inc. Críticas',v:incCrit,c:'var(--red)',icon:'🚨'},
       ].map(s=><div key={s.l} style={{background:'var(--card)',borderRadius:10,padding:'10px 8px',textAlign:'center',border:'1px solid var(--border)'}}>
-        <div style={{fontSize:16}}>{s.icon}</div>
+        <div style={{fontSize:17}}>{s.icon}</div>
         <div style={{fontSize:20,fontWeight:800,color:s.c}}>{s.v}</div>
-        <div style={{fontSize:9,color:'var(--dim)',fontWeight:600}}>{s.l}</div>
+        <div style={{fontSize:12,color:'var(--dim)',fontWeight:600}}>{s.l}</div>
       </div>)}
     </div>
 
     <Card title="🛒 Ventas del equipo" actions={
       <div style={{display:'flex',gap:4}}>
-        {['semana','mes'].map(p=><button key={p} onClick={()=>cambiarPeriodoVentas(p)} style={{fontSize:11,fontWeight:700,padding:'4px 10px',borderRadius:20,border:'1px solid var(--border)',background:periodoVentas===p?'var(--accent)':'var(--card)',color:periodoVentas===p?'#fff':'var(--dim)',cursor:'pointer',textTransform:'capitalize'}}>{p}</button>)}
+        {['semana','mes'].map(p=><button key={p} onClick={()=>cambiarPeriodoVentas(p)} style={{fontSize:13,fontWeight:700,padding:'4px 10px',borderRadius:20,border:'1px solid var(--border)',background:periodoVentas===p?'var(--accent)':'var(--card)',color:periodoVentas===p?'#fff':'var(--dim)',cursor:'pointer',textTransform:'capitalize'}}>{p}</button>)}
       </div>
     }>
       <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:12,background:'var(--bg)',borderRadius:12,padding:'6px 8px'}}>
         <button onClick={()=>setOffsetVentas(o=>Math.min(MAX_OFFSET_VENTAS,o+1))} disabled={offsetVentas>=MAX_OFFSET_VENTAS}
           aria-label={`${periodoVentas==='semana'?'Semana':'Mes'} anterior`}
-          style={{width:30,height:30,flexShrink:0,borderRadius:9,border:'1px solid var(--border)',background:'var(--card)',color:offsetVentas>=MAX_OFFSET_VENTAS?'var(--border)':'var(--accent)',fontSize:15,fontWeight:700,cursor:offsetVentas>=MAX_OFFSET_VENTAS?'default':'pointer',lineHeight:1}}>‹</button>
+          style={{width:30,height:30,flexShrink:0,borderRadius:9,border:'1px solid var(--border)',background:'var(--card)',color:offsetVentas>=MAX_OFFSET_VENTAS?'var(--border)':'var(--accent)',fontSize:16,fontWeight:700,cursor:offsetVentas>=MAX_OFFSET_VENTAS?'default':'pointer',lineHeight:1}}>‹</button>
         <div style={{flex:1,textAlign:'center',minWidth:0}}>
-          <div style={{fontSize:13,fontWeight:700,textTransform:'capitalize'}}>{labelPeriodoVentas}</div>
+          <div style={{fontSize:14,fontWeight:700,textTransform:'capitalize'}}>{labelPeriodoVentas}</div>
           {offsetVentas===0
-            ?<div style={{fontSize:9,color:'var(--accent)',fontWeight:700,marginTop:1}}>● {periodoVentas==='semana'?'Semana actual':'Mes actual'}</div>
-            :<button onClick={()=>setOffsetVentas(0)} style={{fontSize:9,color:'var(--dim)',fontWeight:600,background:'none',border:'none',padding:0,marginTop:1,cursor:'pointer',textDecoration:'underline'}}>Volver {periodoVentas==='semana'?'a esta semana':'a este mes'}</button>}
+            ?<div style={{fontSize:12,color:'var(--accent)',fontWeight:700,marginTop:1}}>● {periodoVentas==='semana'?'Semana actual':'Mes actual'}</div>
+            :<button onClick={()=>setOffsetVentas(0)} style={{fontSize:12,color:'var(--dim)',fontWeight:600,background:'none',border:'none',padding:0,marginTop:1,cursor:'pointer',textDecoration:'underline'}}>Volver {periodoVentas==='semana'?'a esta semana':'a este mes'}</button>}
         </div>
         <button onClick={()=>setOffsetVentas(o=>Math.max(0,o-1))} disabled={offsetVentas===0}
           aria-label={`${periodoVentas==='semana'?'Semana':'Mes'} siguiente`}
-          style={{width:30,height:30,flexShrink:0,borderRadius:9,border:'1px solid var(--border)',background:'var(--card)',color:offsetVentas===0?'var(--border)':'var(--accent)',fontSize:15,fontWeight:700,cursor:offsetVentas===0?'default':'pointer',lineHeight:1}}>›</button>
+          style={{width:30,height:30,flexShrink:0,borderRadius:9,border:'1px solid var(--border)',background:'var(--card)',color:offsetVentas===0?'var(--border)':'var(--accent)',fontSize:16,fontWeight:700,cursor:offsetVentas===0?'default':'pointer',lineHeight:1}}>›</button>
       </div>
       <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:10}}>
         {[
@@ -2636,10 +2721,10 @@ function DashboardTab({data,team,coaches,session,setTab}){
           {l:'Instaladas',v:ventasTotal.instaladas,icon:'🔌',sub:ventasTotal.validadas?`${Math.round(ventasTotal.instaladas/ventasTotal.validadas*100)}% de val.`:null},
         ].map(s=>
           <div key={s.l} style={{background:'var(--bg)',borderRadius:10,padding:'10px 8px',textAlign:'center'}}>
-            <div style={{fontSize:16}}>{s.icon}</div>
+            <div style={{fontSize:17}}>{s.icon}</div>
             <div style={{fontSize:20,fontWeight:800}}>{s.v}</div>
-            <div style={{fontSize:9,color:'var(--dim)',fontWeight:600}}>{s.l}</div>
-            {s.sub&&<div style={{fontSize:10,color:'var(--accent)',fontWeight:700,marginTop:2}}>{s.sub}</div>}
+            <div style={{fontSize:12,color:'var(--dim)',fontWeight:600}}>{s.l}</div>
+            {s.sub&&<div style={{fontSize:12,color:'var(--accent)',fontWeight:700,marginTop:2}}>{s.sub}</div>}
           </div>
         )}
       </div>
@@ -2652,16 +2737,16 @@ function DashboardTab({data,team,coaches,session,setTab}){
           const isExp=expandedPDV===pdv;
           const planesPDV=Object.entries(pdvPorPlan[pdv]||{}).sort((a,b)=>b[1]-a[1]);
           return <div key={pdv}>
-            <div onClick={()=>setExpandedPDV(isExp?null:pdv)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:12,padding:'6px 2px',borderBottom:isExp?'none':'1px solid var(--border)',cursor:'pointer'}}>
+            <div onClick={()=>setExpandedPDV(isExp?null:pdv)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:13,padding:'6px 2px',borderBottom:isExp?'none':'1px solid var(--border)',cursor:'pointer'}}>
               <span>{pdv}</span>
               <span style={{display:'flex',alignItems:'center',gap:6}}>
                 <b>{n}</b>
-                <span style={{fontSize:11,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
+                <span style={{fontSize:13,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
               </span>
             </div>
             {isExp&&<div style={{background:'var(--bg)',borderRadius:6,padding:'6px 8px',marginBottom:6}}>
               {planesPDV.map(([p,cnt])=>
-                <div key={p} style={{display:'flex',justifyContent:'space-between',fontSize:11,color:'var(--dim)',padding:'3px 0',borderBottom:'1px solid var(--border)'}}>
+                <div key={p} style={{display:'flex',justifyContent:'space-between',fontSize:13,color:'var(--dim)',padding:'3px 0',borderBottom:'1px solid var(--border)'}}>
                   <span>{p}</span><b>{cnt}</b>
                 </div>
               )}
@@ -2678,18 +2763,18 @@ function DashboardTab({data,team,coaches,session,setTab}){
           const isExp=expandedCoachRechazo===key;
           const motivosCoach=Object.entries(c.rechazos).sort((a,b)=>b[1].length-a[1].length);
           return <div key={key}>
-            <div onClick={()=>setExpandedCoachRechazo(isExp?null:key)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:12,padding:'6px 2px',borderBottom:isExp?'none':'1px solid var(--border)',cursor:'pointer'}}>
+            <div onClick={()=>setExpandedCoachRechazo(isExp?null:key)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:13,padding:'6px 2px',borderBottom:isExp?'none':'1px solid var(--border)',cursor:'pointer'}}>
               <span style={{fontWeight:600}}>{c.coach.nombre.split(' ').slice(0,3).join(' ')}</span>
               <span style={{display:'flex',alignItems:'center',gap:6}}>
                 <b>{c.rechazosTotal}</b>
-                <span style={{fontSize:11,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
+                <span style={{fontSize:13,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
               </span>
             </div>
             {isExp&&<div style={{background:'var(--bg)',borderRadius:6,padding:'6px 8px',marginBottom:6}}>
               {motivosCoach.map(([mo,items])=><div key={mo} style={{marginBottom:6}}>
-                <div style={{fontSize:11,fontWeight:700,color:'var(--dim)',marginBottom:2}}>{mo} ({items.length})</div>
+                <div style={{fontSize:13,fontWeight:700,color:'var(--dim)',marginBottom:2}}>{mo} ({items.length})</div>
                 {items.map((it,i)=>
-                  <div key={i} style={{fontSize:11,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:i<items.length-1?'1px solid var(--border)':'none'}}>
+                  <div key={i} style={{fontSize:13,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:i<items.length-1?'1px solid var(--border)':'none'}}>
                     <span>{it.nombre}</span>
                     <span>Op. {it.oportunidad||'—'} · Cta. {it.cuenta||'—'} · {fmtDateObj(it.fecha)}</span>
                   </div>
@@ -2700,16 +2785,16 @@ function DashboardTab({data,team,coaches,session,setTab}){
         }):motivosOrdenados.map(([mo,items])=>{
           const isExp=expandedMotivo===mo;
           return <div key={mo}>
-            <div onClick={()=>setExpandedMotivo(isExp?null:mo)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:12,padding:'6px 2px',borderBottom:isExp?'none':'1px solid var(--border)',cursor:'pointer'}}>
+            <div onClick={()=>setExpandedMotivo(isExp?null:mo)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:13,padding:'6px 2px',borderBottom:isExp?'none':'1px solid var(--border)',cursor:'pointer'}}>
               <span>{mo}</span>
               <span style={{display:'flex',alignItems:'center',gap:6}}>
                 <b>{items.length}</b>
-                <span style={{fontSize:11,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
+                <span style={{fontSize:13,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
               </span>
             </div>
             {isExp&&<div style={{background:'var(--bg)',borderRadius:6,padding:'6px 8px',marginBottom:6}}>
               {items.map((it,i)=>
-                <div key={i} style={{fontSize:11,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:i<items.length-1?'1px solid var(--border)':'none'}}>
+                <div key={i} style={{fontSize:13,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:i<items.length-1?'1px solid var(--border)':'none'}}>
                   <span>{it.nombre}</span>
                   <span>Op. {it.oportunidad||'—'} · Cta. {it.cuenta||'—'} · {fmtDateObj(it.fecha)}</span>
                 </div>
@@ -2726,12 +2811,12 @@ function DashboardTab({data,team,coaches,session,setTab}){
           const isExp=expandedPlan===p;
           const coachesPlan=Object.values(porCoachLider).map(c=>({coach:c.coach,items:c.planes[p]||[]})).filter(x=>x.items.length>0).sort((a,b)=>b.items.length-a.items.length);
           return <div key={p}>
-            <div onClick={()=>setExpandedPlan(isExp?null:p)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:12,padding:'6px 2px',borderBottom:isExp?'none':'1px solid var(--border)',cursor:'pointer'}}>
+            <div onClick={()=>setExpandedPlan(isExp?null:p)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:13,padding:'6px 2px',borderBottom:isExp?'none':'1px solid var(--border)',cursor:'pointer'}}>
               <span>{p}</span>
               <span style={{display:'flex',alignItems:'center',gap:6}}>
                 <b>{n}</b>
                 <span style={{color:'var(--dim)'}}>({ventasTotal.instaladas?Math.round(n/ventasTotal.instaladas*100):0}%)</span>
-                <span style={{fontSize:11,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
+                <span style={{fontSize:13,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
               </span>
             </div>
             {isExp&&<div style={{background:'var(--bg)',borderRadius:6,padding:'6px 8px',marginBottom:6}}>
@@ -2739,13 +2824,13 @@ function DashboardTab({data,team,coaches,session,setTab}){
                 const keyC=coach.nombre;
                 const isExpC=expandedCoachPlan===keyC;
                 return <div key={keyC} style={{marginBottom:6}}>
-                  <div onClick={()=>setExpandedCoachPlan(isExpC?null:keyC)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:12,padding:'6px 8px',borderRadius:isExpC?'6px 6px 0 0':6,border:'1px solid var(--border)',borderBottom:isExpC?'none':undefined,background:'var(--card)',cursor:'pointer'}}>
+                  <div onClick={()=>setExpandedCoachPlan(isExpC?null:keyC)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:13,padding:'6px 8px',borderRadius:isExpC?'6px 6px 0 0':6,border:'1px solid var(--border)',borderBottom:isExpC?'none':undefined,background:'var(--card)',cursor:'pointer'}}>
                     <span style={{fontWeight:600}}>{coach.nombre.split(' ').slice(0,3).join(' ')}</span>
-                    <span style={{display:'flex',alignItems:'center',gap:6}}><b>{items.length}</b><span style={{fontSize:11,color:'var(--dim)'}}>{isExpC?'▲':'▼'}</span></span>
+                    <span style={{display:'flex',alignItems:'center',gap:6}}><b>{items.length}</b><span style={{fontSize:13,color:'var(--dim)'}}>{isExpC?'▲':'▼'}</span></span>
                   </div>
                   {isExpC&&<div style={{background:'var(--nest-bg)',border:'1px solid var(--nest-border)',borderTop:'none',borderRadius:'0 0 6px 6px',padding:'6px 8px'}}>
                     {items.map((it,i)=>
-                      <div key={i} style={{fontSize:11,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:i<items.length-1?'1px solid var(--nest-border)':'none'}}>
+                      <div key={i} style={{fontSize:13,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:i<items.length-1?'1px solid var(--nest-border)':'none'}}>
                         <span>{it.nombre}</span>
                         <span>Cta. {it.cuenta||'—'} · {fmtDateObj(it.fecha)}</span>
                       </div>
@@ -2759,17 +2844,17 @@ function DashboardTab({data,team,coaches,session,setTab}){
           const isExp=expandedPlan===p;
           const items=planesDetalle[p]||[];
           return <div key={p}>
-            <div onClick={()=>setExpandedPlan(isExp?null:p)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:12,padding:'6px 2px',borderBottom:isExp?'none':'1px solid var(--border)',cursor:'pointer'}}>
+            <div onClick={()=>setExpandedPlan(isExp?null:p)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:13,padding:'6px 2px',borderBottom:isExp?'none':'1px solid var(--border)',cursor:'pointer'}}>
               <span>{p}</span>
               <span style={{display:'flex',alignItems:'center',gap:6}}>
                 <b>{n}</b>
                 <span style={{color:'var(--dim)'}}>({ventasTotal.instaladas?Math.round(n/ventasTotal.instaladas*100):0}%)</span>
-                <span style={{fontSize:11,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
+                <span style={{fontSize:13,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
               </span>
             </div>
             {isExp&&<div style={{background:'var(--bg)',borderRadius:6,padding:'6px 8px',marginBottom:6}}>
               {items.map((it,i)=>
-                <div key={i} style={{fontSize:11,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:i<items.length-1?'1px solid var(--border)':'none'}}>
+                <div key={i} style={{fontSize:13,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:i<items.length-1?'1px solid var(--border)':'none'}}>
                   <span>{it.nombre}</span>
                   <span>Cta. {it.cuenta||'—'} · {fmtDateObj(it.fecha)}</span>
                 </div>
@@ -2792,10 +2877,10 @@ function DashboardTab({data,team,coaches,session,setTab}){
               border:'1px solid var(--border)',borderBottom:isExp?'none':undefined,
               background:'var(--bg)',
             }}>
-              <span style={{fontWeight:700,fontSize:12}}>{c.coach.nombre.split(' ').slice(0,3).join(' ')}</span>
+              <span style={{fontWeight:700,fontSize:13}}>{c.coach.nombre.split(' ').slice(0,3).join(' ')}</span>
               <div style={{display:'flex',alignItems:'center',gap:6}}>
-                <span style={{fontSize:11,fontWeight:700,color:'var(--yellow)',background:'var(--ybg)',padding:'2px 8px',borderRadius:10}}>{c.pendientesTotal}</span>
-                <span style={{fontSize:12,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
+                <span style={{fontSize:13,fontWeight:700,color:'var(--yellow)',background:'var(--ybg)',padding:'2px 8px',borderRadius:10}}>{c.pendientesTotal}</span>
+                <span style={{fontSize:13,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
               </div>
             </div>
             {isExp&&<div style={{border:'1px solid var(--border)',borderTop:'none',borderRadius:'0 0 8px 8px',padding:'8px 10px'}}>
@@ -2809,23 +2894,23 @@ function DashboardTab({data,team,coaches,session,setTab}){
                     border:'1px solid var(--nest-border)',borderBottom:isExpV?'none':undefined,
                     background:'var(--nest-bg)',
                   }}>
-                    <span style={{fontWeight:600,fontSize:11}}>{m.nombre.split(' ').slice(0,3).join(' ')}</span>
+                    <span style={{fontWeight:600,fontSize:13}}>{m.nombre.split(' ').slice(0,3).join(' ')}</span>
                     <div style={{display:'flex',alignItems:'center',gap:6}}>
-                      <span style={{fontSize:10,fontWeight:700,color:'var(--yellow)',background:'var(--ybg)',padding:'2px 8px',borderRadius:10}}>{pendientes.length}</span>
-                      <span style={{fontSize:11,color:'var(--dim)'}}>{isExpV?'▲':'▼'}</span>
+                      <span style={{fontSize:12,fontWeight:700,color:'var(--yellow)',background:'var(--ybg)',padding:'2px 8px',borderRadius:10}}>{pendientes.length}</span>
+                      <span style={{fontSize:13,color:'var(--dim)'}}>{isExpV?'▲':'▼'}</span>
                     </div>
                   </div>
                   {isExpV&&<div style={{border:'1px solid var(--border)',borderTop:'none',borderRadius:'0 0 8px 8px',padding:'8px 10px'}}>
                     {pendientes.map((v,i)=>{
                       const dias=Math.floor((now-v.validacion)/86400000);
                       const asig=(m.asignacionesPorOS||{})[v.os]||0;
-                      return <div key={i} style={{fontSize:11,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:i<pendientes.length-1?'1px solid var(--border)':'none'}}>
+                      return <div key={i} style={{fontSize:13,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:i<pendientes.length-1?'1px solid var(--border)':'none'}}>
                         <span>{v.cuenta} · {v.os}</span>
                         <span>{dias} día{dias!==1?'s':''} sin activar · {asig} asignación{asig!==1?'es':''}</span>
                       </div>;
                     })}
                     <a href={whatsappUrl(textoPendientesInstalar(m,pendientes,now))} target="_blank" rel="noopener noreferrer"
-                      style={{display:'inline-flex',alignItems:'center',gap:6,marginTop:8,padding:'6px 12px',borderRadius:8,background:'#25D366',color:'#fff',fontSize:12,fontWeight:700,textDecoration:'none'}}>
+                      style={{display:'inline-flex',alignItems:'center',gap:6,marginTop:8,padding:'6px 12px',borderRadius:8,background:'#25D366',color:'#fff',fontSize:13,fontWeight:700,textDecoration:'none'}}>
                       📲 Enviar por WhatsApp
                     </a>
                   </div>}
@@ -2843,23 +2928,23 @@ function DashboardTab({data,team,coaches,session,setTab}){
               border:'1px solid var(--border)',borderBottom:isExp?'none':undefined,
               background:'var(--bg)',
             }}>
-              <span style={{fontWeight:700,fontSize:12}}>{m.nombre.split(' ').slice(0,3).join(' ')}</span>
+              <span style={{fontWeight:700,fontSize:13}}>{m.nombre.split(' ').slice(0,3).join(' ')}</span>
               <div style={{display:'flex',alignItems:'center',gap:6}}>
-                <span style={{fontSize:11,fontWeight:700,color:'var(--yellow)',background:'var(--ybg)',padding:'2px 8px',borderRadius:10}}>{pendientes.length}</span>
-                <span style={{fontSize:12,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
+                <span style={{fontSize:13,fontWeight:700,color:'var(--yellow)',background:'var(--ybg)',padding:'2px 8px',borderRadius:10}}>{pendientes.length}</span>
+                <span style={{fontSize:13,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
               </div>
             </div>
             {isExp&&<div style={{border:'1px solid var(--border)',borderTop:'none',borderRadius:'0 0 8px 8px',padding:'8px 10px'}}>
               {pendientes.map((v,i)=>{
                 const dias=Math.floor((now-v.validacion)/86400000);
                 const asig=(m.asignacionesPorOS||{})[v.os]||0;
-                return <div key={i} style={{fontSize:11,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:i<pendientes.length-1?'1px solid var(--border)':'none'}}>
+                return <div key={i} style={{fontSize:13,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:i<pendientes.length-1?'1px solid var(--border)':'none'}}>
                   <span>{v.cuenta} · {v.os}</span>
                   <span>{dias} día{dias!==1?'s':''} sin activar · {asig} asignación{asig!==1?'es':''}</span>
                 </div>;
               })}
               <a href={whatsappUrl(textoPendientesInstalar(m,pendientes,now))} target="_blank" rel="noopener noreferrer"
-                style={{display:'inline-flex',alignItems:'center',gap:6,marginTop:8,padding:'6px 12px',borderRadius:8,background:'#25D366',color:'#fff',fontSize:12,fontWeight:700,textDecoration:'none'}}>
+                style={{display:'inline-flex',alignItems:'center',gap:6,marginTop:8,padding:'6px 12px',borderRadius:8,background:'#25D366',color:'#fff',fontSize:13,fontWeight:700,textDecoration:'none'}}>
                 📲 Enviar por WhatsApp
               </a>
             </div>}
@@ -2880,10 +2965,10 @@ function DashboardTab({data,team,coaches,session,setTab}){
               border:'1px solid var(--border)',borderBottom:isExp?'none':undefined,
               background:'var(--bg)',
             }}>
-              <span style={{fontWeight:700,fontSize:12}}>{c.coach.nombre.split(' ').slice(0,3).join(' ')}</span>
+              <span style={{fontWeight:700,fontSize:13}}>{c.coach.nombre.split(' ').slice(0,3).join(' ')}</span>
               <div style={{display:'flex',alignItems:'center',gap:6}}>
-                <b style={{fontSize:12}}>{fmtMoney(c.arpuProm)}</b>
-                <span style={{fontSize:12,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
+                <b style={{fontSize:13}}>{fmtMoney(c.arpuProm)}</b>
+                <span style={{fontSize:13,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
               </div>
             </div>
             {isExp&&<div style={{border:'1px solid var(--border)',borderTop:'none',borderRadius:'0 0 8px 8px',padding:'8px 10px'}}>
@@ -2898,16 +2983,16 @@ function DashboardTab({data,team,coaches,session,setTab}){
                     border:'1px solid var(--nest-border)',borderBottom:isExpV?'none':undefined,
                     background:'var(--nest-bg)',
                   }}>
-                    <span style={{fontWeight:600,fontSize:11}}>{m.nombre.split(' ').slice(0,3).join(' ')}</span>
+                    <span style={{fontWeight:600,fontSize:13}}>{m.nombre.split(' ').slice(0,3).join(' ')}</span>
                     <div style={{display:'flex',alignItems:'center',gap:6}}>
-                      <b style={{fontSize:11}}>{fmtMoney(arpu)}</b>
-                      <span style={{fontSize:10,color:'var(--dim)'}}>({n})</span>
-                      <span style={{fontSize:11,color:'var(--dim)'}}>{isExpV?'▲':'▼'}</span>
+                      <b style={{fontSize:13}}>{fmtMoney(arpu)}</b>
+                      <span style={{fontSize:12,color:'var(--dim)'}}>({n})</span>
+                      <span style={{fontSize:13,color:'var(--dim)'}}>{isExpV?'▲':'▼'}</span>
                     </div>
                   </div>
                   {isExpV&&<div style={{border:'1px solid var(--border)',borderTop:'none',borderRadius:'0 0 8px 8px',padding:'8px 10px'}}>
                     {planes.map(([p,b])=>
-                      <div key={p} style={{display:'flex',justifyContent:'space-between',fontSize:11,color:'var(--dim)',padding:'3px 0',borderBottom:'1px solid var(--border)'}}>
+                      <div key={p} style={{display:'flex',justifyContent:'space-between',fontSize:13,color:'var(--dim)',padding:'3px 0',borderBottom:'1px solid var(--border)'}}>
                         <span>{p}</span>
                         <span><b>{fmtMoney(b.sumaArpu/b.n)}</b> ({b.n})</span>
                       </div>
@@ -2919,11 +3004,11 @@ function DashboardTab({data,team,coaches,session,setTab}){
           </div>;
         }):arpuPorVendedorOrdenado.map(({m,arpu,n})=>
           <div key={m.numEmp||m.nombre} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'6px 2px',borderBottom:'1px solid var(--border)'}}>
-            <span style={{fontSize:12,fontWeight:600}}>{m.nombre.split(' ').slice(0,3).join(' ')}</span>
-            <span style={{fontSize:12}}><b>{fmtMoney(arpu)}</b> <span style={{fontSize:10,color:'var(--dim)'}}>({n} inst.)</span></span>
+            <span style={{fontSize:13,fontWeight:600}}>{m.nombre.split(' ').slice(0,3).join(' ')}</span>
+            <span style={{fontSize:13}}><b>{fmtMoney(arpu)}</b> <span style={{fontSize:12,color:'var(--dim)'}}>({n} inst.)</span></span>
           </div>
         )}
-        <p style={{fontSize:10,color:'var(--dim)',marginTop:6}}>Promedio sin IVA de lo activado/instalado en el periodo (columna S de BASE DE DATOS ÷ 1.16).</p>
+        <p style={{fontSize:12,color:'var(--dim)',marginTop:6}}>Promedio sin IVA de lo activado/instalado en el periodo (columna S de BASE DE DATOS ÷ 1.16).</p>
       </PanelAcordeon>
     }
 
@@ -2935,18 +3020,18 @@ function DashboardTab({data,team,coaches,session,setTab}){
           const importeCoach=Object.values(c.sinPagarPorPlan).reduce((s,b)=>s+b.importe,0);
           const planesCoach=Object.entries(c.sinPagarPorPlan).sort((a,b)=>b[1].n-a[1].n);
           return <div key={key} style={{marginBottom:isExp?4:0}}>
-            <div onClick={()=>setExpandedPlanSinPagar(isExp?null:key)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:12,padding:'6px 0',borderBottom:isExp?'none':'1px solid var(--border)',cursor:'pointer'}}>
+            <div onClick={()=>setExpandedPlanSinPagar(isExp?null:key)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:13,padding:'6px 0',borderBottom:isExp?'none':'1px solid var(--border)',cursor:'pointer'}}>
               <span style={{fontWeight:600}}>{c.coach.nombre.split(' ').slice(0,3).join(' ')}</span>
               <span style={{display:'flex',alignItems:'center',gap:6}}>
                 <span><b>{c.sinPagarTotal}</b> cta{c.sinPagarTotal!==1?'s':''} · <b style={{color:'var(--red)'}}>{fmtMoney(importeCoach)}</b></span>
-                <span style={{fontSize:11,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
+                <span style={{fontSize:13,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
               </span>
             </div>
             {isExp&&<div style={{background:'var(--bg)',borderRadius:6,padding:'6px 8px',marginBottom:6}}>
               {planesCoach.map(([p,b])=>{
                 const totalPlan=instaladoPorPlan2m[p]||b.n;
                 const pct=Math.round(b.n/totalPlan*100);
-                return <div key={p} style={{fontSize:11,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:'1px solid var(--border)'}}>
+                return <div key={p} style={{fontSize:13,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:'1px solid var(--border)'}}>
                   <span>{p}</span>
                   <span><b>{b.n}</b> cta{b.n!==1?'s':''} · {pct}% de {totalPlan} inst. · <b style={{color:'var(--red)'}}>{fmtMoney(b.importe)}</b></span>
                 </div>;
@@ -2956,7 +3041,7 @@ function DashboardTab({data,team,coaches,session,setTab}){
         }):sinPagarPorPlanOrdenado.map(([p,b])=>{
           const totalPlan=instaladoPorPlan2m[p]||b.n;
           const pct=Math.round(b.n/totalPlan*100);
-          return <div key={p} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:12,padding:'6px 0',borderBottom:'1px solid var(--border)'}}>
+          return <div key={p} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:13,padding:'6px 0',borderBottom:'1px solid var(--border)'}}>
             <span>{p}</span>
             <span><b>{b.n}</b> cta{b.n!==1?'s':''} · {pct}% de {totalPlan} inst. · <b style={{color:'var(--red)'}}>{fmtMoney(b.importe)}</b></span>
           </div>;
@@ -2966,21 +3051,33 @@ function DashboardTab({data,team,coaches,session,setTab}){
 
     <Card title="🚦 Semáforo del equipo">
       <SemBar/>
-      <div style={{display:'flex',justifyContent:'space-around',marginTop:8,fontSize:11,color:'var(--dim)'}}>
+      <div style={{display:'flex',justifyContent:'space-around',marginTop:10,fontSize:14,color:'var(--dim)',fontWeight:600}}>
         <span>🟢 {verdes}</span><span>🟡 {amarillos}</span><span>🔴 {rojos}</span><span>⚪ {sinEval}</span>
       </div>
+      {sinEval>0&&<p style={{fontSize:14,color:'var(--yellow)',marginTop:10,fontWeight:600}}>
+        ⚠️ Falta{sinEval!==1?'n':''} <b>{sinEval}</b> por semaforizar — márcalos abajo, en Equipo.
+      </p>}
     </Card>
 
-    <Card title={esDirector?`👥 Distrito por Coach (${(coaches||[]).length} coaches · ${vendedores.length} vendedores) — toca para ver detalle`
-      :esLider?`👥 Equipo por Coach (${(coaches||[]).length}) — toca para ver detalle`
-      :`👥 Equipo (${vendedores.length}) — toca para ver detalle`}>
+    <Card title={esDirector?`👥 Distrito por Coach (${(coaches||[]).length} coaches · ${vendedores.length} vendedores)`
+      :esLider?`👥 Equipo por Coach (${(coaches||[]).length})`
+      :`👥 Equipo (${vendedores.length})`}>
+      <p style={{fontSize:14,color:'var(--dim)',marginBottom:10,lineHeight:1.45}}>
+        Toca el <b>nombre</b> para ver el detalle · toca la <b>pastilla de color</b> para poner el semáforo.
+      </p>
+      {sinEval>0&&<div style={{display:'flex',gap:8,alignItems:'center',padding:'10px 12px',borderRadius:10,background:'var(--ybg)',border:'1.5px solid var(--yellow)',marginBottom:10}}>
+        <span style={{fontSize:18}}>⚪</span>
+        <span style={{fontSize:14,fontWeight:600,color:'var(--yellow)',lineHeight:1.4}}>
+          {sinEval} {sinEval===1?'vendedor sigue':'vendedores siguen'} sin semáforo. Todos deben tener uno.
+        </span>
+      </div>}
       {esLider?(coaches||[]).map(c=>{
         const vendCoach=vendedoresPorCoach[c.nombre]||[];
         const key=c.nombre;
         const isExp=expandedCoachEquipo===key;
-        const v=vendCoach.filter(m=>semaforoMap[m.nombre]==='verde').length;
-        const a=vendCoach.filter(m=>semaforoMap[m.nombre]==='amarillo').length;
-        const r=vendCoach.filter(m=>semaforoMap[m.nombre]==='rojo').length;
+        const v=vendCoach.filter(m=>semColor(m.nombre)==='verde').length;
+        const a=vendCoach.filter(m=>semColor(m.nombre)==='amarillo').length;
+        const r=vendCoach.filter(m=>semColor(m.nombre)==='rojo').length;
         const sinEv2=vendCoach.length-v-a-r;
         // Mismos totales que la caja "🛒 Ventas" de cada vendedor (ContextCard), pero sumados entre
         // todos los vendedores del coach.
@@ -3001,18 +3098,18 @@ function DashboardTab({data,team,coaches,session,setTab}){
             borderBottom:isExp?'none':undefined,
           }}>
             <div style={{flex:1}}>
-              <div style={{fontSize:13,fontWeight:700}}>{c.nombre.split(' ').slice(0,3).join(' ')}</div>
+              <div style={{fontSize:14,fontWeight:700}}>{c.nombre.split(' ').slice(0,3).join(' ')}</div>
               {/* El director ve coaches de varios líderes juntos: sin esto no se sabe de quién es cuál. */}
-              {esDirector&&c.reportaA&&<div style={{fontSize:10,color:'var(--accent)',fontWeight:600,marginTop:1}}>⭐ {nombreCorto(c.reportaA)}</div>}
-              <div style={{fontSize:10,color:'var(--dim)',marginTop:1}}>{vendCoach.length} vendedor{vendCoach.length!==1?'es':''} · 🟢{v} 🟡{a} 🔴{r} ⚪{sinEv2}</div>
-              <div style={{fontSize:10,color:'var(--dim)',marginTop:2}}>Semana: {opSemana} op · {valSemana} val · {instSemana} inst</div>
-              <div style={{fontSize:10,color:'var(--dim)',marginTop:1}}>Mes: {opMes} op · {valMes} val · {instMes} inst</div>
-              {metaMesCoach>0&&<div style={{fontSize:10,color:'var(--dim)',marginTop:1}}>🎯 Meta del mes: <b>{instMes}/{metaMesCoach}</b></div>}
+              {esDirector&&c.reportaA&&<div style={{fontSize:12,color:'var(--accent)',fontWeight:600,marginTop:1}}>⭐ {nombreCorto(c.reportaA)}</div>}
+              <div style={{fontSize:12,color:'var(--dim)',marginTop:1}}>{vendCoach.length} vendedor{vendCoach.length!==1?'es':''} · 🟢{v} 🟡{a} 🔴{r} ⚪{sinEv2}</div>
+              <div style={{fontSize:12,color:'var(--dim)',marginTop:2}}>Semana: {opSemana} op · {valSemana} val · {instSemana} inst</div>
+              <div style={{fontSize:12,color:'var(--dim)',marginTop:1}}>Mes: {opMes} op · {valMes} val · {instMes} inst</div>
+              {metaMesCoach>0&&<div style={{fontSize:12,color:'var(--dim)',marginTop:1}}>🎯 Meta del mes: <b>{instMes}/{metaMesCoach}</b></div>}
             </div>
-            <span style={{fontSize:12,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
+            <span style={{fontSize:13,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
           </div>
           {isExp&&<div style={{border:'1px solid var(--border)',borderTop:'none',borderRadius:'0 0 8px 8px',padding:'8px',marginBottom:4}}>
-            {vendCoach.length===0?<p style={{fontSize:12,color:'var(--dim)'}}>Sin vendedores asignados.</p>:
+            {vendCoach.length===0?<p style={{fontSize:13,color:'var(--dim)'}}>Sin vendedores asignados.</p>:
             vendCoach.map(m=><VendedorRow key={m.numEmp||m.nombre} m={m} nested/>)}
           </div>}
         </div>;
@@ -3021,7 +3118,7 @@ function DashboardTab({data,team,coaches,session,setTab}){
 
     {compPendientes.length>0&&
       <Card title={`⏰ Compromisos por revisar (${compPendientes.length})`} style={{borderLeft:'4px solid var(--yellow)'}}>
-        {compPendientes.slice(0,5).map(r=><div key={r.id} style={{fontSize:12,padding:'6px 0',borderBottom:'1px solid var(--border)'}}>
+        {compPendientes.slice(0,5).map(r=><div key={r.id} style={{fontSize:13,padding:'6px 0',borderBottom:'1px solid var(--border)'}}>
           <div style={{display:'flex',justifyContent:'space-between'}}><b>{r.vendedor}</b><span style={{color:'var(--dim)'}}>{fmt(r.fecha_revision)}</span></div>
           <p style={{color:'var(--dim)',margin:'2px 0 0'}}>{r.compromisos?.slice(0,100)}{r.compromisos?.length>100?'...':''}</p>
         </div>)}
@@ -3030,10 +3127,10 @@ function DashboardTab({data,team,coaches,session,setTab}){
 
     <Card title="⚡ Acciones rápidas">
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
-        <Btn onClick={()=>setTab('arranque')} variant="secondary" style={{fontSize:13}}>☀️ Arranque</Btn>
-        <Btn onClick={()=>setTab('cierre')} variant="secondary" style={{fontSize:13}}>🌙 Cierre</Btn>
-        <Btn onClick={()=>setTab('feedback')} variant="secondary" style={{fontSize:13}}>💬 Hallazgo</Btn>
-        <Btn onClick={()=>setTab('plan')} variant="secondary" style={{fontSize:13}}>📊 Plan</Btn>
+        <Btn onClick={()=>setTab('arranque')} variant="secondary" style={{fontSize:14}}>☀️ Arranque</Btn>
+        <Btn onClick={()=>setTab('cierre')} variant="secondary" style={{fontSize:14}}>🌙 Cierre</Btn>
+        <Btn onClick={()=>setTab('feedback')} variant="secondary" style={{fontSize:14}}>💬 Hallazgo</Btn>
+        <Btn onClick={()=>setTab('plan')} variant="secondary" style={{fontSize:14}}>📊 Plan</Btn>
       </div>
     </Card>
   </div>;
@@ -3064,22 +3161,22 @@ function HistorialTab({data,setData,toast,session}){
         setCargandoEquipo(false);
       });
   },[vista,filter]);
-  const typeL={arranque:'☀️ Arranque',cierre:'🌙 Cierre',permiso:'📋 Permiso',plan:'📊 Plan',plan_resultado:'📊 Resultado Plan',feedback:'💬 Hallazgo'};
+  const typeL={arranque:'☀️ Arranque',cierre:'🌙 Cierre',permiso:'📋 Permiso',plan:'📊 Plan',plan_resultado:'📊 Resultado Plan',feedback:'💬 Hallazgo',semaforo:'🚦 Semáforo'};
   const recs=data.records.filter(r=>filter==='todos'||r.type===filter).filter(r=>!dateF||r.date===dateF).sort((a,b)=>b.savedAt.localeCompare(a.savedAt));
   const del=id=>{if(enVista)return;if(!confirm('¿Eliminar?'))return;const upd={...data,records:data.records.filter(r=>r.id!==id)};setData(upd);saveData(upd);toast('Eliminado');};
   // Si ya se subió a Drive, `src` es una liga (no una foto embebida) — no carga como <img>,
   // así que se ofrece como botón para abrirla, en vez de intentar mostrarla en línea.
   const FotoMini=({src,style:s})=>{
-    if(!src?.startsWith('data:'))return <a href={src} target="_blank" rel="noopener noreferrer" style={{display:'inline-flex',alignItems:'center',gap:6,padding:'8px 12px',borderRadius:8,background:'var(--accent-light)',color:'var(--accent)',fontSize:12,fontWeight:700,textDecoration:'none',...s}}>📷 Ver foto (Drive)</a>;
+    if(!src?.startsWith('data:'))return <a href={src} target="_blank" rel="noopener noreferrer" style={{display:'inline-flex',alignItems:'center',gap:6,padding:'8px 12px',borderRadius:8,background:'var(--accent-light)',color:'var(--accent)',fontSize:13,fontWeight:700,textDecoration:'none',...s}}>📷 Ver foto (Drive)</a>;
     return <img src={src} alt="" onClick={()=>setVerFoto(src)} style={{width:'100%',objectFit:'cover',borderRadius:8,cursor:'pointer',...s}}/>;
   };
   const detail=r=>{
     switch(r.type){
-      case'arranque':return <div style={{fontSize:13}}><p><b>Presentes:</b> {r.presentes?.length||0} · <b>Ausentes:</b> {r.ausentes?.length||0}</p>{r.ausentes?.map(a=><div key={a.name} style={{margin:'2px 0'}}><p style={{color:'var(--red)',margin:0}}>✗ {a.name}: {a.reason}{a.detail?` — ${a.detail}`:''}</p>{a.photo&&<FotoMini src={a.photo} style={{maxHeight:160,marginTop:4}}/>}</div>)}{r.notas&&<p style={{marginTop:6}}>{r.notas}</p>}{r.photo&&<FotoMini src={r.photo} style={{maxHeight:120,marginTop:6}}/>}</div>;
-      case'permiso':return <div style={{fontSize:13}}><p><b>{r.vendedor}</b> — {r.tipo}</p><p>{r.motivo}</p>{r.compromiso&&(r.compromiso.cuentas||r.compromiso.ventas||r.compromiso.instalaciones)&&<p>🎯 Compromiso: {r.compromiso.cuentas||0} cuentas · {r.compromiso.ventas||0} ventas · {r.compromiso.instalaciones||0} instal.</p>}{r.colonia&&<p>📍 {r.colonia}</p>}{r.autorizado_por&&<p style={{color:'var(--dim)'}}>Autorizado: {r.autorizado_por}</p>}{r.photo&&<FotoMini src={r.photo} style={{maxHeight:160,marginTop:6}}/>}</div>;
-      case'cierre':return <div style={{fontSize:13}}>
+      case'arranque':return <div style={{fontSize:14}}><p><b>Presentes:</b> {r.presentes?.length||0} · <b>Ausentes:</b> {r.ausentes?.length||0}</p>{r.ausentes?.map(a=><div key={a.name} style={{margin:'2px 0'}}><p style={{color:'var(--red)',margin:0}}>✗ {a.name}: {a.reason}{a.detail?` — ${a.detail}`:''}</p>{a.photo&&<FotoMini src={a.photo} style={{maxHeight:160,marginTop:4}}/>}</div>)}{r.notas&&<p style={{marginTop:6}}>{r.notas}</p>}{r.photo&&<FotoMini src={r.photo} style={{maxHeight:120,marginTop:6}}/>}</div>;
+      case'permiso':return <div style={{fontSize:14}}><p><b>{r.vendedor}</b> — {r.tipo}</p><p>{r.motivo}</p>{r.compromiso&&(r.compromiso.cuentas||r.compromiso.ventas||r.compromiso.instalaciones)&&<p>🎯 Compromiso: {r.compromiso.cuentas||0} cuentas · {r.compromiso.ventas||0} ventas · {r.compromiso.instalaciones||0} instal.</p>}{r.colonia&&<p>📍 {r.colonia}</p>}{r.autorizado_por&&<p style={{color:'var(--dim)'}}>Autorizado: {r.autorizado_por}</p>}{r.photo&&<FotoMini src={r.photo} style={{maxHeight:160,marginTop:6}}/>}</div>;
+      case'cierre':return <div style={{fontSize:14}}>
         {r.resultados?.filter(x=>x.oportunidades||x.validadas||x.instaladas||x.pagadasHoy||x.pendiente).map((x,i)=>
-          <div key={i} style={{fontSize:12,padding:'3px 0',borderBottom:'1px solid var(--border)'}}>
+          <div key={i} style={{fontSize:13,padding:'3px 0',borderBottom:'1px solid var(--border)'}}>
             <b>{x.nombre}:</b> {x.oportunidades||0} op · {x.validadas||0} val · {x.instaladas||0} inst{x.pagadasHoy?` · ${x.pagadasHoy} cta(s) pagada(s) hoy`:''}
             {x.pendiente&&<div style={{color:'var(--dim)'}}>Pendiente: {x.pendiente}</div>}
           </div>
@@ -3087,14 +3184,14 @@ function HistorialTab({data,setData,toast,session}){
         {r.incidencias&&<p style={{marginTop:4}}><b>Incidencias:</b> {r.incidencias}</p>}
         {r.seguimiento?.length>0&&<div style={{marginTop:4}}>
           <b>Seguimiento mañana:</b>
-          {r.seguimiento.map((s,i)=><p key={i} style={{fontSize:12,margin:'2px 0'}}>• {s.name}{s.motivo?`: ${s.motivo}`:''}</p>)}
+          {r.seguimiento.map((s,i)=><p key={i} style={{fontSize:13,margin:'2px 0'}}>• {s.name}{s.motivo?`: ${s.motivo}`:''}</p>)}
         </div>}
         {/* Compatibilidad con cierres guardados antes de este cambio */}
         {r.resultado&&<p><b>Resultado:</b> {r.resultado}</p>}
         {r.pendientes&&<p><b>Pendientes:</b> {r.pendientes}</p>}
         {r.vendedores_seguimiento&&<p><b>Seguimiento:</b> {r.vendedores_seguimiento}</p>}
       </div>;
-      case'plan':return <div style={{fontSize:13}}>
+      case'plan':return <div style={{fontSize:14}}>
         <p><b>Semana:</b> {r.semanaLabel||''}</p>
         {r.objetivos&&<p>🎯 Oport: {r.objetivos.oportunidades||0} (meta {r.metaOficial?.oportunidades??'-'}) · Ventas: {r.objetivos.ventas||0} (meta {r.metaOficial?.ventas??'-'}) · Instal: {r.objetivos.instalaciones||0} (meta {r.metaOficial?.instalaciones??'-'})</p>}
         {r.objetivos&&<p>NPPF: {r.objetivos.cuentasRecuperadas||0} · ARPU: {r.objetivos.arpu||0}</p>}
@@ -3110,7 +3207,7 @@ function HistorialTab({data,setData,toast,session}){
       </div>;
       case'plan_resultado':{
         const pctKpi=(k)=>{const o=Number(r.objetivos?.[k])||0;const v=Number(r.resultados?.[k])||0;return o?Math.round(v/o*100):null;};
-        return <div style={{fontSize:13}}>
+        return <div style={{fontSize:14}}>
           <p><b>Semana:</b> {r.semanaLabel||''}</p>
           {['oportunidades','ventas','instalaciones'].map(k=>{
             const p=pctKpi(k);
@@ -3119,7 +3216,11 @@ function HistorialTab({data,setData,toast,session}){
           <p>NPPF: {r.resultados?.cuentasRecuperadas||0} · ARPU: {r.resultados?.arpu||0}</p>
         </div>;
       }
-      case'feedback':return <div style={{fontSize:13}}><div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><b>{r.vendedor}</b> — {r.tipo}<StatusBadge status={r.semaforo} small/></div>{r.hallazgos&&<p>{r.hallazgos}</p>}{r.compromisos&&<p><b>Compromisos:</b> {r.compromisos}</p>}{r.transcript&&<p style={{fontStyle:'italic',background:'var(--bg)',padding:8,borderRadius:6,marginTop:4}}>🎙️ {r.transcript.slice(0,200)}{r.transcript.length>200?'...':''}</p>}{r.photo&&<FotoMini src={r.photo} style={{maxHeight:160,marginTop:6}}/>}{r.fotos?.length>0&&<div style={{display:'flex',flexWrap:'wrap',gap:6,marginTop:6}}>{r.fotos.map((p,i)=><FotoMini key={i} src={p} style={{width:90,height:90,maxHeight:90}}/>)}</div>}</div>;
+      case'feedback':return <div style={{fontSize:14}}><div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><b>{r.vendedor}</b> — {r.tipo}<StatusBadge status={r.semaforo} small/></div>{r.hallazgos&&<p>{r.hallazgos}</p>}{r.compromisos&&<p><b>Compromisos:</b> {r.compromisos}</p>}{r.transcript&&<p style={{fontStyle:'italic',background:'var(--bg)',padding:8,borderRadius:6,marginTop:4}}>🎙️ {r.transcript.slice(0,200)}{r.transcript.length>200?'...':''}</p>}{r.photo&&<FotoMini src={r.photo} style={{maxHeight:160,marginTop:6}}/>}{r.fotos?.length>0&&<div style={{display:'flex',flexWrap:'wrap',gap:6,marginTop:6}}>{r.fotos.map((p,i)=><FotoMini key={i} src={p} style={{width:90,height:90,maxHeight:90}}/>)}</div>}</div>;
+      case'semaforo':return <div style={{fontSize:14}}>
+        <p><b>{r.vendedor}</b> — {SEM_EMOJI[r.semaforo]||'⚪'} {STATUS[r.semaforo]?.label||r.semaforo}</p>
+        {r.nota&&<p style={{color:'var(--dim)'}}>{r.nota}</p>}
+      </div>;
       default:return null;
     }
   };
@@ -3130,57 +3231,64 @@ function HistorialTab({data,setData,toast,session}){
       case'arranque':{
         const fotosAus=parseFotosAusentes(r['Fotos evidencia ausentes']);
         return <>
-          <p style={{fontSize:13}}><b>Presentes:</b> {r['Presentes']} · <b>Ausentes:</b> {r['Ausentes']}</p>
-          {r['Detalle ausentes']&&<p style={{fontSize:12,color:'var(--red)',margin:'2px 0'}}>{r['Detalle ausentes']}</p>}
-          {r['Compromisos del día']&&<p style={{fontSize:12,margin:'2px 0'}}>🎯 {r['Compromisos del día']}</p>}
-          {r['Notas']&&<p style={{fontSize:13,marginTop:4}}>{r['Notas']}</p>}
+          <p style={{fontSize:14}}><b>Presentes:</b> {r['Presentes']} · <b>Ausentes:</b> {r['Ausentes']}</p>
+          {r['Detalle ausentes']&&<p style={{fontSize:13,color:'var(--red)',margin:'2px 0'}}>{r['Detalle ausentes']}</p>}
+          {r['Compromisos del día']&&<p style={{fontSize:13,margin:'2px 0'}}>🎯 {r['Compromisos del día']}</p>}
+          {r['Notas']&&<p style={{fontSize:14,marginTop:4}}>{r['Notas']}</p>}
           {(r['Foto grupo']||r['Foto grupo subida'])&&<div style={{marginTop:6,display:'flex',gap:6}}>
             {r['Foto grupo']&&<FotoMini src={r['Foto grupo']}/>}
             {r['Foto grupo subida']&&<FotoMini src={r['Foto grupo subida']}/>}
           </div>}
           {fotosAus.length>0&&<div style={{marginTop:6,display:'flex',flexWrap:'wrap',gap:6}}>
-            {fotosAus.map((f,j)=><a key={j} href={f.url} target="_blank" rel="noopener noreferrer" style={{display:'inline-flex',alignItems:'center',gap:6,padding:'6px 10px',borderRadius:8,background:'var(--rbg)',color:'var(--red)',fontSize:11,fontWeight:700,textDecoration:'none'}}>📷 {f.nombre}</a>)}
+            {fotosAus.map((f,j)=><a key={j} href={f.url} target="_blank" rel="noopener noreferrer" style={{display:'inline-flex',alignItems:'center',gap:6,padding:'6px 10px',borderRadius:8,background:'var(--rbg)',color:'var(--red)',fontSize:13,fontWeight:700,textDecoration:'none'}}>📷 {f.nombre}</a>)}
           </div>}
         </>;
       }
       case'cierre':return <>
-        {r['Resultados por vendedor']&&<p style={{fontSize:13}}>{r['Resultados por vendedor']}</p>}
-        {r['Incidencias']&&<p style={{fontSize:13}}><b>Incidencias:</b> {r['Incidencias']}</p>}
-        {r['Seguimiento mañana']&&<p style={{fontSize:13}}><b>Seguimiento mañana:</b> {r['Seguimiento mañana']}</p>}
-        {r['Notas']&&<p style={{fontSize:13}}>{r['Notas']}</p>}
+        {r['Resultados por vendedor']&&<p style={{fontSize:14}}>{r['Resultados por vendedor']}</p>}
+        {r['Incidencias']&&<p style={{fontSize:14}}><b>Incidencias:</b> {r['Incidencias']}</p>}
+        {r['Seguimiento mañana']&&<p style={{fontSize:14}}><b>Seguimiento mañana:</b> {r['Seguimiento mañana']}</p>}
+        {r['Notas']&&<p style={{fontSize:14}}>{r['Notas']}</p>}
       </>;
       case'permiso':return <>
-        <p style={{fontSize:13}}><b>{r['Integrante']}</b> — {r['Tipo']}</p>
-        {r['Motivo']&&<p style={{fontSize:13}}>{r['Motivo']}</p>}
-        {(r['Compromiso Cuentas']||r['Compromiso Ventas']||r['Compromiso Instalaciones'])&&<p style={{fontSize:13}}>🎯 Compromiso: {r['Compromiso Cuentas']||0} cuentas · {r['Compromiso Ventas']||0} ventas · {r['Compromiso Instalaciones']||0} instal.</p>}
-        {r['Colonia']&&<p style={{fontSize:13}}>📍 {r['Colonia']}</p>}
-        {r['Autorizado por']&&<p style={{fontSize:12,color:'var(--dim)'}}>Autorizado: {r['Autorizado por']}</p>}
+        <p style={{fontSize:14}}><b>{r['Integrante']}</b> — {r['Tipo']}</p>
+        {r['Motivo']&&<p style={{fontSize:14}}>{r['Motivo']}</p>}
+        {(r['Compromiso Cuentas']||r['Compromiso Ventas']||r['Compromiso Instalaciones'])&&<p style={{fontSize:14}}>🎯 Compromiso: {r['Compromiso Cuentas']||0} cuentas · {r['Compromiso Ventas']||0} ventas · {r['Compromiso Instalaciones']||0} instal.</p>}
+        {r['Colonia']&&<p style={{fontSize:14}}>📍 {r['Colonia']}</p>}
+        {r['Autorizado por']&&<p style={{fontSize:13,color:'var(--dim)'}}>Autorizado: {r['Autorizado por']}</p>}
         {r['Foto evidencia']&&<FotoMini src={r['Foto evidencia']} style={{maxHeight:160,marginTop:6}}/>}
       </>;
       case'plan':return <>
-        <p style={{fontSize:13}}><b>Semana:</b> {r['Semana']}</p>
-        <p style={{fontSize:13}}>🎯 Oport: {r['Obj. Oportunidades']||0} (meta {r['Meta Oportunidades']??'-'}) · Ventas: {r['Obj. Ventas']||0} (meta {r['Meta Ventas']??'-'}) · Instal: {r['Obj. Instalaciones']||0} (meta {r['Meta Instalaciones']??'-'})</p>
-        <p style={{fontSize:13}}>NPPF: {r['Obj. Cuentas recuperadas NPPF']||0} · ARPU: {fmtMoney(r['Obj. ARPU'])}</p>
-        {r['Prioridades']&&<p style={{fontSize:13}}><b>Prioridades:</b> {r['Prioridades']}</p>}
-        {r['Acompañamientos']&&<p style={{fontSize:13}}><b>Acompañamientos:</b> {r['Acompañamientos']}</p>}
-        {r['Zonas']&&<p style={{fontSize:13}}><b>Zonas:</b> {r['Zonas']}</p>}
-        {r['Resultado esperado']&&<p style={{fontSize:13}}><b>Resultado esperado:</b> {r['Resultado esperado']}</p>}
+        <p style={{fontSize:14}}><b>Semana:</b> {r['Semana']}</p>
+        <p style={{fontSize:14}}>🎯 Oport: {r['Obj. Oportunidades']||0} (meta {r['Meta Oportunidades']??'-'}) · Ventas: {r['Obj. Ventas']||0} (meta {r['Meta Ventas']??'-'}) · Instal: {r['Obj. Instalaciones']||0} (meta {r['Meta Instalaciones']??'-'})</p>
+        <p style={{fontSize:14}}>NPPF: {r['Obj. Cuentas recuperadas NPPF']||0} · ARPU: {fmtMoney(r['Obj. ARPU'])}</p>
+        {r['Prioridades']&&<p style={{fontSize:14}}><b>Prioridades:</b> {r['Prioridades']}</p>}
+        {r['Acompañamientos']&&<p style={{fontSize:14}}><b>Acompañamientos:</b> {r['Acompañamientos']}</p>}
+        {r['Zonas']&&<p style={{fontSize:14}}><b>Zonas:</b> {r['Zonas']}</p>}
+        {r['Resultado esperado']&&<p style={{fontSize:14}}><b>Resultado esperado:</b> {r['Resultado esperado']}</p>}
       </>;
       case'plan_resultado':return <>
-        <p style={{fontSize:13}}><b>Semana:</b> {r['Semana']}</p>
-        <p style={{fontSize:13}}>Oport: {r['Real Oportunidades']||0}{r['% Oportunidades']!==''?` (${r['% Oportunidades']}%)`:''} · Ventas: {r['Real Ventas']||0}{r['% Ventas']!==''?` (${r['% Ventas']}%)`:''} · Instal: {r['Real Instalaciones']||0}{r['% Instalaciones']!==''?` (${r['% Instalaciones']}%)`:''}</p>
-        <p style={{fontSize:13}}>NPPF: {r['Real Cuentas recuperadas NPPF']||0} · ARPU: {fmtMoney(r['Real ARPU'])}</p>
+        <p style={{fontSize:14}}><b>Semana:</b> {r['Semana']}</p>
+        <p style={{fontSize:14}}>Oport: {r['Real Oportunidades']||0}{r['% Oportunidades']!==''?` (${r['% Oportunidades']}%)`:''} · Ventas: {r['Real Ventas']||0}{r['% Ventas']!==''?` (${r['% Ventas']}%)`:''} · Instal: {r['Real Instalaciones']||0}{r['% Instalaciones']!==''?` (${r['% Instalaciones']}%)`:''}</p>
+        <p style={{fontSize:14}}>NPPF: {r['Real Cuentas recuperadas NPPF']||0} · ARPU: {fmtMoney(r['Real ARPU'])}</p>
       </>;
       case'feedback':{
         const fotos=String(r['Foto evidencia']||'').split(';').map(s=>s.trim()).filter(Boolean);
         return <>
-          <div style={{display:'flex',alignItems:'center',gap:8}}><b style={{fontSize:13}}>{r['Integrante']}</b><span style={{fontSize:13}}>— {r['Tipo']}</span>{r['Semáforo']&&<StatusBadge status={r['Semáforo']} small/>}</div>
-          {r['Hallazgos']&&<p style={{fontSize:13}}>{r['Hallazgos']}</p>}
-          {r['Compromisos']&&<p style={{fontSize:13}}><b>Compromisos:</b> {r['Compromisos']}</p>}
-          {r['Transcripción']&&<p style={{fontStyle:'italic',background:'var(--bg)',padding:8,borderRadius:6,marginTop:4,fontSize:12}}>🎙️ {String(r['Transcripción']).slice(0,200)}{String(r['Transcripción']).length>200?'...':''}</p>}
+          <div style={{display:'flex',alignItems:'center',gap:8}}><b style={{fontSize:14}}>{r['Integrante']}</b><span style={{fontSize:14}}>— {r['Tipo']}</span>{r['Semáforo']&&<StatusBadge status={r['Semáforo']} small/>}</div>
+          {r['Hallazgos']&&<p style={{fontSize:14}}>{r['Hallazgos']}</p>}
+          {r['Compromisos']&&<p style={{fontSize:14}}><b>Compromisos:</b> {r['Compromisos']}</p>}
+          {r['Transcripción']&&<p style={{fontStyle:'italic',background:'var(--bg)',padding:8,borderRadius:6,marginTop:4,fontSize:13}}>🎙️ {String(r['Transcripción']).slice(0,200)}{String(r['Transcripción']).length>200?'...':''}</p>}
           {fotos.length>0&&<div style={{display:'flex',flexWrap:'wrap',gap:6,marginTop:6}}>{fotos.map((f,i)=><FotoMini key={i} src={f} style={{width:90,height:90,maxHeight:90}}/>)}</div>}
         </>;
       }
+      case'semaforo':return <>
+        <div style={{display:'flex',alignItems:'center',gap:8}}>
+          <b style={{fontSize:14}}>{r['Integrante']}</b>
+          {r['Semáforo']&&<StatusBadge status={r['Semáforo']} small/>}
+        </div>
+        {r['Nota']&&<p style={{fontSize:14,color:'var(--dim)'}}>{r['Nota']}</p>}
+      </>;
       default:return null;
     }
   };
@@ -3188,18 +3296,18 @@ function HistorialTab({data,setData,toast,session}){
   return <div>
     <Card title="📁 Historial">
       <div style={{display:'flex',gap:6,marginBottom:10}}>
-        <button onClick={()=>setVista('dispositivo')} style={{flex:1,padding:'8px 10px',borderRadius:8,border:'1.5px solid var(--border)',background:vista==='dispositivo'?'var(--accent)':'var(--card)',color:vista==='dispositivo'?'#fff':'var(--dim)',fontWeight:700,fontSize:12,cursor:'pointer'}}>{enVista?'📄 Sus registros':'📱 Este dispositivo'}</button>
-        <button onClick={()=>setVista('equipo')} style={{flex:1,padding:'8px 10px',borderRadius:8,border:'1.5px solid var(--border)',background:vista==='equipo'?'var(--accent)':'var(--card)',color:vista==='equipo'?'#fff':'var(--dim)',fontWeight:700,fontSize:12,cursor:'pointer'}}>👥 Equipo</button>
+        <button onClick={()=>setVista('dispositivo')} style={{flex:1,padding:'8px 10px',borderRadius:8,border:'1.5px solid var(--border)',background:vista==='dispositivo'?'var(--accent)':'var(--card)',color:vista==='dispositivo'?'#fff':'var(--dim)',fontWeight:700,fontSize:13,cursor:'pointer'}}>{enVista?'📄 Sus registros':'📱 Este dispositivo'}</button>
+        <button onClick={()=>setVista('equipo')} style={{flex:1,padding:'8px 10px',borderRadius:8,border:'1.5px solid var(--border)',background:vista==='equipo'?'var(--accent)':'var(--card)',color:vista==='equipo'?'#fff':'var(--dim)',fontWeight:700,fontSize:13,cursor:'pointer'}}>👥 Equipo</button>
       </div>
       <div style={{display:'flex',gap:6,marginBottom:10,flexWrap:'wrap'}}>
-        <Select value={filter} onChange={v=>setFilter(v)} options={[{value:'todos',label:'Todos'},{value:'arranque',label:'☀️ Arranque'},{value:'cierre',label:'🌙 Cierre'},{value:'permiso',label:'📋 Permisos'},{value:'plan',label:'📊 Planes'},{value:'plan_resultado',label:'📊 Resultados Plan'},{value:'feedback',label:'💬 Hallazgos'}]} style={{flex:1,minWidth:120}}/>
+        <Select value={filter} onChange={v=>setFilter(v)} options={[{value:'todos',label:'Todos'},{value:'arranque',label:'☀️ Arranque'},{value:'cierre',label:'🌙 Cierre'},{value:'permiso',label:'📋 Permisos'},{value:'plan',label:'📊 Planes'},{value:'plan_resultado',label:'📊 Resultados Plan'},{value:'feedback',label:'💬 Hallazgos'},{value:'semaforo',label:'🚦 Semáforo'}]} style={{flex:1,minWidth:120}}/>
         <Input type="date" value={dateF} onChange={e=>setDateF(e.target.value)} style={{flex:1,minWidth:120}}/>
         {dateF&&<Btn variant="ghost" onClick={()=>setDateF('')}>✕</Btn>}
       </div>
       {vista==='dispositivo'?
-        <p style={{fontSize:12,color:'var(--dim)'}}>{recs.length} registro{recs.length!==1?'s':''} · {enVista?`capturados por ${nombreCorto(session.user.nombre)}, leídos del Sheet`:'guardados en este teléfono'}</p>
+        <p style={{fontSize:13,color:'var(--dim)'}}>{recs.length} registro{recs.length!==1?'s':''} · {enVista?`capturados por ${nombreCorto(session.user.nombre)}, leídos del Sheet`:'guardados en este teléfono'}</p>
       :
-        <p style={{fontSize:12,color:'var(--dim)'}}>{cargandoEquipo?'Cargando…':`${equipoRecsFiltrados.length} registro${equipoRecsFiltrados.length!==1?'s':''} del equipo`} · sincronizados al Sheet, se ven desde cualquier dispositivo.</p>
+        <p style={{fontSize:13,color:'var(--dim)'}}>{cargandoEquipo?'Cargando…':`${equipoRecsFiltrados.length} registro${equipoRecsFiltrados.length!==1?'s':''} del equipo`} · sincronizados al Sheet, se ven desde cualquier dispositivo.</p>
       }
     </Card>
 
@@ -3207,13 +3315,13 @@ function HistorialTab({data,setData,toast,session}){
       {recs.length===0&&<div style={{textAlign:'center',padding:40,color:'var(--dim)'}}>Sin registros.</div>}
       {recs.map(r=><Card key={r.id} style={{borderLeft:`4px solid ${r.type==='feedback'&&r.semaforo?STATUS[r.semaforo]?.border:'var(--accent)'}`}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
-          <div><span style={{fontWeight:700,fontSize:13}}>{typeL[r.type]||r.type}</span><span style={{marginLeft:8,fontSize:11,color:'var(--dim)'}}>{fmt(r.date)} · {r.time||new Date(r.savedAt).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'})}</span></div>
+          <div><span style={{fontWeight:700,fontSize:14}}>{typeL[r.type]||r.type}</span><span style={{marginLeft:8,fontSize:13,color:'var(--dim)'}}>{fmt(r.date)} · {r.time||new Date(r.savedAt).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'})}</span></div>
           {/* "Eliminar" solo aplica a lo guardado en este teléfono: un registro reconstruido del
               Sheet (vista prestada) no es de aquí y borrarlo no significaría nada. */}
-          {!r.desdeSheet&&<Btn variant="ghost" onClick={()=>del(r.id)} style={{color:'var(--red)',fontSize:11}}>Eliminar</Btn>}
+          {!r.desdeSheet&&<Btn variant="ghost" onClick={()=>del(r.id)} style={{color:'var(--red)',fontSize:13}}>Eliminar</Btn>}
         </div>
         {detail(r)}
-        {r.registradoPor&&<p style={{fontSize:11,color:'var(--dim)',marginTop:6,borderTop:'1px solid var(--border)',paddingTop:4}}>Registrado por: {r.registradoPor}</p>}
+        {r.registradoPor&&<p style={{fontSize:13,color:'var(--dim)',marginTop:6,borderTop:'1px solid var(--border)',paddingTop:4}}>Registrado por: {r.registradoPor}</p>}
       </Card>)}
     </>}
 
@@ -3222,11 +3330,11 @@ function HistorialTab({data,setData,toast,session}){
       {!cargandoEquipo&&equipoRecsFiltrados.length===0&&<div style={{textAlign:'center',padding:40,color:'var(--dim)'}}>Sin registros del equipo todavía.</div>}
       {!cargandoEquipo&&equipoRecsFiltrados.map((r,i)=><Card key={(r.ID||i)+'_'+r._tipo} style={{borderLeft:`4px solid ${r._tipo==='feedback'&&r['Semáforo']?STATUS[r['Semáforo']]?.border:'var(--accent)'}`}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
-          <span style={{fontWeight:700,fontSize:13}}>{typeL[r._tipo]||r._tipo}</span>
-          <span style={{fontSize:11,color:'var(--dim)'}}>{fmt(r['Fecha'])}{r['Hora']?' · '+r['Hora']:''}</span>
+          <span style={{fontWeight:700,fontSize:14}}>{typeL[r._tipo]||r._tipo}</span>
+          <span style={{fontSize:13,color:'var(--dim)'}}>{fmt(r['Fecha'])}{r['Hora']?' · '+r['Hora']:''}</span>
         </div>
         {detailEquipo(r._tipo,r)}
-        <p style={{fontSize:11,color:'var(--dim)',marginTop:6,borderTop:'1px solid var(--border)',paddingTop:4}}>Registrado por: {r['Registrado por']}{r['Rol']?` (${r['Rol']})`:''}</p>
+        <p style={{fontSize:13,color:'var(--dim)',marginTop:6,borderTop:'1px solid var(--border)',paddingTop:4}}>Registrado por: {r['Registrado por']}{r['Rol']?` (${r['Rol']})`:''}</p>
       </Card>)}
     </>}
 
@@ -3329,15 +3437,15 @@ ${cuerpo||'<p style="text-align:center;color:#6b7086;padding:40px">Sin registros
 function ModalElegirVista({titulo,opciones,onElegir,onCerrar}){
   return <div onClick={onCerrar} style={{position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,.5)',zIndex:9998,display:'flex',alignItems:'flex-end',justifyContent:'center'}}>
     <div onClick={e=>e.stopPropagation()} style={{background:'var(--card)',width:'100%',maxWidth:600,borderRadius:'16px 16px 0 0',padding:18,maxHeight:'75vh',overflowY:'auto'}}>
-      <h3 style={{margin:'0 0 4px',fontSize:15,fontWeight:800}}>{titulo}</h3>
-      <p style={{margin:'0 0 12px',fontSize:11,color:'var(--dim)'}}>Verás la app tal como la ve esa persona, en modo consulta.</p>
+      <h3 style={{margin:'0 0 4px',fontSize:16,fontWeight:800}}>{titulo}</h3>
+      <p style={{margin:'0 0 12px',fontSize:13,color:'var(--dim)'}}>Verás la app tal como la ve esa persona, en modo consulta.</p>
       {opciones.length===0
-        ?<p style={{color:'var(--dim)',fontSize:13}}>No hay nadie disponible en este nivel.</p>
+        ?<p style={{color:'var(--dim)',fontSize:14}}>No hay nadie disponible en este nivel.</p>
         :opciones.map(o=>
           <button key={o.numEmp||o.nombre} onClick={()=>onElegir(o)}
             style={{display:'block',width:'100%',textAlign:'left',padding:'11px 12px',marginBottom:8,borderRadius:10,border:'1px solid var(--border)',background:'var(--input)',color:'var(--text)',cursor:'pointer'}}>
-            <div style={{fontWeight:700,fontSize:13}}>{o.nombre}</div>
-            <div style={{fontSize:11,color:'var(--dim)'}}>{o.posicion||''}</div>
+            <div style={{fontWeight:700,fontSize:14}}>{o.nombre}</div>
+            <div style={{fontSize:13,color:'var(--dim)'}}>{o.posicion||''}</div>
           </button>)}
       <Btn variant="secondary" onClick={onCerrar} style={{width:'100%',marginTop:4}}>Cancelar</Btn>
     </div>
@@ -3357,10 +3465,10 @@ function BarraVistaDirector({sessionBase,vistas,onAbrir,onRegresar,onSalir,abrie
   const opciones=(actual?actual.coaches:(sessionBase.lideres&&sessionBase.lideres.length?sessionBase.lideres:sessionBase.coaches))||[];
   const puedeBajar=nivel<2&&opciones.length>0;
   const ruta=vistas.map(v=>nombreCorto(v.user.nombre)).join(' › ');
-  const chip={fontSize:11,fontWeight:700,padding:'6px 10px',borderRadius:8,border:'none',cursor:abriendo?'default':'pointer'};
+  const chip={fontSize:13,fontWeight:700,padding:'6px 10px',borderRadius:8,border:'none',cursor:abriendo?'default':'pointer'};
   return <>
     <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap',padding:'8px 14px',background:nivel?'var(--ybg)':'var(--accent-light)',borderBottom:'1px solid var(--border)'}}>
-      <span style={{flex:1,minWidth:150,fontSize:11,fontWeight:700,color:nivel?'var(--yellow)':'var(--accent)'}}>
+      <span style={{flex:1,minWidth:150,fontSize:13,fontWeight:700,color:nivel?'var(--yellow)':'var(--accent)'}}>
         {nivel?`👁️ Viendo como ${ruta} · solo consulta`:'👔 Estás en tu vista de director'}
       </span>
       {puedeBajar&&<button onClick={()=>setEligiendo(true)} disabled={!!abriendo} style={{...chip,background:'var(--accent)',color:'#fff',opacity:abriendo?.6:1}}>
@@ -3468,21 +3576,23 @@ function MainApp({session,setSession,onLogout,sessionBase,vistas,onAbrirVista,on
     const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`reporte-supervision-${today()}.html`;a.click();toast('📥 Reporte descargado');
   };
 
-  return <div style={{maxWidth:600,margin:'0 auto',minHeight:'100vh',background:'var(--bg)'}}>
+  // 760 y no 600: con la letra ya en su tamaño bueno, a 600 los renglones del panel Equipo se
+  // partían en dos en laptop. En celular no cambia nada, la pantalla nunca llega a ese ancho.
+  return <div style={{maxWidth:760,margin:'0 auto',minHeight:'100vh',background:'var(--bg)'}}>
     {/* Header */}
     <div style={{padding:'12px 16px',background:'linear-gradient(135deg,#1e3a8a,#1e40af)',color:'#fff'}}>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
         <div>
-          <h1 style={{margin:0,fontSize:16,fontWeight:800}}>Supervisión 2.0</h1>
-          <p style={{margin:0,fontSize:11,opacity:.85}}>{roleLabels[role]} · {user.nombre}</p>
+          <h1 style={{margin:0,fontSize:17,fontWeight:800}}>Supervisión 2.0</h1>
+          <p style={{margin:0,fontSize:13,opacity:.85}}>{roleLabels[role]} · {user.nombre}</p>
         </div>
         <div style={{display:'flex',gap:6,alignItems:'center'}}>
-          {hasArr&&<span style={{fontSize:14}}>☀️</span>}
-          {hasCie&&<span style={{fontSize:14}}>🌙</span>}
+          {hasArr&&<span style={{fontSize:15}}>☀️</span>}
+          {hasCie&&<span style={{fontSize:15}}>🌙</span>}
           {/* El reporte se arma con los registros de este teléfono — en vista prestada no hay
               ninguno de esa persona, así que saldría en blanco: mejor no ofrecerlo ahí. */}
-          {!enVista&&<button onClick={exportReporte} style={{background:'rgba(255,255,255,.15)',border:'none',borderRadius:8,padding:'5px 8px',color:'#fff',cursor:'pointer',fontSize:14}} title="Descargar reporte">📥</button>}
-          <button onClick={onLogout} style={{background:'rgba(255,255,255,.15)',border:'none',borderRadius:8,padding:'5px 8px',color:'#fff',cursor:'pointer',fontSize:12,fontWeight:700}} title="Cerrar sesión">Salir</button>
+          {!enVista&&<button onClick={exportReporte} style={{background:'rgba(255,255,255,.15)',border:'none',borderRadius:8,padding:'5px 8px',color:'#fff',cursor:'pointer',fontSize:15}} title="Descargar reporte">📥</button>}
+          <button onClick={onLogout} style={{background:'rgba(255,255,255,.15)',border:'none',borderRadius:8,padding:'5px 8px',color:'#fff',cursor:'pointer',fontSize:13,fontWeight:700}} title="Cerrar sesión">Salir</button>
         </div>
       </div>
     </div>
@@ -3497,7 +3607,7 @@ function MainApp({session,setSession,onLogout,sessionBase,vistas,onAbrirVista,on
       {[{l:'Hoy',v:todayRecs.length,c:'var(--accent)'},{l:'Equipo',v:team.length,c:'var(--green)'},{l:supervisaCoaches?'Coaches':'Total',v:supervisaCoaches?(coaches||[]).length:data.records.length,c:'#7c3aed'},{l:'Registros',v:data.records.length,c:'#ca8a04'}].map(s=>
         <div key={s.l} style={{background:'var(--card)',borderRadius:10,padding:'6px 8px',textAlign:'center',border:'1px solid var(--border)'}}>
           <div style={{fontSize:18,fontWeight:800,color:s.c}}>{s.v}</div>
-          <div style={{fontSize:9,color:'var(--dim)',fontWeight:600,textTransform:'uppercase'}}>{s.l}</div>
+          <div style={{fontSize:12,color:'var(--dim)',fontWeight:600,textTransform:'uppercase'}}>{s.l}</div>
         </div>
       )}
     </div>
@@ -3506,20 +3616,20 @@ function MainApp({session,setSession,onLogout,sessionBase,vistas,onAbrirVista,on
         y no caben como chips: van agrupados en la tarjeta de Distrito por Coach del Dashboard). */}
     {chipsEquipo.length>0&&
       <div style={{padding:'0 14px 8px',display:'flex',gap:4,flexWrap:'wrap'}}>
-        {chipsEquipo.map(c=><span key={c.nombre} style={{fontSize:11,background:'var(--accent-light)',color:'var(--accent)',padding:'2px 8px',borderRadius:10,fontWeight:600}}>{c.nombre.split(' ').slice(0,2).join(' ')}</span>)}
+        {chipsEquipo.map(c=><span key={c.nombre} style={{fontSize:13,background:'var(--accent-light)',color:'var(--accent)',padding:'2px 8px',borderRadius:10,fontWeight:600}}>{c.nombre.split(' ').slice(0,2).join(' ')}</span>)}
       </div>
     }
 
     {/* Ventas/ranking no cargaron: hay que decirlo con todas sus letras. Un Dashboard en ceros
         por una lectura fallida se ve idéntico a uno en ceros porque no hubo ventas, y así se
         han perdido horas buscando el problema del lado equivocado. */}
-    {session.avisoDatos&&<p style={{margin:'0 14px 10px',fontSize:12,fontWeight:600,color:'var(--red)',background:'var(--rbg)',border:'1.5px solid var(--red)',borderRadius:8,padding:'9px 11px'}}>
+    {session.avisoDatos&&<p style={{margin:'0 14px 10px',fontSize:13,fontWeight:600,color:'var(--red)',background:'var(--rbg)',border:'1.5px solid var(--red)',borderRadius:8,padding:'9px 11px'}}>
       ⚠️ Esta vez {session.avisoDatos}. Los números de oportunidades, validadas e instaladas de abajo salen en cero por eso — no es que el equipo no haya vendido. Toca 🔄 para reintentar.
     </p>}
 
     {/* En vista prestada los registros de esa persona se leen del Sheet — mientras llegan, los
         contadores están incompletos y hay que decirlo, o se leerían como "no trabajó". */}
-    {enVista&&<p style={{margin:'0 14px 10px',fontSize:11,color:'var(--dim)',background:'var(--card)',border:'1px dashed var(--border)',borderRadius:8,padding:'8px 10px'}}>
+    {enVista&&<p style={{margin:'0 14px 10px',fontSize:13,color:'var(--dim)',background:'var(--card)',border:'1px dashed var(--border)',borderRadius:8,padding:'8px 10px'}}>
       {registrosVista===null
         ?`⏳ Cargando del Sheet los registros de ${nombreCorto(user.nombre)}…`
         :`📄 ${registrosVista.length} registro${registrosVista.length!==1?'s':''} de ${nombreCorto(user.nombre)} leídos del Sheet.`}
@@ -3527,14 +3637,14 @@ function MainApp({session,setSession,onLogout,sessionBase,vistas,onAbrirVista,on
 
     {/* Tabs */}
     <div style={{display:'flex',overflowX:'auto',gap:0,padding:'0 10px',borderBottom:'1px solid var(--border)',background:'var(--card)',WebkitOverflowScrolling:'touch'}}>
-      {TABS.map(t=><button key={t.id} onClick={()=>setTab(t.id)} style={{flex:'0 0 auto',padding:'10px 12px',border:'none',background:'transparent',cursor:'pointer',fontSize:11,fontWeight:600,color:tab===t.id?'var(--accent)':'var(--dim)',borderBottom:tab===t.id?'3px solid var(--accent)':'3px solid transparent',whiteSpace:'nowrap'}}><span style={{fontSize:15,display:'block'}}>{t.icon}</span>{t.label}</button>)}
+      {TABS.map(t=><button key={t.id} onClick={()=>setTab(t.id)} style={{flex:'0 0 auto',padding:'10px 12px',border:'none',background:'transparent',cursor:'pointer',fontSize:13,fontWeight:600,color:tab===t.id?'var(--accent)':'var(--dim)',borderBottom:tab===t.id?'3px solid var(--accent)':'3px solid transparent',whiteSpace:'nowrap'}}><span style={{fontSize:16,display:'block'}}>{t.icon}</span>{t.label}</button>)}
     </div>
 
     {/* Content — la `key` cambia al entrar/salir de una vista prestada, para que las pestañas
         se vuelvan a montar de cero y no arrastren el formulario a medio llenar ni los paneles
         ya cargados de la persona anterior. */}
     <div key={session.verComo||'propia'} style={{padding:14,paddingBottom:30}}>
-      {tab==='dashboard'&&<DashboardTab data={data} team={allTeam} coaches={coaches} session={session} setTab={setTab}/>}
+      {tab==='dashboard'&&<DashboardTab data={data} setData={setData} team={allTeam} coaches={coaches} session={session} setTab={setTab} toast={toast}/>}
       {tab==='arranque'&&<ArranqueTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
       {tab==='permisos'&&<PermisosTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
       {tab==='cierre'&&<CierreTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
