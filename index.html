@@ -575,7 +575,7 @@ function revivirFechasMiembro(m){
   return {
     ...m,
     ventas:(m.ventas||[]).map(v=>({...v,creacion:reviveFecha(v.creacion),validacion:reviveValidacion(v.validacion),activacion:reviveFecha(v.activacion)})),
-    cuentasCom:(m.cuentasCom||[]).map(c=>({...c,fechaInstalacion:reviveFecha(c.fechaInstalacion)})),
+    cuentasCom:(m.cuentasCom||[]).map(c=>({...c,fechaInstalacion:reviveFecha(c.fechaInstalacion),fechaPago:reviveFecha(c.fechaPago)})),
   };
 }
 function revivirFechasSesion(session){
@@ -638,7 +638,7 @@ async function fetchVentasComisiones(token,verComo){
     });
     const cuentasByHomologado={};
     Object.entries(json.cuentasByHomologado||{}).forEach(([k,lista])=>{
-      cuentasByHomologado[k]=lista.map(c=>({...c,fechaInstalacion:reviveFecha(c.fechaInstalacion)}));
+      cuentasByHomologado[k]=lista.map(c=>({...c,fechaInstalacion:reviveFecha(c.fechaInstalacion),fechaPago:reviveFecha(c.fechaPago)}));
     });
     return{ventasByVendedor,cuentasByHomologado,asignacionesPorOS:json.asignacionesPorOS||{}};
   }catch(e){console.error('Ventas fetch error:',e);return{...vacio,error:e.message||'no hubo respuesta'};}
@@ -765,6 +765,17 @@ function cuentasSinPagar(cuentas,ref){
   return cuentasDelPeriodo(cuentas,ref)
     .filter(c=>!/^YA COMISIONADA/i.test(c.estatusPago))
     .sort((a,b)=>a.fechaInstalacion-b.fechaInstalacion);
+}
+// Y las que sí se pagaron: el complemento exacto de cuentasSinPagar dentro de la misma ventana,
+// para que el informativo del panel cuadre siempre con el "N sin pagar de M instaladas".
+function cuentasPagadas(cuentas,ref){
+  return cuentasDelPeriodo(cuentas,ref).filter(c=>/^YA COMISIONADA/i.test(c.estatusPago));
+}
+// Cuántas de esas cuentas pagadas cayeron dentro de una semana, según la fecha de pago (columna Q
+// de COMISIONES). Las que no la traen no se cuentan en ninguna semana: se sabe que ya se pagaron,
+// pero no cuándo.
+function pagadasEnRango(pagadas,inicio,fin){
+  return pagadas.filter(c=>enRango(c.fechaPago,inicio,fin)).length;
 }
 
 // Enrich team with ranking data
@@ -2274,6 +2285,13 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
 
   // ── Ventas del equipo: semana/mes en curso, rechazos, asignaciones y cuentas sin pagar ──
   const semanaIni=startOfWeek(now),semanaFin=endOfWeek(now);
+  // Las dos semanas completas anteriores a la que corre (lunes a domingo cada una). El ritmo de
+  // pago se compara entre ellas y NO contra la semana en curso: la fecha de pago siempre llega
+  // desfasada, así que la semana viva se vería siempre en ceros o a medias.
+  const semanaPasadaIni=(()=>{const d=new Date(semanaIni);d.setDate(d.getDate()-7);return d;})();
+  const semanaPasadaFin=endOfWeek(semanaPasadaIni);
+  const semanaAntepasadaIni=(()=>{const d=new Date(semanaIni);d.setDate(d.getDate()-14);return d;})();
+  const semanaAntepasadaFin=endOfWeek(semanaAntepasadaIni);
   const mesIni=startOfMonth(now),mesFin=endOfMonth(now);
   const[periodoVentas,setPeriodoVentas]=useState('semana');
   // offsetVentas: 0 = periodo actual, 1 = el anterior, 2 = dos atrás... permite hojear semanas/meses previos
@@ -2312,6 +2330,9 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
   const pdvPorPlan={}; // pdv -> {plan: n}
   const sinPagarPorPlan={}; // plan -> {n, importe}
   const instaladoPorPlan2m={}; // plan -> instalaciones (pagadas o no) entre 25 y 90 días, para el % de sin pagar
+  // Ritmo de pago del equipo: de las mismas cuentas de la ventana de 25 a 90 días, las que se
+  // pagaron en la semana pasada contra las de la antepasada (ambas cerradas — ver semanaPasadaIni).
+  const pagosPorVendedor=[]; // [{m, pasada, antepasada, importePasada, importeAntepasada}]
   const pendientesPorVendedor=[]; // [{m, pendientes}]
   const arpuPorVendedor=[]; // [{m, arpu, n}] — ARPU promedio (sin IVA) de lo activado/instalado en el periodo
   // Mismos datos que arriba, pero agregados por coach (solo se llena si esLider).
@@ -2336,6 +2357,8 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
   const[expandedCoachPendiente,setExpandedCoachPendiente]=useState(null);
   const[expandedPendienteVendedorLider,setExpandedPendienteVendedorLider]=useState(null);
   const[expandedPlanSinPagar,setExpandedPlanSinPagar]=useState(null);
+  const[abrirPagos,setAbrirPagos]=useState(false);
+  const[expandedCoachPago,setExpandedCoachPago]=useState(null);
   const[expandedCoachEquipo,setExpandedCoachEquipo]=useState(null);
   const[abrirPDV,setAbrirPDV]=useState(false);
   const[expandedPDV,setExpandedPDV]=useState(null);
@@ -2397,6 +2420,18 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
       const p=normalizarPlan(c.plan);
       instaladoPorPlan2m[p]=(instaladoPorPlan2m[p]||0)+1;
     });
+    const pagadasVend=cuentasPagadas(m.cuentasCom,now);
+    if(pagadasVend.length){
+      const dePasada=pagadasVend.filter(c=>enRango(c.fechaPago,semanaPasadaIni,semanaPasadaFin));
+      const deAntepasada=pagadasVend.filter(c=>enRango(c.fechaPago,semanaAntepasadaIni,semanaAntepasadaFin));
+      if(dePasada.length||deAntepasada.length)pagosPorVendedor.push({
+        m,
+        pasada:dePasada.length,
+        antepasada:deAntepasada.length,
+        importePasada:dePasada.reduce((s,c)=>s+c.importe,0),
+        importeAntepasada:deAntepasada.reduce((s,c)=>s+c.importe,0),
+      });
+    }
     const pend=pendientesInstalar30d(m.ventas,now);
     if(pend.length){
       pendientesPorVendedor.push({m,pendientes:pend});
@@ -2440,6 +2475,36 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
   const sinPagarPorPlanTotales=Object.values(sinPagarPorPlan).reduce((acc,b)=>({n:acc.n+b.n,importe:acc.importe+b.importe}),{n:0,importe:0});
   const instaladoPorPlan2mTotal=Object.values(instaladoPorPlan2m).reduce((a,b)=>a+b,0);
   const sinPagarPorPlanPctTotal=instaladoPorPlan2mTotal?Math.round(sinPagarPorPlanTotales.n/instaladoPorPlan2mTotal*100):0;
+  // Totales del equipo para el panel de ritmo de pago, y el mismo corte agrupado por coach.
+  const pagosTotales=pagosPorVendedor.reduce((acc,x)=>({
+    pasada:acc.pasada+x.pasada,antepasada:acc.antepasada+x.antepasada,
+    importePasada:acc.importePasada+x.importePasada,importeAntepasada:acc.importeAntepasada+x.importeAntepasada,
+  }),{pasada:0,antepasada:0,importePasada:0,importeAntepasada:0});
+  const pagosPorVendedorOrdenado=pagosPorVendedor.slice().sort((a,b)=>b.pasada-a.pasada||b.antepasada-a.antepasada);
+  const pagosPorCoach=(()=>{
+    if(!esLider)return[];
+    const porCoach={};
+    (coaches||[]).forEach(c=>{porCoach[c.nombre]={coach:c,vendedores:[],pasada:0,antepasada:0,importePasada:0,importeAntepasada:0};});
+    pagosPorVendedor.forEach(item=>{
+      const b=porCoach[item.m.reportaA];
+      if(!b)return;
+      b.vendedores.push(item);
+      b.pasada+=item.pasada;b.antepasada+=item.antepasada;
+      b.importePasada+=item.importePasada;b.importeAntepasada+=item.importeAntepasada;
+    });
+    return Object.values(porCoach).filter(c=>c.pasada>0||c.antepasada>0)
+      .map(c=>({...c,vendedores:c.vendedores.slice().sort((a,b)=>b.pasada-a.pasada||b.antepasada-a.antepasada)}))
+      .sort((a,b)=>b.pasada-a.pasada||b.antepasada-a.antepasada);
+  })();
+  // Comparativo compacto "pagadas la semana pasada vs la antepasada", igual en cada renglón del panel.
+  const DeltaPagos=({pasada,antepasada,importe})=>{
+    const dif=pasada-antepasada;
+    return <span style={{display:'flex',alignItems:'center',gap:6,fontSize:13}}>
+      <span><b>{pasada}</b> vs <b>{antepasada}</b></span>
+      <span style={{fontWeight:700,color:dif>0?'var(--green)':dif<0?'var(--red)':'var(--dim)'}}>{dif>0?`▲ +${dif}`:dif<0?`▼ ${dif}`:'='}</span>
+      {importe>0&&<span style={{color:'var(--dim)'}}>{fmtMoney(importe)}</span>}
+    </span>;
+  };
   const totalPendientesInstalar=pendientesPorVendedor.reduce((s,x)=>s+x.pendientes.length,0);
   // Coaches ordenados por total, para las vistas de líder (solo los que tienen algo que mostrar).
   const coachesOrdenadosRechazos=esLider?Object.values(porCoachLider).filter(c=>c.rechazosTotal>0).sort((a,b)=>b.rechazosTotal-a.rechazosTotal):[];
@@ -2577,6 +2642,27 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
         const pct=totalPeriodo?Math.round(sinPagar.length/totalPeriodo*100):0;
         return <div style={{padding:'6px 8px',background:'var(--rbg)',borderRadius:6,marginBottom:6}}>
           <div style={{fontSize:13,fontWeight:700,color:'var(--red)',marginBottom:3}}>💰 Cuentas sin pagar ({sinPagar.length} · {pct}% de {totalPeriodo} instaladas)</div>
+          {/* Informativo: del mismo universo de cuentas (las instaladas hace 25 a 90 días), cuántas
+              ya se pagaron y cómo fue el ritmo de pago de la semana pasada contra la antepasada.
+              La semana en curso no se compara: la fecha de pago llega desfasada y saldría en ceros. */}
+          {(()=>{
+            const pagadas=cuentasPagadas(m.cuentasCom,now);
+            if(!pagadas.length)return null;
+            const semPasada=pagadasEnRango(pagadas,semanaPasadaIni,semanaPasadaFin);
+            const semAntepasada=pagadasEnRango(pagadas,semanaAntepasadaIni,semanaAntepasadaFin);
+            const dif=semPasada-semAntepasada;
+            const pctPag=totalPeriodo?Math.round(pagadas.length/totalPeriodo*100):0;
+            const sinFecha=pagadas.length-pagadas.filter(c=>c.fechaPago).length;
+            return <div style={{fontSize:13,color:'var(--dim)',lineHeight:1.45,paddingBottom:5,marginBottom:4,borderBottom:'1px solid var(--border)'}}>
+              <div>✅ Ya pagadas: <b style={{color:'var(--green)'}}>{pagadas.length}</b> de {totalPeriodo} ({pctPag}%)</div>
+              <div>
+                Pagadas la semana pasada: <b>{semPasada}</b> · la antepasada: <b>{semAntepasada}</b>{' '}
+                <span style={{fontWeight:700,color:dif>0?'var(--green)':dif<0?'var(--red)':'var(--dim)'}}>({dif>0?'+':''}{dif})</span>
+              </div>
+              <div style={{fontSize:12}}>{fmtDateObj(semanaPasadaIni)} al {fmtDateObj(semanaPasadaFin)} vs {fmtDateObj(semanaAntepasadaIni)} al {fmtDateObj(semanaAntepasadaFin)}</div>
+              {sinFecha>0&&<div style={{fontSize:12}}>({sinFecha} pagada{sinFecha!==1?'s':''} sin fecha de pago en la base, no entra{sinFecha!==1?'n':''} en la comparación)</div>}
+            </div>;
+          })()}
           {sinPagar.map((c,i)=>
             <div key={i} style={{fontSize:13,color:'var(--dim)',padding:'4px 0',borderBottom:i<sinPagar.length-1?'1px solid var(--border)':'none'}}>
               <div style={{display:'flex',justifyContent:'space-between',gap:6}}>
@@ -3062,6 +3148,48 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
             <span><b>{b.n}</b> cta{b.n!==1?'s':''} · {pct}% de {totalPlan} inst. · <b style={{color:'var(--red)'}}>{fmtMoney(b.importe)}</b></span>
           </div>;
         })}
+      </PanelAcordeon>
+    }
+
+    {/* La otra cara del panel de arriba: de esas mismas cuentas (instaladas hace 25 a 90 días),
+        cuántas SÍ se pagaron. Se comparan las dos últimas semanas ya cerradas y nunca la que
+        corre: la fecha de pago (columna Q de COMISIONES) llega desfasada y la dejaría en ceros. */}
+    {(pagosTotales.pasada>0||pagosTotales.antepasada>0)&&
+      <PanelAcordeon
+        title={`✅ Cuentas pagadas por semana (${pagosTotales.pasada} vs ${pagosTotales.antepasada} · ${pagosTotales.pasada-pagosTotales.antepasada>=0?'+':''}${pagosTotales.pasada-pagosTotales.antepasada} · ${fmtMoney(pagosTotales.importePasada)})`}
+        abierto={abrirPagos} onToggle={()=>setAbrirPagos(!abrirPagos)}>
+        <p style={{fontSize:12,color:'var(--dim)',marginBottom:6,lineHeight:1.45}}>
+          Semana pasada <b>{fmtDateObj(semanaPasadaIni)} al {fmtDateObj(semanaPasadaFin)}</b> vs antepasada <b>{fmtDateObj(semanaAntepasadaIni)} al {fmtDateObj(semanaAntepasadaFin)}</b>.
+        </p>
+        {esLider?pagosPorCoach.map(c=>{
+          const key=c.coach.nombre;
+          const isExp=expandedCoachPago===key;
+          return <div key={key} style={{marginBottom:isExp?4:0}}>
+            <div onClick={()=>setExpandedCoachPago(isExp?null:key)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:13,padding:'6px 0',borderBottom:isExp?'none':'1px solid var(--border)',cursor:'pointer'}}>
+              <span style={{fontWeight:600}}>{c.coach.nombre.split(' ').slice(0,3).join(' ')}</span>
+              <span style={{display:'flex',alignItems:'center',gap:6}}>
+                <DeltaPagos pasada={c.pasada} antepasada={c.antepasada} importe={c.importePasada}/>
+                <span style={{fontSize:13,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
+              </span>
+            </div>
+            {isExp&&<div style={{background:'var(--bg)',borderRadius:6,padding:'6px 8px',marginBottom:6}}>
+              {c.vendedores.map(({m,pasada,antepasada,importePasada})=>
+                <div key={m.numEmp||m.nombre} style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:6,fontSize:13,color:'var(--dim)',padding:'3px 0',borderBottom:'1px solid var(--border)'}}>
+                  <span>{m.nombre.split(' ').slice(0,3).join(' ')}</span>
+                  <DeltaPagos pasada={pasada} antepasada={antepasada} importe={importePasada}/>
+                </div>
+              )}
+            </div>}
+          </div>;
+        }):pagosPorVendedorOrdenado.map(({m,pasada,antepasada,importePasada})=>
+          <div key={m.numEmp||m.nombre} style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:6,padding:'6px 2px',borderBottom:'1px solid var(--border)'}}>
+            <span style={{fontSize:13,fontWeight:600}}>{m.nombre.split(' ').slice(0,3).join(' ')}</span>
+            <DeltaPagos pasada={pasada} antepasada={antepasada} importe={importePasada}/>
+          </div>
+        )}
+        <p style={{fontSize:12,color:'var(--dim)',marginTop:6,lineHeight:1.45}}>
+          Informativo. Solo cuenta lo pagado dentro de esas dos semanas, de las cuentas instaladas hace 25 a 90 días — las mismas del panel de arriba. El importe es el de la semana pasada.
+        </p>
       </PanelAcordeon>
     }
 
