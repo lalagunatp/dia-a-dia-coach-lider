@@ -576,7 +576,7 @@ function revivirFechasMiembro(m){
   return {
     ...m,
     ventas:(m.ventas||[]).map(v=>({...v,creacion:reviveFecha(v.creacion),validacion:reviveValidacion(v.validacion),activacion:reviveFecha(v.activacion)})),
-    cuentasCom:(m.cuentasCom||[]).map(c=>({...c,fechaInstalacion:reviveFecha(c.fechaInstalacion),fechaPago:reviveFecha(c.fechaPago)})),
+    cuentasCom:(m.cuentasCom||[]).map(c=>({...c,fechaInstalacion:reviveFecha(c.fechaInstalacion)})),
   };
 }
 function revivirFechasSesion(session){
@@ -639,7 +639,7 @@ async function fetchVentasComisiones(token,verComo){
     });
     const cuentasByHomologado={};
     Object.entries(json.cuentasByHomologado||{}).forEach(([k,lista])=>{
-      cuentasByHomologado[k]=lista.map(c=>({...c,fechaInstalacion:reviveFecha(c.fechaInstalacion),fechaPago:reviveFecha(c.fechaPago)}));
+      cuentasByHomologado[k]=lista.map(c=>({...c,fechaInstalacion:reviveFecha(c.fechaInstalacion)}));
     });
     return{ventasByVendedor,cuentasByHomologado,asignacionesPorOS:json.asignacionesPorOS||{}};
   }catch(e){console.error('Ventas fetch error:',e);return{...vacio,error:e.message||'no hubo respuesta'};}
@@ -778,11 +778,29 @@ function cuentasSinPagar(cuentas,ref){
 function cuentasPagadas(cuentas,ref){
   return cuentasDelPeriodo(cuentas,ref).filter(c=>/^YA COMISIONADA/i.test(c.estatusPago));
 }
-// Cuántas de esas cuentas pagadas cayeron dentro de una semana, según la fecha de pago (columna Q
-// de COMISIONES). Las que no la traen no se cuentan en ninguna semana: se sabe que ya se pagaron,
-// pero no cuándo.
-function pagadasEnRango(pagadas,inicio,fin){
-  return pagadas.filter(c=>enRango(c.fechaPago,inicio,fin)).length;
+// Número de semana ISO: el jueves de la semana decide a qué año y semana pertenece. Es la misma
+// numeración con la que la hoja COMISIONES llena su columna V — verificado contra el calendario
+// del negocio: la semana 36 de 2026 va del 31/08 al 06/09 y la 37 arranca el 07/09.
+function semanaISO(date){
+  const d=new Date(date.getFullYear(),date.getMonth(),date.getDate());
+  d.setDate(d.getDate()+3-((d.getDay()+6)%7)); // jueves de esa semana
+  const jueves1=new Date(d.getFullYear(),0,4); // el 4 de enero siempre cae en la semana 1
+  jueves1.setDate(jueves1.getDate()+3-((jueves1.getDay()+6)%7));
+  return 1+Math.round((d-jueves1)/(7*86400000));
+}
+// Semanas que se restan a la actual, dando la vuelta al año: en enero, la anterior a la 1 es la
+// 52 (o 53) del año pasado, no la 0. Las cuentas de la ventana de 25 a 90 días son de los tres
+// meses previos, así que ese número siempre cae en el año correcto.
+function semanaMenos(semana,n,ref){
+  let s=semana-n;
+  if(s>=1)return s;
+  const dic=new Date(ref.getFullYear()-1,11,28); // el 28/12 siempre cae en la última semana del año
+  return semanaISO(dic)+s;
+}
+// Cuántas de esas cuentas pagadas se pagaron en una semana dada, según la columna V de COMISIONES.
+// Las que no traen semana no se cuentan en ninguna: se sabe que ya se pagaron, pero no cuándo.
+function pagadasEnSemana(pagadas,semana){
+  return pagadas.filter(c=>c.semanaPago===semana).length;
 }
 
 // Enrich team with ranking data
@@ -2292,9 +2310,13 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
 
   // ── Ventas del equipo: semana/mes en curso, rechazos, asignaciones y cuentas sin pagar ──
   const semanaIni=startOfWeek(now),semanaFin=endOfWeek(now);
-  // Las dos semanas completas anteriores a la que corre (lunes a domingo cada una). El ritmo de
-  // pago se compara entre ellas y NO contra la semana en curso: la fecha de pago siempre llega
-  // desfasada, así que la semana viva se vería siempre en ceros o a medias.
+  // Las dos semanas de pago (columna V de COMISIONES) que se comparan: las dos ya cerradas antes
+  // de la que corre. La semana viva nunca entra — la comisión de lo pagado en una semana se paga
+  // hasta la siguiente, así que la actual siempre saldría en ceros. Si hoy es la 37, se comparan
+  // la 36 contra la 35. Las fechas son las mismas semanas, solo para mostrarlas en pantalla.
+  const semanaActualNum=semanaISO(now);
+  const semanaPasadaNum=semanaMenos(semanaActualNum,1,now);
+  const semanaAntepasadaNum=semanaMenos(semanaActualNum,2,now);
   const semanaPasadaIni=(()=>{const d=new Date(semanaIni);d.setDate(d.getDate()-7);return d;})();
   const semanaPasadaFin=endOfWeek(semanaPasadaIni);
   const semanaAntepasadaIni=(()=>{const d=new Date(semanaIni);d.setDate(d.getDate()-14);return d;})();
@@ -2429,8 +2451,8 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
     });
     const pagadasVend=cuentasPagadas(m.cuentasCom,now);
     if(pagadasVend.length){
-      const dePasada=pagadasVend.filter(c=>enRango(c.fechaPago,semanaPasadaIni,semanaPasadaFin));
-      const deAntepasada=pagadasVend.filter(c=>enRango(c.fechaPago,semanaAntepasadaIni,semanaAntepasadaFin));
+      const dePasada=pagadasVend.filter(c=>c.semanaPago===semanaPasadaNum);
+      const deAntepasada=pagadasVend.filter(c=>c.semanaPago===semanaAntepasadaNum);
       if(dePasada.length||deAntepasada.length)pagosPorVendedor.push({
         m,
         pasada:dePasada.length,
@@ -2650,24 +2672,24 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
         return <div style={{padding:'6px 8px',background:'var(--rbg)',borderRadius:6,marginBottom:6}}>
           <div style={{fontSize:13,fontWeight:700,color:'var(--red)',marginBottom:3}}>💰 Cuentas sin pagar ({sinPagar.length} · {pct}% de {totalPeriodo} instaladas)</div>
           {/* Informativo: del mismo universo de cuentas (las instaladas hace 25 a 90 días), cuántas
-              ya se pagaron y cómo fue el ritmo de pago de la semana pasada contra la antepasada.
-              La semana en curso no se compara: la fecha de pago llega desfasada y saldría en ceros. */}
+              ya se pagaron y cómo fue el ritmo de las dos semanas de pago ya cerradas (columna V).
+              La semana en curso no se compara: su comisión se paga hasta la siguiente. */}
           {(()=>{
             const pagadas=cuentasPagadas(m.cuentasCom,now);
             if(!pagadas.length)return null;
-            const semPasada=pagadasEnRango(pagadas,semanaPasadaIni,semanaPasadaFin);
-            const semAntepasada=pagadasEnRango(pagadas,semanaAntepasadaIni,semanaAntepasadaFin);
+            const semPasada=pagadasEnSemana(pagadas,semanaPasadaNum);
+            const semAntepasada=pagadasEnSemana(pagadas,semanaAntepasadaNum);
             const dif=semPasada-semAntepasada;
             const pctPag=totalPeriodo?Math.round(pagadas.length/totalPeriodo*100):0;
-            const sinFecha=pagadas.length-pagadas.filter(c=>c.fechaPago).length;
+            const sinSemana=pagadas.filter(c=>!c.semanaPago).length;
             return <div style={{fontSize:13,color:'var(--dim)',lineHeight:1.45,paddingBottom:5,marginBottom:4,borderBottom:'1px solid var(--border)'}}>
               <div>✅ Ya pagadas: <b style={{color:'var(--green)'}}>{pagadas.length}</b> de {totalPeriodo} ({pctPag}%)</div>
               <div>
-                Pagadas la semana pasada: <b>{semPasada}</b> · la antepasada: <b>{semAntepasada}</b>{' '}
+                Semana <b>{semanaPasadaNum}</b>: <b>{semPasada}</b> · semana <b>{semanaAntepasadaNum}</b>: <b>{semAntepasada}</b>{' '}
                 <span style={{fontWeight:700,color:dif>0?'var(--green)':dif<0?'var(--red)':'var(--dim)'}}>({dif>0?'+':''}{dif})</span>
               </div>
-              <div style={{fontSize:12}}>{fmtDateObj(semanaPasadaIni)} al {fmtDateObj(semanaPasadaFin)} vs {fmtDateObj(semanaAntepasadaIni)} al {fmtDateObj(semanaAntepasadaFin)}</div>
-              {sinFecha>0&&<div style={{fontSize:12}}>({sinFecha} pagada{sinFecha!==1?'s':''} sin fecha de pago en la base, no entra{sinFecha!==1?'n':''} en la comparación)</div>}
+              <div style={{fontSize:12}}>Sem. {semanaPasadaNum}: {fmtDateObj(semanaPasadaIni)} al {fmtDateObj(semanaPasadaFin)} · sem. {semanaAntepasadaNum}: {fmtDateObj(semanaAntepasadaIni)} al {fmtDateObj(semanaAntepasadaFin)}</div>
+              {sinSemana>0&&<div style={{fontSize:12}}>({sinSemana} pagada{sinSemana!==1?'s':''} sin semana de pago en la base, no entra{sinSemana!==1?'n':''} en la comparación)</div>}
             </div>;
           })()}
           {sinPagar.map((c,i)=>{
@@ -3162,14 +3184,14 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
     }
 
     {/* La otra cara del panel de arriba: de esas mismas cuentas (instaladas hace 25 a 90 días),
-        cuántas SÍ se pagaron. Se comparan las dos últimas semanas ya cerradas y nunca la que
-        corre: la fecha de pago (columna Q de COMISIONES) llega desfasada y la dejaría en ceros. */}
+        cuántas SÍ se pagaron. Se comparan las dos semanas de pago ya cerradas (columna V de
+        COMISIONES) y nunca la que corre: su comisión se paga hasta la semana siguiente. */}
     {(pagosTotales.pasada>0||pagosTotales.antepasada>0)&&
       <PanelAcordeon
-        title={`✅ Cuentas pagadas por semana (${pagosTotales.pasada} vs ${pagosTotales.antepasada} · ${pagosTotales.pasada-pagosTotales.antepasada>=0?'+':''}${pagosTotales.pasada-pagosTotales.antepasada} · ${fmtMoney(pagosTotales.importePasada)})`}
+        title={`✅ Cuentas pagadas: semana ${semanaPasadaNum} vs ${semanaAntepasadaNum} (${pagosTotales.pasada} vs ${pagosTotales.antepasada} · ${pagosTotales.pasada-pagosTotales.antepasada>=0?'+':''}${pagosTotales.pasada-pagosTotales.antepasada} · ${fmtMoney(pagosTotales.importePasada)})`}
         abierto={abrirPagos} onToggle={()=>setAbrirPagos(!abrirPagos)}>
         <p style={{fontSize:12,color:'var(--dim)',marginBottom:6,lineHeight:1.45}}>
-          Semana pasada <b>{fmtDateObj(semanaPasadaIni)} al {fmtDateObj(semanaPasadaFin)}</b> vs antepasada <b>{fmtDateObj(semanaAntepasadaIni)} al {fmtDateObj(semanaAntepasadaFin)}</b>.
+          Semana <b>{semanaPasadaNum}</b> ({fmtDateObj(semanaPasadaIni)} al {fmtDateObj(semanaPasadaFin)}) vs semana <b>{semanaAntepasadaNum}</b> ({fmtDateObj(semanaAntepasadaIni)} al {fmtDateObj(semanaAntepasadaFin)}). La semana {semanaActualNum}, la que corre, no entra: su comisión se paga hasta la siguiente.
         </p>
         {esLider?pagosPorCoach.map(c=>{
           const key=c.coach.nombre;
@@ -3198,7 +3220,7 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
           </div>
         )}
         <p style={{fontSize:12,color:'var(--dim)',marginTop:6,lineHeight:1.45}}>
-          Informativo. Solo cuenta lo pagado dentro de esas dos semanas, de las cuentas instaladas hace 25 a 90 días — las mismas del panel de arriba. El importe es el de la semana pasada.
+          Informativo. Se toma la semana de pago de COMISIONES (columna V) de las cuentas instaladas hace 25 a 90 días — las mismas del panel de arriba. El importe es el de la semana {semanaPasadaNum}.
         </p>
       </PanelAcordeon>
     }
