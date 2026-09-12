@@ -155,3 +155,109 @@ function diagnosticoVentas(numEmpArg) {
     return log.join('\n');
   }
 }
+
+// ─── Diagnóstico de "no aparece el panel de cuentas pagadas" ───
+// El panel se esconde solo cuando las dos semanas salen en cero, y eso puede venir de cuatro
+// cosas que desde el teléfono se ven igualitas:
+//   1. El Web App no se ha re-desplegado, así que sigue mandando hasta la columna U y la V
+//      nunca llega (esto NO lo detecta esta función: ella lee la hoja directo, no la app).
+//   2. La columna V no trae el número de semana donde se espera.
+//   3. La V trae la semana de la comisión y no la del pago, o sea que va una semana adelante.
+//   4. El estatus de pago (columna U) no dice "YA COMISIONADA" en las cuentas que sí tienen
+//      semana, y la app las cruza: cuenta pagada = tiene semana Y dice YA COMISIONADA.
+// Uso: diagnosticoPagos() → ▶ Ejecutar → leer el Registro de ejecución.
+function diagnosticoPagos() {
+  const log = [];
+  const linea = function (s) { log.push(s); console.log(s); };
+  try {
+    const hoja = hojaBaseLagunaPorNombre(COMISIONES_SHEET);
+    const ultCol = hoja.getLastColumn(), ultFila = hoja.getLastRow();
+    linea('HOJA "' + COMISIONES_SHEET + '": ' + ultFila + ' filas x ' + ultCol + ' columnas (ultima = ' + letraColumna(ultCol - 1) + ')');
+    if (ultCol < 22) {
+      linea('✘ La hoja no llega a la columna V. La app pide A..V y eso truena la lectura completa de ventas.');
+      return log.join('\n');
+    }
+    const enc = hoja.getRange(1, 1, 1, 22).getValues()[0];
+    linea('ENCABEZADOS: K="' + enc[10] + '" · T="' + enc[19] + '" · U="' + enc[20] + '" · V="' + enc[21] + '"');
+    linea('(La app espera K=fecha instalacion, T=importe, U=estatus de pago, V=semana de pago)');
+
+    // Solo la ventana que de verdad usa la app: instaladas hace 25 a 90 dias.
+    const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
+    const filas = hoja.getRange(2, 1, ultFila - 1, 22).getValues().filter(function (r) {
+      const f = aFecha(r[10]);
+      if (!f) return false;
+      const d = Math.floor((hoy - f) / 86400000);
+      return d >= 25 && d <= 90;
+    });
+    linea('');
+    linea('CUENTAS EN LA VENTANA DE 25 A 90 DIAS: ' + filas.length + ' (de todo el distrito, sin filtrar por equipo)');
+    if (!filas.length) { linea('✘ Sin cuentas en la ventana: no hay nada que comparar.'); return log.join('\n'); }
+
+    const semActual = semanaISODiag(hoy);
+    linea('SEMANA DE HOY: ' + semActual + ' -> la app compara la ' + (semActual - 1) + ' contra la ' + (semActual - 2));
+
+    const porSemana = {}, sinSemana = [];
+    filas.forEach(function (r) {
+      const s = aSemanaPago(r[21]);
+      if (s === null) sinSemana.push(r); else porSemana[s] = (porSemana[s] || 0) + 1;
+    });
+    linea('');
+    linea('LO QUE TRAE LA COLUMNA V:');
+    linea('  sin semana valida: ' + sinSemana.length + ' cuentas');
+    Object.keys(porSemana).sort(function (a, b) { return a - b; }).forEach(function (s) {
+      const marca = (Number(s) === semActual - 1 || Number(s) === semActual - 2) ? '  <<< una de las dos que compara la app' : '';
+      linea('  semana ' + s + ': ' + porSemana[s] + ' cuentas' + marca);
+    });
+    linea('MUESTRA DE VALORES CRUDOS DE V: ' + filas.slice(0, 8).map(function (r) { return JSON.stringify(r[21]); }).join(' | '));
+
+    // El cruce con la columna U es lo que la app usa para decidir "esta cuenta ya se pago".
+    linea('');
+    linea('CRUCE CON EL ESTATUS DE PAGO (columna U) DE LAS CUENTAS QUE SI TRAEN SEMANA:');
+    const porEstatus = {};
+    filas.forEach(function (r) {
+      if (aSemanaPago(r[21]) === null) return;
+      const u = String(r[20] || '').trim() || '(vacio)';
+      porEstatus[u] = (porEstatus[u] || 0) + 1;
+    });
+    let conYaComisionada = 0;
+    Object.keys(porEstatus).forEach(function (u) {
+      const cuenta = /^YA COMISIONADA/i.test(u);
+      if (cuenta) conYaComisionada += porEstatus[u];
+      linea('  ' + (cuenta ? '✔' : '✘') + ' "' + u + '": ' + porEstatus[u]);
+    });
+    linea('  -> la app solo cuenta las marcadas con ✔: ' + conYaComisionada + ' de ' +
+          (filas.length - sinSemana.length) + ' cuentas con semana');
+
+    linea('');
+    linea('RESULTADO QUE DARIA EL PANEL AHORA MISMO (todo el distrito):');
+    const cuenta = function (sem) {
+      return filas.filter(function (r) { return aSemanaPago(r[21]) === sem && /^YA COMISIONADA/i.test(String(r[20] || '').trim()); }).length;
+    };
+    const a = cuenta(semActual - 1), b = cuenta(semActual - 2);
+    linea('  semana ' + (semActual - 1) + ': ' + a + ' · semana ' + (semActual - 2) + ': ' + b);
+    if (!a && !b) {
+      linea('  ✘ Los dos en cero: por eso el panel no aparece. Arriba esta la razon —');
+      linea('    si la lista "LO QUE TRAE LA COLUMNA V" tiene cuentas en OTRAS semanas, la V no');
+      linea('    esta numerada como se supone (o va corrida una semana). Si las semanas estan');
+      linea('    bien pero el cruce de la U sale todo en ✘, hay que quitar ese cruce.');
+    } else {
+      linea('  ✔ Con estos numeros el panel SI deberia verse. Si en el telefono no sale,');
+      linea('    falta re-desplegar el Web App (Implementar > Administrar implementaciones >');
+      linea('    editar > Nueva version): sin eso la app sigue recibiendo solo hasta la columna U.');
+    }
+    return log.join('\n');
+  } catch (err) {
+    linea('✘ EXCEPCIÓN: ' + err.message);
+    return log.join('\n');
+  }
+}
+
+// Copia de semanaISO() de index.html — el mismo numero de semana que usa la app, para poder
+// compararlo aqui contra lo que trae la columna V sin depender del cliente.
+function semanaISODiag(date) {
+  const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  d.setDate(d.getDate() + 3 - ((d.getDay() + 6) % 7));
+  const jueves1 = new Date(d.getFullYear(), 0, 4);
+  jueves1.setDate(jueves1.getDate() + 3 - ((jueves1.getDay() + 6) % 7));
+  return 1 + Math.round((d - jueves1) / (7 * 86400000));
+}
