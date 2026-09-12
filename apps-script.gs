@@ -378,12 +378,23 @@ function aFecha(v) {
   const dt = new Date(y, mo - 1, d);
   return isNaN(dt) ? null : dt;
 }
-// La columna V de COMISIONES trae el número de semana en que se pagó la cuenta (35, 36, 37...).
-// Se lee tolerante porque la celda puede venir como número o como texto ("36", "SEMANA 36"): lo
-// que no sea una semana válida (vacío, cero, texto sin número) es una cuenta que no se ha pagado.
+// Las columnas de semana de COMISIONES (V "SEMANA PAGO" y Y "SEMANA INGRESO AL CÁLCULO") no
+// traen un número suelto: la hoja las escribe como texto "SEM 36 2026". Las cuentas que todavía
+// no se pagan traen "-" en la de pago.
+// OJO: antes esto quitaba todo lo que no fuera dígito, así que "SEM 36 2026" se volvía 362026,
+// caía fuera del rango 1..53 y se descartaba — o sea que TODAS las cuentas salían sin semana y
+// el comparativo de pagadas se quedaba en cero. La semana es el PRIMER número del texto; el
+// segundo es el año y no debe pegarse al anterior.
 function aSemanaPago(v) {
-  const n = parseInt(String(v == null ? '' : v).replace(/[^0-9]/g, ''), 10);
-  return n >= 1 && n <= 53 ? n : null;
+  if (v === null || v === undefined) return null;
+  if (typeof v === 'number') return (v >= 1 && v <= 53) ? Math.round(v) : null;
+  const s = String(v).trim();
+  if (!s) return null;
+  // [A-Za-z]* y no \w*: con \w* el "36" de "SEM36" se lo comía la parte de letras y acababa
+  // leyendo un 6. La semana es el primer número que aparece después de la palabra.
+  const m = s.match(/SEM[A-Za-z]*\s*(\d{1,2})(?!\d)/i); // "SEM 36 2026", "SEMANA 36", "SEM36"
+  const n = m ? Number(m[1]) : (/^\d{1,2}$/.test(s) ? Number(s) : NaN);
+  return (n >= 1 && n <= 53) ? n : null;
 }
 // Igual que parseGviz del lado del cliente: una celda de fecha se manda como texto simple.
 function normalizarCelda(v) {
@@ -469,7 +480,12 @@ function obtenerVentasComisiones(params) {
       });
     }
 
-    // COMISIONES: columnas usadas A..V (22) — antes select B,C,H,K,L,T,U.
+    // COMISIONES: columnas usadas A..Y (25) — antes select B,C,H,K,L,T,U.
+    // Se mandan las DOS columnas de semana que tiene la hoja, porque se parecen pero no son lo
+    // mismo: V "SEMANA PAGO" es la semana en que se pagó la cuenta (viene "-" mientras no se
+    // pague) y Y "SEMANA INGRESO AL CÁLCULO" es la semana en que entró al cálculo de comisión
+    // (va llena aunque la cuenta siga sin pagarse). Mandar ambas evita tener que re-desplegar
+    // para cambiar de una a otra.
     const cuentasByHomologado = {};
     const hojaCom = hojaBaseLagunaPorNombre(COMISIONES_SHEET);
     const lastRowCom = hojaCom.getLastRow();
@@ -489,7 +505,7 @@ function obtenerVentasComisiones(params) {
           ultimaCom = i;
         }
       }
-      const values = primeraCom === -1 ? [] : hojaCom.getRange(2 + primeraCom, 1, ultimaCom - primeraCom + 1, 22).getValues();
+      const values = primeraCom === -1 ? [] : hojaCom.getRange(2 + primeraCom, 1, ultimaCom - primeraCom + 1, 25).getValues();
       values.forEach(function (r) {
         const numHom = String(r[2] || '').trim(); // C
         if (!numHom || !permitidos[numHom]) return;
@@ -500,7 +516,8 @@ function obtenerVentasComisiones(params) {
           plan: String(r[11] || '').trim(), // L
           importe: Number(r[19]) || 0, // T
           estatusPago: String(r[20] || '').trim(), // U
-          semanaPago: aSemanaPago(r[21]), // V — null mientras la cuenta no se pague
+          semanaPago: aSemanaPago(r[21]), // V "SEMANA PAGO" — null mientras la cuenta no se pague
+          semanaCalculo: aSemanaPago(r[24]), // Y "SEMANA INGRESO AL CÁLCULO"
         });
       });
     }

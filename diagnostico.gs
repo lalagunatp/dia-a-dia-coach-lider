@@ -156,100 +156,95 @@ function diagnosticoVentas(numEmpArg) {
   }
 }
 
-// ─── Diagnóstico de "no aparece el panel de cuentas pagadas" ───
-// El panel se esconde solo cuando las dos semanas salen en cero, y eso puede venir de cuatro
-// cosas que desde el teléfono se ven igualitas:
-//   1. El Web App no se ha re-desplegado, así que sigue mandando hasta la columna U y la V
-//      nunca llega (esto NO lo detecta esta función: ella lee la hoja directo, no la app).
-//   2. La columna V no trae el número de semana donde se espera.
-//   3. La V trae la semana de la comisión y no la del pago, o sea que va una semana adelante.
-//   4. El estatus de pago (columna U) no dice "YA COMISIONADA" en las cuentas que sí tienen
-//      semana, y la app las cruza: cuenta pagada = tiene semana Y dice YA COMISIONADA.
-// Uso: diagnosticoPagos() → ▶ Ejecutar → leer el Registro de ejecución.
-function diagnosticoPagos() {
+// ─── Diagnóstico de "no aparece / sale en cero el panel de cuentas pagadas" ───
+// Imprime, cuenta por cuenta de una persona, lo que de verdad trae la hoja en las dos columnas
+// de semana que se parecen pero NO son lo mismo:
+//   V "SEMANA PAGO"              -> la semana en que se pago la cuenta ("-" mientras no se pague)
+//   Y "SEMANA INGRESO AL CALCULO"-> la semana en que entro al calculo de comision (va llena
+//                                   aunque la cuenta siga sin pagarse)
+// Con eso se decide cual de las dos debe usar el panel y si va corrida una semana o no.
+// Uso: diagnosticoPagos('MARTINEZ SOTO BLANCA ESMERALDA')  → ▶ Ejecutar → Registro de ejecución.
+// Tambien acepta el numero de empleado homologado (columna C), o nada para ver todo el distrito.
+function diagnosticoPagos(quien) {
   const log = [];
   const linea = function (s) { log.push(s); console.log(s); };
   try {
     const hoja = hojaBaseLagunaPorNombre(COMISIONES_SHEET);
     const ultCol = hoja.getLastColumn(), ultFila = hoja.getLastRow();
     linea('HOJA "' + COMISIONES_SHEET + '": ' + ultFila + ' filas x ' + ultCol + ' columnas (ultima = ' + letraColumna(ultCol - 1) + ')');
-    if (ultCol < 22) {
-      linea('✘ La hoja no llega a la columna V. La app pide A..V y eso truena la lectura completa de ventas.');
+    if (ultCol < 25) {
+      linea('✘ La hoja no llega a la columna Y. La app pide A..Y y eso truena la lectura de ventas.');
       return log.join('\n');
     }
-    const enc = hoja.getRange(1, 1, 1, 22).getValues()[0];
-    linea('ENCABEZADOS: K="' + enc[10] + '" · T="' + enc[19] + '" · U="' + enc[20] + '" · V="' + enc[21] + '"');
-    linea('(La app espera K=fecha instalacion, T=importe, U=estatus de pago, V=semana de pago)');
+    const enc = hoja.getRange(1, 1, 1, 25).getValues()[0];
+    linea('ENCABEZADOS: C="' + enc[2] + '" · K="' + enc[10] + '" · U="' + enc[20] + '" · V="' + enc[21] + '" · Y="' + enc[24] + '"');
 
     // Solo la ventana que de verdad usa la app: instaladas hace 25 a 90 dias.
     const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
-    const filas = hoja.getRange(2, 1, ultFila - 1, 22).getValues().filter(function (r) {
+    const buscado = String(quien || '').trim().toUpperCase();
+    let filas = hoja.getRange(2, 1, ultFila - 1, 25).getValues().filter(function (r) {
       const f = aFecha(r[10]);
       if (!f) return false;
       const d = Math.floor((hoy - f) / 86400000);
       return d >= 25 && d <= 90;
     });
+    if (buscado) {
+      // La hoja no trae el nombre del vendedor, solo su numero homologado (columna C): se busca
+      // ese numero en el roster para poder pasar el nombre de la persona tal cual se ve en la app.
+      const emp = leerRosterCompleto().filter(function (e) {
+        return String(e.nombre || '').toUpperCase() === buscado || e.numEmp === buscado || e.numEmpB === buscado;
+      })[0];
+      const ids = emp ? [emp.numEmp, emp.numEmpB].filter(Boolean) : [buscado];
+      linea('');
+      linea('FILTRANDO POR: ' + (emp ? emp.nombre + ' (IDs ' + ids.join(' / ') + ')' : '"' + quien + '" tal cual'));
+      filas = filas.filter(function (r) { return ids.indexOf(String(r[2] || '').trim()) !== -1; });
+    }
+
     linea('');
-    linea('CUENTAS EN LA VENTANA DE 25 A 90 DIAS: ' + filas.length + ' (de todo el distrito, sin filtrar por equipo)');
+    linea('CUENTAS EN LA VENTANA DE 25 A 90 DIAS: ' + filas.length);
     if (!filas.length) { linea('✘ Sin cuentas en la ventana: no hay nada que comparar.'); return log.join('\n'); }
 
-    // La V trae la semana en que se paga la COMISION, una adelante de la semana en que se pago la
-    // cuenta: lo pagado en la 36 viene marcado como 37. Por eso lo que se busca en V va corrido.
     const semActual = semanaISODiag(hoy);
-    linea('SEMANA DE HOY: ' + semActual + ' -> la app compara la ' + (semActual - 1) + ' contra la ' + (semActual - 2) +
-          ', que en la columna V vienen marcadas como ' + semActual + ' y ' + (semActual - 1));
+    linea('SEMANA DE HOY (ISO): ' + semActual + ' -> el panel compara la ' + (semActual - 1) + ' contra la ' + (semActual - 2));
 
-    const porSemana = {}, sinSemana = [];
-    filas.forEach(function (r) {
-      const s = aSemanaPago(r[21]);
-      if (s === null) sinSemana.push(r); else porSemana[s] = (porSemana[s] || 0) + 1;
+    // Lo mas importante: ver los valores CRUDOS, sin interpretar. Si aqui sale "SEM 36 2026" y la
+    // columna "V leida" sale null, el problema es el parseo, no la columna.
+    linea('');
+    linea('DETALLE CUENTA POR CUENTA (instalada | sem ISO de instalacion | U estatus | V cruda -> leida | Y cruda -> leida):');
+    filas.slice(0, 60).forEach(function (r) {
+      const f = aFecha(r[10]);
+      const pagada = /^YA COMISIONADA/i.test(String(r[20] || '').trim());
+      linea('  ' + (pagada ? '💲' : '  ') + ' ' + String(r[1] || '').trim().padEnd(11) +
+            ' ' + Utilities.formatDate(f, Session.getScriptTimeZone(), 'dd/MM/yyyy') +
+            ' sem' + String(semanaISODiag(f)).padStart(3) +
+            ' | U=' + String(String(r[20] || '').trim() || '(vacio)').slice(0, 26).padEnd(26) +
+            ' | V=' + JSON.stringify(r[21]).slice(0, 14).padEnd(14) + '->' + String(aSemanaPago(r[21])).padStart(5) +
+            ' | Y=' + JSON.stringify(r[24]).slice(0, 14).padEnd(14) + '->' + String(aSemanaPago(r[24])).padStart(5));
+    });
+    if (filas.length > 60) linea('  ... y ' + (filas.length - 60) + ' mas (se cortan para no llenar el registro)');
+    linea('  (💲 = la columna U dice YA COMISIONADA, que es como la app decide "esta cuenta ya se pago")');
+
+    // Conteos con cada combinacion posible, para elegir la correcta de un vistazo.
+    const pagadas = filas.filter(function (r) { return /^YA COMISIONADA/i.test(String(r[20] || '').trim()); });
+    linea('');
+    linea('DE LAS ' + filas.length + ' CUENTAS, ' + pagadas.length + ' DICEN "YA COMISIONADA" EN LA COLUMNA U.');
+    linea('');
+    linea('QUE DARIA EL PANEL SEGUN QUE COLUMNA Y QUE DESFASE SE USE:');
+    const cuenta = function (col, sem) { return pagadas.filter(function (r) { return aSemanaPago(r[col]) === sem; }).length; };
+    [[21, 'V (semana pago)'], [24, 'Y (ingreso al calculo)']].forEach(function (par) {
+      const col = par[0], nom = par[1];
+      linea('  usando ' + nom + ':');
+      linea('     sin desfase  -> semana ' + (semActual - 1) + ': ' + cuenta(col, semActual - 1) +
+            ' · semana ' + (semActual - 2) + ': ' + cuenta(col, semActual - 2));
+      linea('     con desfase  -> semana ' + (semActual - 1) + ': ' + cuenta(col, semActual) +
+            ' · semana ' + (semActual - 2) + ': ' + cuenta(col, semActual - 1) + '   (es lo que hace hoy la app con V)');
+      const sinLeer = pagadas.filter(function (r) { return aSemanaPago(r[col]) === null; }).length;
+      linea('     pagadas sin semana legible en esa columna: ' + sinLeer + ' de ' + pagadas.length);
     });
     linea('');
-    linea('LO QUE TRAE LA COLUMNA V:');
-    linea('  sin semana valida: ' + sinSemana.length + ' cuentas');
-    Object.keys(porSemana).sort(function (a, b) { return a - b; }).forEach(function (s) {
-      const marca = Number(s) === semActual ? '  <<< se muestran como semana ' + (semActual - 1)
-                  : Number(s) === semActual - 1 ? '  <<< se muestran como semana ' + (semActual - 2) : '';
-      linea('  V dice ' + s + ': ' + porSemana[s] + ' cuentas' + marca);
-    });
-    linea('MUESTRA DE VALORES CRUDOS DE V: ' + filas.slice(0, 8).map(function (r) { return JSON.stringify(r[21]); }).join(' | '));
-
-    // El cruce con la columna U es lo que la app usa para decidir "esta cuenta ya se pago".
-    linea('');
-    linea('CRUCE CON EL ESTATUS DE PAGO (columna U) DE LAS CUENTAS QUE SI TRAEN SEMANA:');
-    const porEstatus = {};
-    filas.forEach(function (r) {
-      if (aSemanaPago(r[21]) === null) return;
-      const u = String(r[20] || '').trim() || '(vacio)';
-      porEstatus[u] = (porEstatus[u] || 0) + 1;
-    });
-    let conYaComisionada = 0;
-    Object.keys(porEstatus).forEach(function (u) {
-      const cuenta = /^YA COMISIONADA/i.test(u);
-      if (cuenta) conYaComisionada += porEstatus[u];
-      linea('  ' + (cuenta ? '✔' : '✘') + ' "' + u + '": ' + porEstatus[u]);
-    });
-    linea('  -> la app solo cuenta las marcadas con ✔: ' + conYaComisionada + ' de ' +
-          (filas.length - sinSemana.length) + ' cuentas con semana');
-
-    linea('');
-    linea('RESULTADO QUE DARIA EL PANEL AHORA MISMO (todo el distrito):');
-    const cuenta = function (sem) {
-      return filas.filter(function (r) { return aSemanaPago(r[21]) === sem && /^YA COMISIONADA/i.test(String(r[20] || '').trim()); }).length;
-    };
-    const a = cuenta(semActual), b = cuenta(semActual - 1); // V corrida: real 36 = V 37
-    linea('  semana ' + (semActual - 1) + ' (V dice ' + semActual + '): ' + a +
-          ' · semana ' + (semActual - 2) + ' (V dice ' + (semActual - 1) + '): ' + b);
-    if (!a && !b) {
-      linea('  ✘ Los dos en cero: por eso el panel no aparece. Arriba esta la razon —');
-      linea('    si la lista "LO QUE TRAE LA COLUMNA V" tiene cuentas en OTRAS semanas, la V no');
-      linea('    esta numerada como se supone (o el desfase no es de una semana). Si las semanas');
-      linea('    estan bien pero el cruce de la U sale todo en ✘, hay que quitar ese cruce.');
-    } else {
-      linea('  ✔ Con estos numeros el panel SI deberia verse. Si en el telefono no sale,');
-      linea('    falta re-desplegar el Web App (Implementar > Administrar implementaciones >');
-      linea('    editar > Nueva version): sin eso la app sigue recibiendo solo hasta la columna U.');
-    }
+    linea('COMO LEERLO: la combinacion buena es la que da los numeros que ya conoces de esa persona.');
+    linea('Si "pagadas sin semana legible" sale igual al total, esa columna viene vacia para las');
+    linea('cuentas pagadas y hay que usar la otra.');
     return log.join('\n');
   } catch (err) {
     linea('✘ EXCEPCIÓN: ' + err.message);
