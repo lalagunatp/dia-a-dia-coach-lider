@@ -797,8 +797,10 @@ function semanaMenos(semana,n,ref){
   const dic=new Date(ref.getFullYear()-1,11,28); // el 28/12 siempre cae en la última semana del año
   return semanaISO(dic)+s;
 }
-// Cuántas de esas cuentas pagadas se pagaron en una semana dada, según la columna V de COMISIONES.
-// Las que no traen semana no se cuentan en ninguna: se sabe que ya se pagaron, pero no cuándo.
+// Cuántas de esas cuentas traen un valor dado en la columna V de COMISIONES. Ojo: `semana` es el
+// número TAL CUAL viene en V (la semana en que se paga la comisión), no la semana real en que se
+// pagó la cuenta — van corridas una entre sí, ver vSemanaPasada. Las que no traen semana no se
+// cuentan en ninguna: se sabe que ya se pagaron, pero no cuándo.
 function pagadasEnSemana(pagadas,semana){
   return pagadas.filter(c=>c.semanaPago===semana).length;
 }
@@ -2310,13 +2312,19 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
 
   // ── Ventas del equipo: semana/mes en curso, rechazos, asignaciones y cuentas sin pagar ──
   const semanaIni=startOfWeek(now),semanaFin=endOfWeek(now);
-  // Las dos semanas de pago (columna V de COMISIONES) que se comparan: las dos ya cerradas antes
-  // de la que corre. La semana viva nunca entra — la comisión de lo pagado en una semana se paga
-  // hasta la siguiente, así que la actual siempre saldría en ceros. Si hoy es la 37, se comparan
-  // la 36 contra la 35. Las fechas son las mismas semanas, solo para mostrarlas en pantalla.
+  // Las dos semanas de pago que se comparan: las dos ya cerradas antes de la que corre. La semana
+  // viva nunca entra, porque su comisión se paga hasta la siguiente. Si hoy es la 37, se comparan
+  // la 36 contra la 35. Las fechas son esas mismas semanas, solo para mostrarlas en pantalla.
   const semanaActualNum=semanaISO(now);
   const semanaPasadaNum=semanaMenos(semanaActualNum,1,now);
   const semanaAntepasadaNum=semanaMenos(semanaActualNum,2,now);
+  // OJO con la columna V de COMISIONES: no trae la semana en que se pagó la cuenta, sino aquella
+  // en que se paga la comisión de esa cuenta, que va UNA ADELANTE. O sea que las cuentas pagadas
+  // en la semana 36 vienen marcadas con 37, y las de la 35 con 36. Por eso lo que se busca en V
+  // está corrido un lugar respecto a lo que se muestra en pantalla: en pantalla va la semana real
+  // (36 y 35, que es como las nombra el negocio) y en V se buscan 37 y 36.
+  const vSemanaPasada=semanaActualNum;
+  const vSemanaAntepasada=semanaMenos(semanaActualNum,1,now);
   const semanaPasadaIni=(()=>{const d=new Date(semanaIni);d.setDate(d.getDate()-7);return d;})();
   const semanaPasadaFin=endOfWeek(semanaPasadaIni);
   const semanaAntepasadaIni=(()=>{const d=new Date(semanaIni);d.setDate(d.getDate()-14);return d;})();
@@ -2451,8 +2459,8 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
     });
     const pagadasVend=cuentasPagadas(m.cuentasCom,now);
     if(pagadasVend.length){
-      const dePasada=pagadasVend.filter(c=>c.semanaPago===semanaPasadaNum);
-      const deAntepasada=pagadasVend.filter(c=>c.semanaPago===semanaAntepasadaNum);
+      const dePasada=pagadasVend.filter(c=>c.semanaPago===vSemanaPasada);
+      const deAntepasada=pagadasVend.filter(c=>c.semanaPago===vSemanaAntepasada);
       if(dePasada.length||deAntepasada.length)pagosPorVendedor.push({
         m,
         pasada:dePasada.length,
@@ -2677,8 +2685,8 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
           {(()=>{
             const pagadas=cuentasPagadas(m.cuentasCom,now);
             if(!pagadas.length)return null;
-            const semPasada=pagadasEnSemana(pagadas,semanaPasadaNum);
-            const semAntepasada=pagadasEnSemana(pagadas,semanaAntepasadaNum);
+            const semPasada=pagadasEnSemana(pagadas,vSemanaPasada);
+            const semAntepasada=pagadasEnSemana(pagadas,vSemanaAntepasada);
             const dif=semPasada-semAntepasada;
             const pctPag=totalPeriodo?Math.round(pagadas.length/totalPeriodo*100):0;
             const sinSemana=pagadas.filter(c=>!c.semanaPago).length;
@@ -3192,6 +3200,9 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
         abierto={abrirPagos} onToggle={()=>setAbrirPagos(!abrirPagos)}>
         <p style={{fontSize:12,color:'var(--dim)',marginBottom:6,lineHeight:1.45}}>
           Semana <b>{semanaPasadaNum}</b> ({fmtDateObj(semanaPasadaIni)} al {fmtDateObj(semanaPasadaFin)}) vs semana <b>{semanaAntepasadaNum}</b> ({fmtDateObj(semanaAntepasadaIni)} al {fmtDateObj(semanaAntepasadaFin)}). La semana {semanaActualNum}, la que corre, no entra: su comisión se paga hasta la siguiente.
+        </p>
+        <p style={{fontSize:12,color:'var(--dim)',marginBottom:6,lineHeight:1.45}}>
+          Si lo cotejas contra COMISIONES: ahí esas cuentas vienen marcadas como semana <b>{vSemanaPasada}</b> y <b>{vSemanaAntepasada}</b>, porque la columna V trae la semana en que se paga la comisión, una adelante de la semana en que se pagó la cuenta.
         </p>
         {esLider?pagosPorCoach.map(c=>{
           const key=c.coach.nombre;

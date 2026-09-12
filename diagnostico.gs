@@ -193,8 +193,11 @@ function diagnosticoPagos() {
     linea('CUENTAS EN LA VENTANA DE 25 A 90 DIAS: ' + filas.length + ' (de todo el distrito, sin filtrar por equipo)');
     if (!filas.length) { linea('✘ Sin cuentas en la ventana: no hay nada que comparar.'); return log.join('\n'); }
 
+    // La V trae la semana en que se paga la COMISION, una adelante de la semana en que se pago la
+    // cuenta: lo pagado en la 36 viene marcado como 37. Por eso lo que se busca en V va corrido.
     const semActual = semanaISODiag(hoy);
-    linea('SEMANA DE HOY: ' + semActual + ' -> la app compara la ' + (semActual - 1) + ' contra la ' + (semActual - 2));
+    linea('SEMANA DE HOY: ' + semActual + ' -> la app compara la ' + (semActual - 1) + ' contra la ' + (semActual - 2) +
+          ', que en la columna V vienen marcadas como ' + semActual + ' y ' + (semActual - 1));
 
     const porSemana = {}, sinSemana = [];
     filas.forEach(function (r) {
@@ -205,8 +208,9 @@ function diagnosticoPagos() {
     linea('LO QUE TRAE LA COLUMNA V:');
     linea('  sin semana valida: ' + sinSemana.length + ' cuentas');
     Object.keys(porSemana).sort(function (a, b) { return a - b; }).forEach(function (s) {
-      const marca = (Number(s) === semActual - 1 || Number(s) === semActual - 2) ? '  <<< una de las dos que compara la app' : '';
-      linea('  semana ' + s + ': ' + porSemana[s] + ' cuentas' + marca);
+      const marca = Number(s) === semActual ? '  <<< se muestran como semana ' + (semActual - 1)
+                  : Number(s) === semActual - 1 ? '  <<< se muestran como semana ' + (semActual - 2) : '';
+      linea('  V dice ' + s + ': ' + porSemana[s] + ' cuentas' + marca);
     });
     linea('MUESTRA DE VALORES CRUDOS DE V: ' + filas.slice(0, 8).map(function (r) { return JSON.stringify(r[21]); }).join(' | '));
 
@@ -233,13 +237,14 @@ function diagnosticoPagos() {
     const cuenta = function (sem) {
       return filas.filter(function (r) { return aSemanaPago(r[21]) === sem && /^YA COMISIONADA/i.test(String(r[20] || '').trim()); }).length;
     };
-    const a = cuenta(semActual - 1), b = cuenta(semActual - 2);
-    linea('  semana ' + (semActual - 1) + ': ' + a + ' · semana ' + (semActual - 2) + ': ' + b);
+    const a = cuenta(semActual), b = cuenta(semActual - 1); // V corrida: real 36 = V 37
+    linea('  semana ' + (semActual - 1) + ' (V dice ' + semActual + '): ' + a +
+          ' · semana ' + (semActual - 2) + ' (V dice ' + (semActual - 1) + '): ' + b);
     if (!a && !b) {
       linea('  ✘ Los dos en cero: por eso el panel no aparece. Arriba esta la razon —');
       linea('    si la lista "LO QUE TRAE LA COLUMNA V" tiene cuentas en OTRAS semanas, la V no');
-      linea('    esta numerada como se supone (o va corrida una semana). Si las semanas estan');
-      linea('    bien pero el cruce de la U sale todo en ✘, hay que quitar ese cruce.');
+      linea('    esta numerada como se supone (o el desfase no es de una semana). Si las semanas');
+      linea('    estan bien pero el cruce de la U sale todo en ✘, hay que quitar ese cruce.');
     } else {
       linea('  ✔ Con estos numeros el panel SI deberia verse. Si en el telefono no sale,');
       linea('    falta re-desplegar el Web App (Implementar > Administrar implementaciones >');
