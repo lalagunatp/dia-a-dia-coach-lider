@@ -378,13 +378,12 @@ function aFecha(v) {
   const dt = new Date(y, mo - 1, d);
   return isNaN(dt) ? null : dt;
 }
-// La fecha de pago de COMISIONES (columna Q) no viene vacía cuando la cuenta no se ha pagado:
-// trae el cero de la hoja, que se ve como 00/01/1900. Como texto aFecha ya lo descarta (día 0),
-// pero si la celda viaja como Date hay que atajarlo aquí: cualquier fecha anterior al 2000 es
-// ese cero, no un pago real.
-function aFechaPago(v) {
-  const d = aFecha(v);
-  return d && d.getFullYear() >= 2000 ? d : null;
+// La columna V de COMISIONES trae el número de semana en que se pagó la cuenta (35, 36, 37...).
+// Se lee tolerante porque la celda puede venir como número o como texto ("36", "SEMANA 36"): lo
+// que no sea una semana válida (vacío, cero, texto sin número) es una cuenta que no se ha pagado.
+function aSemanaPago(v) {
+  const n = parseInt(String(v == null ? '' : v).replace(/[^0-9]/g, ''), 10);
+  return n >= 1 && n <= 53 ? n : null;
 }
 // Igual que parseGviz del lado del cliente: una celda de fecha se manda como texto simple.
 function normalizarCelda(v) {
@@ -470,7 +469,7 @@ function obtenerVentasComisiones(params) {
       });
     }
 
-    // COMISIONES: columnas usadas A..U (21) — antes select B,C,H,K,L,T,U.
+    // COMISIONES: columnas usadas A..V (22) — antes select B,C,H,K,L,T,U.
     const cuentasByHomologado = {};
     const hojaCom = hojaBaseLagunaPorNombre(COMISIONES_SHEET);
     const lastRowCom = hojaCom.getLastRow();
@@ -490,7 +489,7 @@ function obtenerVentasComisiones(params) {
           ultimaCom = i;
         }
       }
-      const values = primeraCom === -1 ? [] : hojaCom.getRange(2 + primeraCom, 1, ultimaCom - primeraCom + 1, 21).getValues();
+      const values = primeraCom === -1 ? [] : hojaCom.getRange(2 + primeraCom, 1, ultimaCom - primeraCom + 1, 22).getValues();
       values.forEach(function (r) {
         const numHom = String(r[2] || '').trim(); // C
         if (!numHom || !permitidos[numHom]) return;
@@ -499,9 +498,9 @@ function obtenerVentasComisiones(params) {
           cliente: String(r[7] || '').trim(), // H
           fechaInstalacion: aFecha(r[10]), // K
           plan: String(r[11] || '').trim(), // L
-          fechaPago: aFechaPago(r[16]), // Q — null mientras la cuenta no se pague
           importe: Number(r[19]) || 0, // T
           estatusPago: String(r[20] || '').trim(), // U
+          semanaPago: aSemanaPago(r[21]), // V — null mientras la cuenta no se pague
         });
       });
     }
