@@ -391,10 +391,11 @@ const whatsappUrl=text=>`https://wa.me/?text=${encodeURIComponent(text)}`;
 // Este estatus es la espera normal del primer pago del cliente, no algo accionable — no se muestra.
 const ESTATUS_PAGO_OCULTO='COMISION RETENIDA AL PAGO DE LA PRIMER FACTURA DE SERVICIO';
 const motivoNoPagado=c=>c.estatusPago&&c.estatusPago.toUpperCase()!==ESTATUS_PAGO_OCULTO?c.estatusPago:'';
-function textoCuentasSinPagar(m,cuentas){
+function textoCuentasSinPagar(m,cuentas,ref){
   const lineas=cuentas.map(c=>{
     const motivo=motivoNoPagado(c);
-    return `• ${c.cuenta} · ${c.cliente} · ${fmtDateObj(c.fechaInstalacion)} · ${c.plan} · ${fmtMoney(c.importe)}${motivo?' · '+motivo:''}`;
+    const dias=diasDesde(c.fechaInstalacion,ref);
+    return `• ${c.cuenta} · ${c.cliente} · ${fmtDateObj(c.fechaInstalacion)} (${dias} día${dias!==1?'s':''}) · ${c.plan} · ${fmtMoney(c.importe)}${motivo?' · '+motivo:''}`;
   }).join('\n');
   return `📋 Cuentas sin pagar de ${m.nombre} (25 a 90 días de instaladas):\n\n${lineas}`;
 }
@@ -753,10 +754,16 @@ function instalacionesPorPDV(ventas,inicio,fin){
 }
 // Cuentas activadas/instaladas entre hace 25 y 90 días (ventana rodante por día, no por mes
 // calendario) — pagadas o no, es el universo contra el que se saca el %.
+// Días enteros transcurridos entre una fecha y la de referencia. Es el mismo cálculo con que se
+// arma la ventana de 25 a 90 días, así que los días que se muestran por cuenta siempre cuadran
+// con el motivo por el que esa cuenta está (o deja de estar) en la lista.
+function diasDesde(fecha,ref){
+  return fecha?Math.floor((ref-fecha)/86400000):0;
+}
 function cuentasDelPeriodo(cuentas,ref){
   return(cuentas||[]).filter(c=>{
     if(!c.fechaInstalacion)return false;
-    const dias=Math.floor((ref-c.fechaInstalacion)/86400000);
+    const dias=diasDesde(c.fechaInstalacion,ref);
     return dias>=25&&dias<=90;
   });
 }
@@ -2663,18 +2670,21 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
               {sinFecha>0&&<div style={{fontSize:12}}>({sinFecha} pagada{sinFecha!==1?'s':''} sin fecha de pago en la base, no entra{sinFecha!==1?'n':''} en la comparación)</div>}
             </div>;
           })()}
-          {sinPagar.map((c,i)=>
-            <div key={i} style={{fontSize:13,color:'var(--dim)',padding:'4px 0',borderBottom:i<sinPagar.length-1?'1px solid var(--border)':'none'}}>
+          {sinPagar.map((c,i)=>{
+            // Días que lleva instalada sin que se pague: mientras más alto, más cerca del corte de
+            // los 90 días con que la cuenta sale de la ventana (y de la lista) sin haberse cobrado.
+            const diasSinPago=diasDesde(c.fechaInstalacion,now);
+            return <div key={i} style={{fontSize:13,color:'var(--dim)',padding:'4px 0',borderBottom:i<sinPagar.length-1?'1px solid var(--border)':'none'}}>
               <div style={{display:'flex',justifyContent:'space-between',gap:6}}>
-                <span>{c.cuenta} · {c.cliente} · {fmtDateObj(c.fechaInstalacion)}</span>
+                <span>{c.cuenta} · {c.cliente} · {fmtDateObj(c.fechaInstalacion)} <b style={{color:'var(--red)'}}>({diasSinPago} día{diasSinPago!==1?'s':''})</b></span>
               </div>
               <div style={{display:'flex',justifyContent:'space-between',gap:6,marginTop:1}}>
                 <span>{c.plan}</span>
                 <span style={{color:'var(--red)',fontWeight:600,textAlign:'right'}}>{fmtMoney(c.importe)}</span>
               </div>
-            </div>
-          )}
-          <a href={whatsappUrl(textoCuentasSinPagar(m,sinPagar))} target="_blank" rel="noopener noreferrer"
+            </div>;
+          })}
+          <a href={whatsappUrl(textoCuentasSinPagar(m,sinPagar,now))} target="_blank" rel="noopener noreferrer"
             style={{display:'inline-flex',alignItems:'center',gap:6,marginTop:8,padding:'6px 12px',borderRadius:8,background:'#25D366',color:'#fff',fontSize:13,fontWeight:700,textDecoration:'none'}}>
             📲 Enviar por WhatsApp
           </a>
