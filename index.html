@@ -36,6 +36,86 @@ body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:#f0f2f8;c
 input,textarea,select,button{font-family:inherit}
 textarea{resize:vertical}
 ::-webkit-scrollbar{width:4px}::-webkit-scrollbar-thumb{background:#c4c8d4;border-radius:4px}
+
+/* ── Marco de la app según la pantalla (MainApp) ──
+   Vertical (celular, tablet): encabezado, resumen y la barra de secciones, fija arriba al bajar.
+   Acostado con poca altura (celular) y desde 1024 px (tablet acostada, laptop): barra lateral. */
+.app{max-width:1480px;margin:0 auto;min-height:100vh;background:var(--bg)}
+.app-enc{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:12px 16px;background:linear-gradient(135deg,#1e3a8a,#1e40af);color:#fff}
+.app-enc-titulo{min-width:0}
+.app-enc h1{font-size:17px;font-weight:800}
+.app-enc p{font-size:13px;opacity:.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.app-enc-acciones{display:flex;gap:6px;align-items:center;flex-shrink:0}
+/* En vertical el resumen va ANTES que la barra de secciones, como siempre se vio. En el HTML vive
+   dentro de <main> para que en la vista lateral quede junto al contenido: display:contents deja a
+   sus hijos acomodarse con `order` como si fueran hermanos de la barra. */
+.app-cuerpo{display:flex;flex-direction:column}
+.app-main{display:contents}
+.app-resumen{order:1;padding:10px 14px 0}
+.app-nav{order:2;position:sticky;top:0;z-index:40;display:flex;overflow-x:auto;padding:0 10px;background:var(--card);border-bottom:1px solid var(--border);-webkit-overflow-scrolling:touch}
+.app-nav button{flex:0 0 auto;padding:10px 12px;border:none;border-bottom:3px solid transparent;background:transparent;color:var(--dim);font-size:13px;font-weight:600;white-space:nowrap;cursor:pointer}
+.app-nav button.activa{color:var(--accent);border-bottom-color:var(--accent)}
+.app-nav-icono{display:block;font-size:16px}
+.app-contenido{order:3;padding:14px 14px 30px;min-width:0}
+.ancho-angosto{max-width:860px;margin:0 auto}
+.ancho-amplio{max-width:1320px;margin:0 auto}
+.app-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:10px}
+.app-stat{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:6px 8px;text-align:center;min-width:0}
+.app-stat b{display:block;font-size:18px;font-weight:800}
+.app-stat span{font-size:12px;color:var(--dim);font-weight:600;text-transform:uppercase}
+@media (min-width:1024px),(orientation:landscape) and (max-height:540px){
+  .app-cuerpo{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:start}
+  .app-main{display:block;min-width:0}
+  .app-nav{order:0;flex-direction:column;gap:2px;width:212px;height:100vh;height:100dvh;overflow-x:hidden;overflow-y:auto;padding:12px 10px;border-bottom:none;border-right:1px solid var(--border)}
+  .app-nav button{display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:none;border-radius:10px;font-size:14px;text-align:left}
+  .app-nav button.activa{background:var(--accent-light)}
+  .app-nav-icono{display:inline;font-size:19px}
+  .app-resumen{padding:14px 20px 0}
+  .app-contenido{padding:14px 20px 40px}
+}
+/* Celular acostado: la altura es lo que falta. Encabezado en una línea, barra lateral angosta con el
+   nombre de la sección bajo su ícono, y el resumen en una tira baja. */
+@media (orientation:landscape) and (max-height:540px) and (max-width:1023px){
+  .app-enc{padding:6px 14px}
+  .app-enc h1{font-size:15px;white-space:nowrap}
+  .app-enc-titulo{display:flex;align-items:baseline;gap:10px}
+  .app-nav{width:auto;padding:4px}
+  .app-nav button{flex-direction:column;gap:0;min-width:72px;padding:3px 6px;font-size:11px;line-height:1.2;text-align:center}
+  .app-nav-icono{display:block;font-size:16px;line-height:1.25}
+  .app-resumen{padding:8px 12px 0}
+  .app-contenido{padding:10px 12px 30px}
+  .app-stats{margin-bottom:8px}
+  .app-stat{display:flex;align-items:baseline;justify-content:center;gap:6px;padding:4px 6px}
+  .app-stat b{display:inline;font-size:15px}
+}
+/* Inicio de sesión (LoginScreen). Acostado con poca altura: dos columnas, marca a un lado y
+   formulario al otro, para que el botón de entrar quepa sin tener que bajar. */
+.login-fondo{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;background:linear-gradient(135deg,#1e3a8a 0%,#1e40af 50%,#2563eb 100%)}
+.login-tarjeta{background:var(--card);border-radius:20px;padding:32px;max-width:380px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.3)}
+.login-marca{text-align:center;margin-bottom:28px}
+.login-logo{font-size:48px;margin-bottom:8px}
+.login-pie{font-size:13px;color:var(--dim);text-align:center;margin-top:16px}
+@media (orientation:landscape) and (max-height:540px){
+  .login-fondo{padding:12px}
+  .login-tarjeta{max-width:720px;padding:20px 26px;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.3fr);grid-template-areas:"marca form" "pie form";column-gap:28px;align-items:center}
+  .login-marca{grid-area:marca;margin-bottom:0;align-self:end}
+  .login-logo{font-size:38px;margin-bottom:4px}
+  .login-form{grid-area:form}
+  .login-pie{grid-area:pie;margin-top:10px;align-self:start}
+}
+/* Dashboard (DashboardTab): en pantalla angosta una columna en el orden de siempre (lo da `order`);
+   en amplia, dos columnas y el equipo abajo a todo lo ancho. */
+.dash{display:flex;flex-direction:column}
+.dash-col{display:contents}
+/* Historial (HistorialTab): en pantalla amplia, filtros y resumen fijos a la izquierda y la lista
+   a la derecha, para cambiar el periodo o la persona sin perder de vista los registros. */
+@media (min-width:1180px){
+  .dash{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);column-gap:16px;align-items:start}
+  .dash-col{display:flex;flex-direction:column;min-width:0}
+  .dash-completo{grid-column:1/-1}
+  .hist{display:grid;grid-template-columns:minmax(320px,380px) minmax(0,1fr);gap:16px;align-items:start}
+  .hist-lateral{position:sticky;top:14px;max-height:calc(100vh - 28px);overflow-y:auto}
+}
 /* Informe del Historial (InformeImprimible): al imprimir solo sale el documento. Se oculta todo lo
    demás que cuelga de <body> con display:none y no con visibility, porque visibility deja el espacio
    de la app y el PDF salía con páginas en blanco al final. Solo aplica con la clase con-informe, que
@@ -939,7 +1019,7 @@ function Card({children,title,actions,style:s}){return <div className="anim" sty
 // Tarjeta que colapsa/expande todo su contenido al tocar el título.
 function PanelAcordeon({title,abierto,onToggle,children}){
   return <Card>
-    <div onClick={onToggle} style={{display:'flex',justifyContent:'space-between',alignItems:'center',cursor:'pointer',marginBottom:abierto?12:0}}>
+    <div onClick={onToggle} style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,cursor:'pointer',marginBottom:abierto?12:0}}>
       <h3 style={{margin:0,fontSize:16,fontWeight:700}}>{title}</h3>
       <span style={{fontSize:13,color:'var(--dim)'}}>{abierto?'▲':'▼'}</span>
     </div>
@@ -1251,13 +1331,16 @@ function LoginScreen({onLogin,aviso}){
   };
 
   return(
-    <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',padding:20,background:'linear-gradient(135deg,#1e3a8a 0%,#1e40af 50%,#2563eb 100%)'}}>
-      <div style={{background:'var(--card)',borderRadius:20,padding:32,maxWidth:380,width:'100%',boxShadow:'0 20px 60px rgba(0,0,0,.3)'}}>
-        <div style={{textAlign:'center',marginBottom:28}}>
-          <div style={{fontSize:48,marginBottom:8}}>📋</div>
+    // Con el celular acostado la tarjeta se parte en dos columnas (ver .login-tarjeta en el <style>):
+    // en una sola, el botón de entrar quedaba debajo del borde de la pantalla.
+    <div className="login-fondo">
+      <div className="login-tarjeta">
+        <div className="login-marca">
+          <div className="login-logo">📋</div>
           <h1 style={{fontSize:22,fontWeight:800,color:'var(--text)',marginBottom:4}}>Supervisión 2.0</h1>
           <p style={{fontSize:14,color:'var(--dim)'}}>Plan de Trabajo y Seguimiento</p>
         </div>
+        <div className="login-form">
         {aviso&&<p style={{background:'var(--ybg)',color:'var(--yellow)',fontSize:13,fontWeight:600,textAlign:'center',padding:'8px 10px',borderRadius:8,marginBottom:16}}>{aviso}</p>}
         <Field label="Número de empleado">
           <Input value={numEmp} onChange={e=>setNumEmp(e.target.value)} placeholder="Ej: 17091931"
@@ -1274,7 +1357,8 @@ function LoginScreen({onLogin,aviso}){
         <Btn onClick={handleLogin} disabled={loading} style={{width:'100%',padding:14,fontSize:17,marginTop:8,borderRadius:12}}>
           {loading?<Spinner/>:'Iniciar sesión'}
         </Btn>
-        <p style={{fontSize:13,color:'var(--dim)',textAlign:'center',marginTop:16}}>Distrito La Laguna · Totalplay</p>
+        </div>
+        <p className="login-pie">Distrito La Laguna · Totalplay</p>
       </div>
     </div>
   );
@@ -2838,167 +2922,217 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
     </div>;
   };
 
-  return <div>
-    <Card title={`📈 Dashboard — ${MESES[mesActual]} ${anioActual}`}>
-      <p style={{fontSize:13,color:'var(--dim)',marginBottom:4}}>Día {diasTranscurridos} de {diasMes} · ~{diasLabTransc} días laborables</p>
-      <p style={{fontSize:13,color:'var(--dim)'}}>Último mes evaluado: <b>{mesEvaluado}</b></p>
-    </Card>
-
-    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:14}}>
-      <Gauge value={acomp} goal={8} label="Acompañamientos" icon="🚶"/>
-      <Gauge value={arranques} goal={diasLabTransc} label="Arranques" icon="☀️"/>
-      <Gauge value={cierres} goal={diasLabTransc} label="Cierres" icon="🌙"/>
-      <Gauge value={totalFeedback} goal={vendedores.length*2} label="Evaluaciones" icon="💬"/>
-    </div>
-
-    <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:14}}>
-      {[
-        {l:'Permisos',v:permisos,c:'var(--accent)',icon:'📋'},
-        {l:'Inc. Operativas',v:incOp,c:'var(--yellow)',icon:'⚠️'},
-        {l:'Inc. Críticas',v:incCrit,c:'var(--red)',icon:'🚨'},
-      ].map(s=><div key={s.l} style={{background:'var(--card)',borderRadius:10,padding:'10px 8px',textAlign:'center',border:'1px solid var(--border)'}}>
-        <div style={{fontSize:17}}>{s.icon}</div>
-        <div style={{fontSize:20,fontWeight:800,color:s.c}}>{s.v}</div>
-        <div style={{fontSize:12,color:'var(--dim)',fontWeight:600}}>{s.l}</div>
-      </div>)}
-    </div>
-
-    <Card title="🛒 Ventas del equipo" actions={
-      <div style={{display:'flex',gap:4}}>
-        {['semana','mes'].map(p=><button key={p} onClick={()=>cambiarPeriodoVentas(p)} style={{fontSize:13,fontWeight:700,padding:'4px 10px',borderRadius:20,border:'1px solid var(--border)',background:periodoVentas===p?'var(--accent)':'var(--card)',color:periodoVentas===p?'#fff':'var(--dim)',cursor:'pointer',textTransform:'capitalize'}}>{p}</button>)}
+  // Pantalla angosta: una sola columna, en el orden de `order` (el mismo de siempre). Pantalla
+  // amplia (ver .dash en el <style>): a la izquierda el resumen, las ventas y el semáforo; a la
+  // derecha los paneles de análisis; y el equipo abajo a todo lo ancho, porque sus renglones
+  // necesitan unos 700 px para no partirse en dos. Por eso en el código van agrupados por columna
+  // y no en el orden en que se ven en el celular.
+  return <div className="dash">
+    <div className="dash-col">
+      <div style={{order:1}}>
+          <Card title={`📈 Dashboard — ${MESES[mesActual]} ${anioActual}`}>
+            <p style={{fontSize:13,color:'var(--dim)',marginBottom:4}}>Día {diasTranscurridos} de {diasMes} · ~{diasLabTransc} días laborables</p>
+            <p style={{fontSize:13,color:'var(--dim)'}}>Último mes evaluado: <b>{mesEvaluado}</b></p>
+          </Card>
       </div>
-    }>
-      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:12,background:'var(--bg)',borderRadius:12,padding:'6px 8px'}}>
-        <button onClick={()=>setOffsetVentas(o=>Math.min(MAX_OFFSET_VENTAS,o+1))} disabled={offsetVentas>=MAX_OFFSET_VENTAS}
-          aria-label={`${periodoVentas==='semana'?'Semana':'Mes'} anterior`}
-          style={{width:30,height:30,flexShrink:0,borderRadius:9,border:'1px solid var(--border)',background:'var(--card)',color:offsetVentas>=MAX_OFFSET_VENTAS?'var(--border)':'var(--accent)',fontSize:16,fontWeight:700,cursor:offsetVentas>=MAX_OFFSET_VENTAS?'default':'pointer',lineHeight:1}}>‹</button>
-        <div style={{flex:1,textAlign:'center',minWidth:0}}>
-          <div style={{fontSize:14,fontWeight:700,textTransform:'capitalize'}}>{labelPeriodoVentas}</div>
-          {offsetVentas===0
-            ?<div style={{fontSize:12,color:'var(--accent)',fontWeight:700,marginTop:1}}>● {periodoVentas==='semana'?'Semana actual':'Mes actual'}</div>
-            :<button onClick={()=>setOffsetVentas(0)} style={{fontSize:12,color:'var(--dim)',fontWeight:600,background:'none',border:'none',padding:0,marginTop:1,cursor:'pointer',textDecoration:'underline'}}>Volver {periodoVentas==='semana'?'a esta semana':'a este mes'}</button>}
-        </div>
-        <button onClick={()=>setOffsetVentas(o=>Math.max(0,o-1))} disabled={offsetVentas===0}
-          aria-label={`${periodoVentas==='semana'?'Semana':'Mes'} siguiente`}
-          style={{width:30,height:30,flexShrink:0,borderRadius:9,border:'1px solid var(--border)',background:'var(--card)',color:offsetVentas===0?'var(--border)':'var(--accent)',fontSize:16,fontWeight:700,cursor:offsetVentas===0?'default':'pointer',lineHeight:1}}>›</button>
-      </div>
-      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:10}}>
-        {[
-          {l:'Oportunidades',v:ventasTotal.oportunidades,icon:'🆕',sub:null},
-          {l:'Validadas',v:ventasTotal.validadas,icon:'✅',sub:ventasTotal.oportunidades?`${Math.round(ventasTotal.validadas/ventasTotal.oportunidades*100)}% de op.`:null},
-          {l:'Instaladas',v:ventasTotal.instaladas,icon:'🔌',sub:ventasTotal.validadas?`${Math.round(ventasTotal.instaladas/ventasTotal.validadas*100)}% de val.`:null},
-        ].map(s=>
-          <div key={s.l} style={{background:'var(--bg)',borderRadius:10,padding:'10px 8px',textAlign:'center'}}>
-            <div style={{fontSize:17}}>{s.icon}</div>
-            <div style={{fontSize:20,fontWeight:800}}>{s.v}</div>
-            <div style={{fontSize:12,color:'var(--dim)',fontWeight:600}}>{s.l}</div>
-            {s.sub&&<div style={{fontSize:12,color:'var(--accent)',fontWeight:700,marginTop:2}}>{s.sub}</div>}
+      <div style={{order:2}}>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:14}}>
+            <Gauge value={acomp} goal={8} label="Acompañamientos" icon="🚶"/>
+            <Gauge value={arranques} goal={diasLabTransc} label="Arranques" icon="☀️"/>
+            <Gauge value={cierres} goal={diasLabTransc} label="Cierres" icon="🌙"/>
+            <Gauge value={totalFeedback} goal={vendedores.length*2} label="Evaluaciones" icon="💬"/>
           </div>
-        )}
       </div>
-      <Gauge value={ventasTotal.instaladas} goal={metaInstalTotal} label={`Instalaciones vs meta (${periodoVentas})`} icon="🎯"/>
-    </Card>
-
-    {hayCoachPDV&&pdvOrdenados.length>0&&
-      <PanelAcordeon title={`🏬 Ventas por Punto de Venta — ${labelPeriodoVentas}`} abierto={abrirPDV} onToggle={()=>setAbrirPDV(!abrirPDV)}>
-        {pdvOrdenados.map(([pdv,n])=>{
-          const isExp=expandedPDV===pdv;
-          const planesPDV=Object.entries(pdvPorPlan[pdv]||{}).sort((a,b)=>b[1]-a[1]);
-          return <div key={pdv}>
-            <div onClick={()=>setExpandedPDV(isExp?null:pdv)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:13,padding:'6px 2px',borderBottom:isExp?'none':'1px solid var(--border)',cursor:'pointer'}}>
-              <span>{pdv}</span>
-              <span style={{display:'flex',alignItems:'center',gap:6}}>
-                <b>{n}</b>
-                <span style={{fontSize:13,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
-              </span>
+      <div style={{order:3}}>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:14}}>
+            {[
+              {l:'Permisos',v:permisos,c:'var(--accent)',icon:'📋'},
+              {l:'Inc. Operativas',v:incOp,c:'var(--yellow)',icon:'⚠️'},
+              {l:'Inc. Críticas',v:incCrit,c:'var(--red)',icon:'🚨'},
+            ].map(s=><div key={s.l} style={{background:'var(--card)',borderRadius:10,padding:'10px 8px',textAlign:'center',border:'1px solid var(--border)'}}>
+              <div style={{fontSize:17}}>{s.icon}</div>
+              <div style={{fontSize:20,fontWeight:800,color:s.c}}>{s.v}</div>
+              <div style={{fontSize:12,color:'var(--dim)',fontWeight:600}}>{s.l}</div>
+            </div>)}
+          </div>
+      </div>
+      <div style={{order:4}}>
+          <Card title="🛒 Ventas del equipo" actions={
+            <div style={{display:'flex',gap:4}}>
+              {['semana','mes'].map(p=><button key={p} onClick={()=>cambiarPeriodoVentas(p)} style={{fontSize:13,fontWeight:700,padding:'4px 10px',borderRadius:20,border:'1px solid var(--border)',background:periodoVentas===p?'var(--accent)':'var(--card)',color:periodoVentas===p?'#fff':'var(--dim)',cursor:'pointer',textTransform:'capitalize'}}>{p}</button>)}
             </div>
-            {isExp&&<div style={{background:'var(--bg)',borderRadius:6,padding:'6px 8px',marginBottom:6}}>
-              {planesPDV.map(([p,cnt])=>
-                <div key={p} style={{display:'flex',justifyContent:'space-between',fontSize:13,color:'var(--dim)',padding:'3px 0',borderBottom:'1px solid var(--border)'}}>
-                  <span>{p}</span><b>{cnt}</b>
+          }>
+            <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:12,background:'var(--bg)',borderRadius:12,padding:'6px 8px'}}>
+              <button onClick={()=>setOffsetVentas(o=>Math.min(MAX_OFFSET_VENTAS,o+1))} disabled={offsetVentas>=MAX_OFFSET_VENTAS}
+                aria-label={`${periodoVentas==='semana'?'Semana':'Mes'} anterior`}
+                style={{width:30,height:30,flexShrink:0,borderRadius:9,border:'1px solid var(--border)',background:'var(--card)',color:offsetVentas>=MAX_OFFSET_VENTAS?'var(--border)':'var(--accent)',fontSize:16,fontWeight:700,cursor:offsetVentas>=MAX_OFFSET_VENTAS?'default':'pointer',lineHeight:1}}>‹</button>
+              <div style={{flex:1,textAlign:'center',minWidth:0}}>
+                <div style={{fontSize:14,fontWeight:700,textTransform:'capitalize'}}>{labelPeriodoVentas}</div>
+                {offsetVentas===0
+                  ?<div style={{fontSize:12,color:'var(--accent)',fontWeight:700,marginTop:1}}>● {periodoVentas==='semana'?'Semana actual':'Mes actual'}</div>
+                  :<button onClick={()=>setOffsetVentas(0)} style={{fontSize:12,color:'var(--dim)',fontWeight:600,background:'none',border:'none',padding:0,marginTop:1,cursor:'pointer',textDecoration:'underline'}}>Volver {periodoVentas==='semana'?'a esta semana':'a este mes'}</button>}
+              </div>
+              <button onClick={()=>setOffsetVentas(o=>Math.max(0,o-1))} disabled={offsetVentas===0}
+                aria-label={`${periodoVentas==='semana'?'Semana':'Mes'} siguiente`}
+                style={{width:30,height:30,flexShrink:0,borderRadius:9,border:'1px solid var(--border)',background:'var(--card)',color:offsetVentas===0?'var(--border)':'var(--accent)',fontSize:16,fontWeight:700,cursor:offsetVentas===0?'default':'pointer',lineHeight:1}}>›</button>
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:10}}>
+              {[
+                {l:'Oportunidades',v:ventasTotal.oportunidades,icon:'🆕',sub:null},
+                {l:'Validadas',v:ventasTotal.validadas,icon:'✅',sub:ventasTotal.oportunidades?`${Math.round(ventasTotal.validadas/ventasTotal.oportunidades*100)}% de op.`:null},
+                {l:'Instaladas',v:ventasTotal.instaladas,icon:'🔌',sub:ventasTotal.validadas?`${Math.round(ventasTotal.instaladas/ventasTotal.validadas*100)}% de val.`:null},
+              ].map(s=>
+                <div key={s.l} style={{background:'var(--bg)',borderRadius:10,padding:'10px 8px',textAlign:'center'}}>
+                  <div style={{fontSize:17}}>{s.icon}</div>
+                  <div style={{fontSize:20,fontWeight:800}}>{s.v}</div>
+                  <div style={{fontSize:12,color:'var(--dim)',fontWeight:600}}>{s.l}</div>
+                  {s.sub&&<div style={{fontSize:12,color:'var(--accent)',fontWeight:700,marginTop:2}}>{s.sub}</div>}
                 </div>
               )}
-            </div>}
-          </div>;
-        })}
-      </PanelAcordeon>
-    }
-
-    {rechazosTotalN>0&&
-      <PanelAcordeon title={`❌ Motivos de rechazo OPORTUNIDADES — ${labelPeriodoVentas} (${rechazosTotalN})`} abierto={abrirRechazos} onToggle={()=>setAbrirRechazos(!abrirRechazos)}>
-        {esLider?coachesOrdenadosRechazos.map(c=>{
-          const key=c.coach.nombre;
-          const isExp=expandedCoachRechazo===key;
-          const motivosCoach=Object.entries(c.rechazos).sort((a,b)=>b[1].length-a[1].length);
-          return <div key={key}>
-            <div onClick={()=>setExpandedCoachRechazo(isExp?null:key)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:13,padding:'6px 2px',borderBottom:isExp?'none':'1px solid var(--border)',cursor:'pointer'}}>
-              <span style={{fontWeight:600}}>{c.coach.nombre.split(' ').slice(0,3).join(' ')}</span>
-              <span style={{display:'flex',alignItems:'center',gap:6}}>
-                <b>{c.rechazosTotal}</b>
-                <span style={{fontSize:13,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
-              </span>
             </div>
-            {isExp&&<div style={{background:'var(--bg)',borderRadius:6,padding:'6px 8px',marginBottom:6}}>
-              {motivosCoach.map(([mo,items])=><div key={mo} style={{marginBottom:6}}>
-                <div style={{fontSize:13,fontWeight:700,color:'var(--dim)',marginBottom:2}}>{mo} ({items.length})</div>
-                {items.map((it,i)=>
-                  <div key={i} style={{fontSize:13,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:i<items.length-1?'1px solid var(--border)':'none'}}>
-                    <span>{it.nombre}</span>
-                    <span>Op. {it.oportunidad||'—'} · Cta. {it.cuenta||'—'} · {fmtDateObj(it.fecha)}</span>
+            <Gauge value={ventasTotal.instaladas} goal={metaInstalTotal} label={`Instalaciones vs meta (${periodoVentas})`} icon="🎯"/>
+          </Card>
+      </div>
+      <div style={{order:12}}>
+          <Card title="🚦 Semáforo del equipo">
+            <SemBar/>
+            <div style={{display:'flex',justifyContent:'space-around',marginTop:10,fontSize:14,color:'var(--dim)',fontWeight:600}}>
+              <span>🟢 {verdes}</span><span>🟡 {amarillos}</span><span>🔴 {rojos}</span><span>⚪ {sinEval}</span>
+            </div>
+            {sinEval>0&&<p style={{fontSize:14,color:'var(--yellow)',marginTop:10,fontWeight:600}}>
+              ⚠️ Falta{sinEval!==1?'n':''} <b>{sinEval}</b> por semaforizar — márcalos abajo, en Equipo.
+            </p>}
+          </Card>
+      </div>
+    </div>
+    <div className="dash-col">
+      <div style={{order:5}}>
+          {hayCoachPDV&&pdvOrdenados.length>0&&
+            <PanelAcordeon title={`🏬 Ventas por Punto de Venta — ${labelPeriodoVentas}`} abierto={abrirPDV} onToggle={()=>setAbrirPDV(!abrirPDV)}>
+              {pdvOrdenados.map(([pdv,n])=>{
+                const isExp=expandedPDV===pdv;
+                const planesPDV=Object.entries(pdvPorPlan[pdv]||{}).sort((a,b)=>b[1]-a[1]);
+                return <div key={pdv}>
+                  <div onClick={()=>setExpandedPDV(isExp?null:pdv)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:13,padding:'6px 2px',borderBottom:isExp?'none':'1px solid var(--border)',cursor:'pointer'}}>
+                    <span>{pdv}</span>
+                    <span style={{display:'flex',alignItems:'center',gap:6}}>
+                      <b>{n}</b>
+                      <span style={{fontSize:13,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
+                    </span>
                   </div>
-                )}
-              </div>)}
-            </div>}
-          </div>;
-        }):motivosOrdenados.map(([mo,items])=>{
-          const isExp=expandedMotivo===mo;
-          return <div key={mo}>
-            <div onClick={()=>setExpandedMotivo(isExp?null:mo)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:13,padding:'6px 2px',borderBottom:isExp?'none':'1px solid var(--border)',cursor:'pointer'}}>
-              <span>{mo}</span>
-              <span style={{display:'flex',alignItems:'center',gap:6}}>
-                <b>{items.length}</b>
-                <span style={{fontSize:13,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
-              </span>
-            </div>
-            {isExp&&<div style={{background:'var(--bg)',borderRadius:6,padding:'6px 8px',marginBottom:6}}>
-              {items.map((it,i)=>
-                <div key={i} style={{fontSize:13,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:i<items.length-1?'1px solid var(--border)':'none'}}>
-                  <span>{it.nombre}</span>
-                  <span>Op. {it.oportunidad||'—'} · Cta. {it.cuenta||'—'} · {fmtDateObj(it.fecha)}</span>
-                </div>
-              )}
-            </div>}
-          </div>;
-        })}
-      </PanelAcordeon>
-    }
-
-    {planesOrdenados.length>0&&
-      <PanelAcordeon title={`📦 Instalaciones por plan — ${labelPeriodoVentas}`} abierto={abrirPlanes} onToggle={()=>setAbrirPlanes(!abrirPlanes)}>
-        {esLider?planesOrdenados.map(([p,n])=>{
-          const isExp=expandedPlan===p;
-          const coachesPlan=Object.values(porCoachLider).map(c=>({coach:c.coach,items:c.planes[p]||[]})).filter(x=>x.items.length>0).sort((a,b)=>b.items.length-a.items.length);
-          return <div key={p}>
-            <div onClick={()=>setExpandedPlan(isExp?null:p)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:13,padding:'6px 2px',borderBottom:isExp?'none':'1px solid var(--border)',cursor:'pointer'}}>
-              <span>{p}</span>
-              <span style={{display:'flex',alignItems:'center',gap:6}}>
-                <b>{n}</b>
-                <span style={{color:'var(--dim)'}}>({ventasTotal.instaladas?Math.round(n/ventasTotal.instaladas*100):0}%)</span>
-                <span style={{fontSize:13,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
-              </span>
-            </div>
-            {isExp&&<div style={{background:'var(--bg)',borderRadius:6,padding:'6px 8px',marginBottom:6}}>
-              {coachesPlan.map(({coach,items})=>{
-                const keyC=coach.nombre;
-                const isExpC=expandedCoachPlan===keyC;
-                return <div key={keyC} style={{marginBottom:6}}>
-                  <div onClick={()=>setExpandedCoachPlan(isExpC?null:keyC)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:13,padding:'6px 8px',borderRadius:isExpC?'6px 6px 0 0':6,border:'1px solid var(--border)',borderBottom:isExpC?'none':undefined,background:'var(--card)',cursor:'pointer'}}>
-                    <span style={{fontWeight:600}}>{coach.nombre.split(' ').slice(0,3).join(' ')}</span>
-                    <span style={{display:'flex',alignItems:'center',gap:6}}><b>{items.length}</b><span style={{fontSize:13,color:'var(--dim)'}}>{isExpC?'▲':'▼'}</span></span>
+                  {isExp&&<div style={{background:'var(--bg)',borderRadius:6,padding:'6px 8px',marginBottom:6}}>
+                    {planesPDV.map(([p,cnt])=>
+                      <div key={p} style={{display:'flex',justifyContent:'space-between',fontSize:13,color:'var(--dim)',padding:'3px 0',borderBottom:'1px solid var(--border)'}}>
+                        <span>{p}</span><b>{cnt}</b>
+                      </div>
+                    )}
+                  </div>}
+                </div>;
+              })}
+            </PanelAcordeon>
+          }
+      </div>
+      <div style={{order:6}}>
+          {rechazosTotalN>0&&
+            <PanelAcordeon title={`❌ Motivos de rechazo OPORTUNIDADES — ${labelPeriodoVentas} (${rechazosTotalN})`} abierto={abrirRechazos} onToggle={()=>setAbrirRechazos(!abrirRechazos)}>
+              {esLider?coachesOrdenadosRechazos.map(c=>{
+                const key=c.coach.nombre;
+                const isExp=expandedCoachRechazo===key;
+                const motivosCoach=Object.entries(c.rechazos).sort((a,b)=>b[1].length-a[1].length);
+                return <div key={key}>
+                  <div onClick={()=>setExpandedCoachRechazo(isExp?null:key)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:13,padding:'6px 2px',borderBottom:isExp?'none':'1px solid var(--border)',cursor:'pointer'}}>
+                    <span style={{fontWeight:600}}>{c.coach.nombre.split(' ').slice(0,3).join(' ')}</span>
+                    <span style={{display:'flex',alignItems:'center',gap:6}}>
+                      <b>{c.rechazosTotal}</b>
+                      <span style={{fontSize:13,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
+                    </span>
                   </div>
-                  {isExpC&&<div style={{background:'var(--nest-bg)',border:'1px solid var(--nest-border)',borderTop:'none',borderRadius:'0 0 6px 6px',padding:'6px 8px'}}>
+                  {isExp&&<div style={{background:'var(--bg)',borderRadius:6,padding:'6px 8px',marginBottom:6}}>
+                    {motivosCoach.map(([mo,items])=><div key={mo} style={{marginBottom:6}}>
+                      <div style={{fontSize:13,fontWeight:700,color:'var(--dim)',marginBottom:2}}>{mo} ({items.length})</div>
+                      {items.map((it,i)=>
+                        <div key={i} style={{fontSize:13,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:i<items.length-1?'1px solid var(--border)':'none'}}>
+                          <span>{it.nombre}</span>
+                          <span>Op. {it.oportunidad||'—'} · Cta. {it.cuenta||'—'} · {fmtDateObj(it.fecha)}</span>
+                        </div>
+                      )}
+                    </div>)}
+                  </div>}
+                </div>;
+              }):motivosOrdenados.map(([mo,items])=>{
+                const isExp=expandedMotivo===mo;
+                return <div key={mo}>
+                  <div onClick={()=>setExpandedMotivo(isExp?null:mo)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:13,padding:'6px 2px',borderBottom:isExp?'none':'1px solid var(--border)',cursor:'pointer'}}>
+                    <span>{mo}</span>
+                    <span style={{display:'flex',alignItems:'center',gap:6}}>
+                      <b>{items.length}</b>
+                      <span style={{fontSize:13,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
+                    </span>
+                  </div>
+                  {isExp&&<div style={{background:'var(--bg)',borderRadius:6,padding:'6px 8px',marginBottom:6}}>
                     {items.map((it,i)=>
-                      <div key={i} style={{fontSize:13,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:i<items.length-1?'1px solid var(--nest-border)':'none'}}>
+                      <div key={i} style={{fontSize:13,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:i<items.length-1?'1px solid var(--border)':'none'}}>
+                        <span>{it.nombre}</span>
+                        <span>Op. {it.oportunidad||'—'} · Cta. {it.cuenta||'—'} · {fmtDateObj(it.fecha)}</span>
+                      </div>
+                    )}
+                  </div>}
+                </div>;
+              })}
+            </PanelAcordeon>
+          }
+      </div>
+      <div style={{order:7}}>
+          {planesOrdenados.length>0&&
+            <PanelAcordeon title={`📦 Instalaciones por plan — ${labelPeriodoVentas}`} abierto={abrirPlanes} onToggle={()=>setAbrirPlanes(!abrirPlanes)}>
+              {esLider?planesOrdenados.map(([p,n])=>{
+                const isExp=expandedPlan===p;
+                const coachesPlan=Object.values(porCoachLider).map(c=>({coach:c.coach,items:c.planes[p]||[]})).filter(x=>x.items.length>0).sort((a,b)=>b.items.length-a.items.length);
+                return <div key={p}>
+                  <div onClick={()=>setExpandedPlan(isExp?null:p)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:13,padding:'6px 2px',borderBottom:isExp?'none':'1px solid var(--border)',cursor:'pointer'}}>
+                    <span>{p}</span>
+                    <span style={{display:'flex',alignItems:'center',gap:6}}>
+                      <b>{n}</b>
+                      <span style={{color:'var(--dim)'}}>({ventasTotal.instaladas?Math.round(n/ventasTotal.instaladas*100):0}%)</span>
+                      <span style={{fontSize:13,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
+                    </span>
+                  </div>
+                  {isExp&&<div style={{background:'var(--bg)',borderRadius:6,padding:'6px 8px',marginBottom:6}}>
+                    {coachesPlan.map(({coach,items})=>{
+                      const keyC=coach.nombre;
+                      const isExpC=expandedCoachPlan===keyC;
+                      return <div key={keyC} style={{marginBottom:6}}>
+                        <div onClick={()=>setExpandedCoachPlan(isExpC?null:keyC)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:13,padding:'6px 8px',borderRadius:isExpC?'6px 6px 0 0':6,border:'1px solid var(--border)',borderBottom:isExpC?'none':undefined,background:'var(--card)',cursor:'pointer'}}>
+                          <span style={{fontWeight:600}}>{coach.nombre.split(' ').slice(0,3).join(' ')}</span>
+                          <span style={{display:'flex',alignItems:'center',gap:6}}><b>{items.length}</b><span style={{fontSize:13,color:'var(--dim)'}}>{isExpC?'▲':'▼'}</span></span>
+                        </div>
+                        {isExpC&&<div style={{background:'var(--nest-bg)',border:'1px solid var(--nest-border)',borderTop:'none',borderRadius:'0 0 6px 6px',padding:'6px 8px'}}>
+                          {items.map((it,i)=>
+                            <div key={i} style={{fontSize:13,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:i<items.length-1?'1px solid var(--nest-border)':'none'}}>
+                              <span>{it.nombre}</span>
+                              <span>Cta. {it.cuenta||'—'} · {fmtDateObj(it.fecha)}</span>
+                            </div>
+                          )}
+                        </div>}
+                      </div>;
+                    })}
+                  </div>}
+                </div>;
+              }):planesOrdenados.map(([p,n])=>{
+                const isExp=expandedPlan===p;
+                const items=planesDetalle[p]||[];
+                return <div key={p}>
+                  <div onClick={()=>setExpandedPlan(isExp?null:p)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:13,padding:'6px 2px',borderBottom:isExp?'none':'1px solid var(--border)',cursor:'pointer'}}>
+                    <span>{p}</span>
+                    <span style={{display:'flex',alignItems:'center',gap:6}}>
+                      <b>{n}</b>
+                      <span style={{color:'var(--dim)'}}>({ventasTotal.instaladas?Math.round(n/ventasTotal.instaladas*100):0}%)</span>
+                      <span style={{fontSize:13,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
+                    </span>
+                  </div>
+                  {isExp&&<div style={{background:'var(--bg)',borderRadius:6,padding:'6px 8px',marginBottom:6}}>
+                    {items.map((it,i)=>
+                      <div key={i} style={{fontSize:13,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:i<items.length-1?'1px solid var(--border)':'none'}}>
                         <span>{it.nombre}</span>
                         <span>Cta. {it.cuenta||'—'} · {fmtDateObj(it.fecha)}</span>
                       </div>
@@ -3006,69 +3140,80 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
                   </div>}
                 </div>;
               })}
-            </div>}
-          </div>;
-        }):planesOrdenados.map(([p,n])=>{
-          const isExp=expandedPlan===p;
-          const items=planesDetalle[p]||[];
-          return <div key={p}>
-            <div onClick={()=>setExpandedPlan(isExp?null:p)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:13,padding:'6px 2px',borderBottom:isExp?'none':'1px solid var(--border)',cursor:'pointer'}}>
-              <span>{p}</span>
-              <span style={{display:'flex',alignItems:'center',gap:6}}>
-                <b>{n}</b>
-                <span style={{color:'var(--dim)'}}>({ventasTotal.instaladas?Math.round(n/ventasTotal.instaladas*100):0}%)</span>
-                <span style={{fontSize:13,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
-              </span>
-            </div>
-            {isExp&&<div style={{background:'var(--bg)',borderRadius:6,padding:'6px 8px',marginBottom:6}}>
-              {items.map((it,i)=>
-                <div key={i} style={{fontSize:13,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:i<items.length-1?'1px solid var(--border)':'none'}}>
-                  <span>{it.nombre}</span>
-                  <span>Cta. {it.cuenta||'—'} · {fmtDateObj(it.fecha)}</span>
-                </div>
-              )}
-            </div>}
-          </div>;
-        })}
-      </PanelAcordeon>
-    }
-
-    {totalPendientesInstalar>0&&
-      <PanelAcordeon title={`⏳ Cuentas por instalar, últ. 30 días (${totalPendientesInstalar})`} abierto={abrirPendientesPanel} onToggle={()=>setAbrirPendientesPanel(!abrirPendientesPanel)}>
-        {esLider?coachesOrdenadosPendientes.map(c=>{
-          const key=c.coach.nombre;
-          const isExp=expandedCoachPendiente===key;
-          return <div key={key} style={{marginBottom:6}}>
-            <div onClick={()=>setExpandedCoachPendiente(isExp?null:key)} style={{
-              display:'flex',justifyContent:'space-between',alignItems:'center',cursor:'pointer',
-              padding:'8px 10px',borderRadius:isExp?'8px 8px 0 0':8,
-              border:'1px solid var(--border)',borderBottom:isExp?'none':undefined,
-              background:'var(--bg)',
-            }}>
-              <span style={{fontWeight:700,fontSize:13}}>{c.coach.nombre.split(' ').slice(0,3).join(' ')}</span>
-              <div style={{display:'flex',alignItems:'center',gap:6}}>
-                <span style={{fontSize:13,fontWeight:700,color:'var(--yellow)',background:'var(--ybg)',padding:'2px 8px',borderRadius:10}}>{c.pendientesTotal}</span>
-                <span style={{fontSize:13,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
-              </div>
-            </div>
-            {isExp&&<div style={{border:'1px solid var(--border)',borderTop:'none',borderRadius:'0 0 8px 8px',padding:'8px 10px'}}>
-              {c.pendientes.map(({m,pendientes})=>{
-                const keyV=m.numEmp||m.nombre;
-                const isExpV=expandedPendienteVendedorLider===keyV;
-                return <div key={keyV} style={{marginBottom:6}}>
-                  <div onClick={()=>setExpandedPendienteVendedorLider(isExpV?null:keyV)} style={{
+            </PanelAcordeon>
+          }
+      </div>
+      <div style={{order:8}}>
+          {totalPendientesInstalar>0&&
+            <PanelAcordeon title={`⏳ Cuentas por instalar, últ. 30 días (${totalPendientesInstalar})`} abierto={abrirPendientesPanel} onToggle={()=>setAbrirPendientesPanel(!abrirPendientesPanel)}>
+              {esLider?coachesOrdenadosPendientes.map(c=>{
+                const key=c.coach.nombre;
+                const isExp=expandedCoachPendiente===key;
+                return <div key={key} style={{marginBottom:6}}>
+                  <div onClick={()=>setExpandedCoachPendiente(isExp?null:key)} style={{
                     display:'flex',justifyContent:'space-between',alignItems:'center',cursor:'pointer',
-                    padding:'6px 8px',borderRadius:isExpV?'8px 8px 0 0':8,
-                    border:'1px solid var(--nest-border)',borderBottom:isExpV?'none':undefined,
-                    background:'var(--nest-bg)',
+                    padding:'8px 10px',borderRadius:isExp?'8px 8px 0 0':8,
+                    border:'1px solid var(--border)',borderBottom:isExp?'none':undefined,
+                    background:'var(--bg)',
                   }}>
-                    <span style={{fontWeight:600,fontSize:13}}>{m.nombre.split(' ').slice(0,3).join(' ')}</span>
+                    <span style={{fontWeight:700,fontSize:13}}>{c.coach.nombre.split(' ').slice(0,3).join(' ')}</span>
                     <div style={{display:'flex',alignItems:'center',gap:6}}>
-                      <span style={{fontSize:12,fontWeight:700,color:'var(--yellow)',background:'var(--ybg)',padding:'2px 8px',borderRadius:10}}>{pendientes.length}</span>
-                      <span style={{fontSize:13,color:'var(--dim)'}}>{isExpV?'▲':'▼'}</span>
+                      <span style={{fontSize:13,fontWeight:700,color:'var(--yellow)',background:'var(--ybg)',padding:'2px 8px',borderRadius:10}}>{c.pendientesTotal}</span>
+                      <span style={{fontSize:13,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
                     </div>
                   </div>
-                  {isExpV&&<div style={{border:'1px solid var(--border)',borderTop:'none',borderRadius:'0 0 8px 8px',padding:'8px 10px'}}>
+                  {isExp&&<div style={{border:'1px solid var(--border)',borderTop:'none',borderRadius:'0 0 8px 8px',padding:'8px 10px'}}>
+                    {c.pendientes.map(({m,pendientes})=>{
+                      const keyV=m.numEmp||m.nombre;
+                      const isExpV=expandedPendienteVendedorLider===keyV;
+                      return <div key={keyV} style={{marginBottom:6}}>
+                        <div onClick={()=>setExpandedPendienteVendedorLider(isExpV?null:keyV)} style={{
+                          display:'flex',justifyContent:'space-between',alignItems:'center',cursor:'pointer',
+                          padding:'6px 8px',borderRadius:isExpV?'8px 8px 0 0':8,
+                          border:'1px solid var(--nest-border)',borderBottom:isExpV?'none':undefined,
+                          background:'var(--nest-bg)',
+                        }}>
+                          <span style={{fontWeight:600,fontSize:13}}>{m.nombre.split(' ').slice(0,3).join(' ')}</span>
+                          <div style={{display:'flex',alignItems:'center',gap:6}}>
+                            <span style={{fontSize:12,fontWeight:700,color:'var(--yellow)',background:'var(--ybg)',padding:'2px 8px',borderRadius:10}}>{pendientes.length}</span>
+                            <span style={{fontSize:13,color:'var(--dim)'}}>{isExpV?'▲':'▼'}</span>
+                          </div>
+                        </div>
+                        {isExpV&&<div style={{border:'1px solid var(--border)',borderTop:'none',borderRadius:'0 0 8px 8px',padding:'8px 10px'}}>
+                          {pendientes.map((v,i)=>{
+                            const dias=Math.floor((now-v.validacion)/86400000);
+                            const asig=(m.asignacionesPorOS||{})[v.os]||0;
+                            return <div key={i} style={{fontSize:13,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:i<pendientes.length-1?'1px solid var(--border)':'none'}}>
+                              <span>{v.cuenta} · {v.os}</span>
+                              <span>{dias} día{dias!==1?'s':''} sin activar · {asig} asignación{asig!==1?'es':''}</span>
+                            </div>;
+                          })}
+                          <a href={whatsappUrl(textoPendientesInstalar(m,pendientes,now))} target="_blank" rel="noopener noreferrer"
+                            style={{display:'inline-flex',alignItems:'center',gap:6,marginTop:8,padding:'6px 12px',borderRadius:8,background:'#25D366',color:'#fff',fontSize:13,fontWeight:700,textDecoration:'none'}}>
+                            📲 Enviar por WhatsApp
+                          </a>
+                        </div>}
+                      </div>;
+                    })}
+                  </div>}
+                </div>;
+              }):pendientesPorVendedor.map(({m,pendientes})=>{
+                const key=m.numEmp||m.nombre;
+                const isExp=expandedPendienteVendedor===key;
+                return <div key={key} style={{marginBottom:6}}>
+                  <div onClick={()=>setExpandedPendienteVendedor(isExp?null:key)} style={{
+                    display:'flex',justifyContent:'space-between',alignItems:'center',cursor:'pointer',
+                    padding:'8px 10px',borderRadius:isExp?'8px 8px 0 0':8,
+                    border:'1px solid var(--border)',borderBottom:isExp?'none':undefined,
+                    background:'var(--bg)',
+                  }}>
+                    <span style={{fontWeight:700,fontSize:13}}>{m.nombre.split(' ').slice(0,3).join(' ')}</span>
+                    <div style={{display:'flex',alignItems:'center',gap:6}}>
+                      <span style={{fontSize:13,fontWeight:700,color:'var(--yellow)',background:'var(--ybg)',padding:'2px 8px',borderRadius:10}}>{pendientes.length}</span>
+                      <span style={{fontSize:13,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
+                    </div>
+                  </div>
+                  {isExp&&<div style={{border:'1px solid var(--border)',borderTop:'none',borderRadius:'0 0 8px 8px',padding:'8px 10px'}}>
                     {pendientes.map((v,i)=>{
                       const dias=Math.floor((now-v.validacion)/86400000);
                       const asig=(m.asignacionesPorOS||{})[v.os]||0;
@@ -3084,268 +3229,232 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
                   </div>}
                 </div>;
               })}
-            </div>}
-          </div>;
-        }):pendientesPorVendedor.map(({m,pendientes})=>{
-          const key=m.numEmp||m.nombre;
-          const isExp=expandedPendienteVendedor===key;
-          return <div key={key} style={{marginBottom:6}}>
-            <div onClick={()=>setExpandedPendienteVendedor(isExp?null:key)} style={{
-              display:'flex',justifyContent:'space-between',alignItems:'center',cursor:'pointer',
-              padding:'8px 10px',borderRadius:isExp?'8px 8px 0 0':8,
-              border:'1px solid var(--border)',borderBottom:isExp?'none':undefined,
-              background:'var(--bg)',
-            }}>
-              <span style={{fontWeight:700,fontSize:13}}>{m.nombre.split(' ').slice(0,3).join(' ')}</span>
-              <div style={{display:'flex',alignItems:'center',gap:6}}>
-                <span style={{fontSize:13,fontWeight:700,color:'var(--yellow)',background:'var(--ybg)',padding:'2px 8px',borderRadius:10}}>{pendientes.length}</span>
-                <span style={{fontSize:13,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
-              </div>
-            </div>
-            {isExp&&<div style={{border:'1px solid var(--border)',borderTop:'none',borderRadius:'0 0 8px 8px',padding:'8px 10px'}}>
-              {pendientes.map((v,i)=>{
-                const dias=Math.floor((now-v.validacion)/86400000);
-                const asig=(m.asignacionesPorOS||{})[v.os]||0;
-                return <div key={i} style={{fontSize:13,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:i<pendientes.length-1?'1px solid var(--border)':'none'}}>
-                  <span>{v.cuenta} · {v.os}</span>
-                  <span>{dias} día{dias!==1?'s':''} sin activar · {asig} asignación{asig!==1?'es':''}</span>
-                </div>;
-              })}
-              <a href={whatsappUrl(textoPendientesInstalar(m,pendientes,now))} target="_blank" rel="noopener noreferrer"
-                style={{display:'inline-flex',alignItems:'center',gap:6,marginTop:8,padding:'6px 12px',borderRadius:8,background:'#25D366',color:'#fff',fontSize:13,fontWeight:700,textDecoration:'none'}}>
-                📲 Enviar por WhatsApp
-              </a>
-            </div>}
-          </div>;
-        })}
-      </PanelAcordeon>
-    }
-
-    {(esLider?arpuPorCoach.length>0:arpuPorVendedorOrdenado.length>0)&&
-      <PanelAcordeon title={`💵 ARPU promedio por vendedor — ${labelPeriodoVentas} (${fmtMoney(arpuGeneral)})`} abierto={abrirArpu} onToggle={()=>setAbrirArpu(!abrirArpu)}>
-        {esLider?arpuPorCoach.map(c=>{
-          const key=c.coach.nombre;
-          const isExp=expandedCoachArpu===key;
-          return <div key={key} style={{marginBottom:6}}>
-            <div onClick={()=>setExpandedCoachArpu(isExp?null:key)} style={{
-              display:'flex',justifyContent:'space-between',alignItems:'center',cursor:'pointer',
-              padding:'8px 10px',borderRadius:isExp?'8px 8px 0 0':8,
-              border:'1px solid var(--border)',borderBottom:isExp?'none':undefined,
-              background:'var(--bg)',
-            }}>
-              <span style={{fontWeight:700,fontSize:13}}>{c.coach.nombre.split(' ').slice(0,3).join(' ')}</span>
-              <div style={{display:'flex',alignItems:'center',gap:6}}>
-                <b style={{fontSize:13}}>{fmtMoney(c.arpuProm)}</b>
-                <span style={{fontSize:13,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
-              </div>
-            </div>
-            {isExp&&<div style={{border:'1px solid var(--border)',borderTop:'none',borderRadius:'0 0 8px 8px',padding:'8px 10px'}}>
-              {c.vendedores.map(({m,arpu,n,arpuPorPlan})=>{
-                const keyV=m.numEmp||m.nombre;
-                const isExpV=expandedVendedorArpu===keyV;
-                const planes=Object.entries(arpuPorPlan).sort((a,b)=>b[1].n-a[1].n);
-                return <div key={keyV} style={{marginBottom:6}}>
-                  <div onClick={()=>setExpandedVendedorArpu(isExpV?null:keyV)} style={{
+            </PanelAcordeon>
+          }
+      </div>
+      <div style={{order:9}}>
+          {(esLider?arpuPorCoach.length>0:arpuPorVendedorOrdenado.length>0)&&
+            <PanelAcordeon title={`💵 ARPU promedio por vendedor — ${labelPeriodoVentas} (${fmtMoney(arpuGeneral)})`} abierto={abrirArpu} onToggle={()=>setAbrirArpu(!abrirArpu)}>
+              {esLider?arpuPorCoach.map(c=>{
+                const key=c.coach.nombre;
+                const isExp=expandedCoachArpu===key;
+                return <div key={key} style={{marginBottom:6}}>
+                  <div onClick={()=>setExpandedCoachArpu(isExp?null:key)} style={{
                     display:'flex',justifyContent:'space-between',alignItems:'center',cursor:'pointer',
-                    padding:'6px 8px',borderRadius:isExpV?'8px 8px 0 0':8,
-                    border:'1px solid var(--nest-border)',borderBottom:isExpV?'none':undefined,
-                    background:'var(--nest-bg)',
+                    padding:'8px 10px',borderRadius:isExp?'8px 8px 0 0':8,
+                    border:'1px solid var(--border)',borderBottom:isExp?'none':undefined,
+                    background:'var(--bg)',
                   }}>
-                    <span style={{fontWeight:600,fontSize:13}}>{m.nombre.split(' ').slice(0,3).join(' ')}</span>
+                    <span style={{fontWeight:700,fontSize:13}}>{c.coach.nombre.split(' ').slice(0,3).join(' ')}</span>
                     <div style={{display:'flex',alignItems:'center',gap:6}}>
-                      <b style={{fontSize:13}}>{fmtMoney(arpu)}</b>
-                      <span style={{fontSize:12,color:'var(--dim)'}}>({n})</span>
-                      <span style={{fontSize:13,color:'var(--dim)'}}>{isExpV?'▲':'▼'}</span>
+                      <b style={{fontSize:13}}>{fmtMoney(c.arpuProm)}</b>
+                      <span style={{fontSize:13,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
                     </div>
                   </div>
-                  {isExpV&&<div style={{border:'1px solid var(--border)',borderTop:'none',borderRadius:'0 0 8px 8px',padding:'8px 10px'}}>
-                    {planes.map(([p,b])=>
-                      <div key={p} style={{display:'flex',justifyContent:'space-between',fontSize:13,color:'var(--dim)',padding:'3px 0',borderBottom:'1px solid var(--border)'}}>
-                        <span>{p}</span>
-                        <span><b>{fmtMoney(b.sumaArpu/b.n)}</b> ({b.n})</span>
-                      </div>
-                    )}
+                  {isExp&&<div style={{border:'1px solid var(--border)',borderTop:'none',borderRadius:'0 0 8px 8px',padding:'8px 10px'}}>
+                    {c.vendedores.map(({m,arpu,n,arpuPorPlan})=>{
+                      const keyV=m.numEmp||m.nombre;
+                      const isExpV=expandedVendedorArpu===keyV;
+                      const planes=Object.entries(arpuPorPlan).sort((a,b)=>b[1].n-a[1].n);
+                      return <div key={keyV} style={{marginBottom:6}}>
+                        <div onClick={()=>setExpandedVendedorArpu(isExpV?null:keyV)} style={{
+                          display:'flex',justifyContent:'space-between',alignItems:'center',cursor:'pointer',
+                          padding:'6px 8px',borderRadius:isExpV?'8px 8px 0 0':8,
+                          border:'1px solid var(--nest-border)',borderBottom:isExpV?'none':undefined,
+                          background:'var(--nest-bg)',
+                        }}>
+                          <span style={{fontWeight:600,fontSize:13}}>{m.nombre.split(' ').slice(0,3).join(' ')}</span>
+                          <div style={{display:'flex',alignItems:'center',gap:6}}>
+                            <b style={{fontSize:13}}>{fmtMoney(arpu)}</b>
+                            <span style={{fontSize:12,color:'var(--dim)'}}>({n})</span>
+                            <span style={{fontSize:13,color:'var(--dim)'}}>{isExpV?'▲':'▼'}</span>
+                          </div>
+                        </div>
+                        {isExpV&&<div style={{border:'1px solid var(--border)',borderTop:'none',borderRadius:'0 0 8px 8px',padding:'8px 10px'}}>
+                          {planes.map(([p,b])=>
+                            <div key={p} style={{display:'flex',justifyContent:'space-between',fontSize:13,color:'var(--dim)',padding:'3px 0',borderBottom:'1px solid var(--border)'}}>
+                              <span>{p}</span>
+                              <span><b>{fmtMoney(b.sumaArpu/b.n)}</b> ({b.n})</span>
+                            </div>
+                          )}
+                        </div>}
+                      </div>;
+                    })}
                   </div>}
                 </div>;
-              })}
-            </div>}
-          </div>;
-        }):arpuPorVendedorOrdenado.map(({m,arpu,n})=>
-          <div key={m.numEmp||m.nombre} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'6px 2px',borderBottom:'1px solid var(--border)'}}>
-            <span style={{fontSize:13,fontWeight:600}}>{m.nombre.split(' ').slice(0,3).join(' ')}</span>
-            <span style={{fontSize:13}}><b>{fmtMoney(arpu)}</b> <span style={{fontSize:12,color:'var(--dim)'}}>({n} inst.)</span></span>
-          </div>
-        )}
-        <p style={{fontSize:12,color:'var(--dim)',marginTop:6}}>Promedio sin IVA de lo activado/instalado en el periodo (columna S de BASE DE DATOS ÷ 1.16).</p>
-      </PanelAcordeon>
-    }
-
-    {sinPagarPorPlanOrdenado.length>0&&
-      <PanelAcordeon title={`💰 Cuentas sin pagar por plan (${sinPagarPorPlanTotales.n} · ${sinPagarPorPlanPctTotal}% de ${instaladoPorPlan2mTotal} inst. · ${fmtMoney(sinPagarPorPlanTotales.importe)})`} abierto={abrirSinPagarPlan} onToggle={()=>setAbrirSinPagarPlan(!abrirSinPagarPlan)}>
-        {esLider?coachesOrdenadosSinPagar.map(c=>{
-          const key=c.coach.nombre;
-          const isExp=expandedPlanSinPagar===key;
-          const importeCoach=Object.values(c.sinPagarPorPlan).reduce((s,b)=>s+b.importe,0);
-          const planesCoach=Object.entries(c.sinPagarPorPlan).sort((a,b)=>b[1].n-a[1].n);
-          return <div key={key} style={{marginBottom:isExp?4:0}}>
-            <div onClick={()=>setExpandedPlanSinPagar(isExp?null:key)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:13,padding:'6px 0',borderBottom:isExp?'none':'1px solid var(--border)',cursor:'pointer'}}>
-              <span style={{fontWeight:600}}>{c.coach.nombre.split(' ').slice(0,3).join(' ')}</span>
-              <span style={{display:'flex',alignItems:'center',gap:6}}>
-                <span><b>{c.sinPagarTotal}</b> cta{c.sinPagarTotal!==1?'s':''} · <b style={{color:'var(--red)'}}>{fmtMoney(importeCoach)}</b></span>
-                <span style={{fontSize:13,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
-              </span>
-            </div>
-            {isExp&&<div style={{background:'var(--bg)',borderRadius:6,padding:'6px 8px',marginBottom:6}}>
-              {planesCoach.map(([p,b])=>{
+              }):arpuPorVendedorOrdenado.map(({m,arpu,n})=>
+                <div key={m.numEmp||m.nombre} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'6px 2px',borderBottom:'1px solid var(--border)'}}>
+                  <span style={{fontSize:13,fontWeight:600}}>{m.nombre.split(' ').slice(0,3).join(' ')}</span>
+                  <span style={{fontSize:13}}><b>{fmtMoney(arpu)}</b> <span style={{fontSize:12,color:'var(--dim)'}}>({n} inst.)</span></span>
+                </div>
+              )}
+              <p style={{fontSize:12,color:'var(--dim)',marginTop:6}}>Promedio sin IVA de lo activado/instalado en el periodo (columna S de BASE DE DATOS ÷ 1.16).</p>
+            </PanelAcordeon>
+          }
+      </div>
+      <div style={{order:10}}>
+          {sinPagarPorPlanOrdenado.length>0&&
+            <PanelAcordeon title={`💰 Cuentas sin pagar por plan (${sinPagarPorPlanTotales.n} · ${sinPagarPorPlanPctTotal}% de ${instaladoPorPlan2mTotal} inst. · ${fmtMoney(sinPagarPorPlanTotales.importe)})`} abierto={abrirSinPagarPlan} onToggle={()=>setAbrirSinPagarPlan(!abrirSinPagarPlan)}>
+              {esLider?coachesOrdenadosSinPagar.map(c=>{
+                const key=c.coach.nombre;
+                const isExp=expandedPlanSinPagar===key;
+                const importeCoach=Object.values(c.sinPagarPorPlan).reduce((s,b)=>s+b.importe,0);
+                const planesCoach=Object.entries(c.sinPagarPorPlan).sort((a,b)=>b[1].n-a[1].n);
+                return <div key={key} style={{marginBottom:isExp?4:0}}>
+                  <div onClick={()=>setExpandedPlanSinPagar(isExp?null:key)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:13,padding:'6px 0',borderBottom:isExp?'none':'1px solid var(--border)',cursor:'pointer'}}>
+                    <span style={{fontWeight:600}}>{c.coach.nombre.split(' ').slice(0,3).join(' ')}</span>
+                    <span style={{display:'flex',alignItems:'center',gap:6}}>
+                      <span><b>{c.sinPagarTotal}</b> cta{c.sinPagarTotal!==1?'s':''} · <b style={{color:'var(--red)'}}>{fmtMoney(importeCoach)}</b></span>
+                      <span style={{fontSize:13,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
+                    </span>
+                  </div>
+                  {isExp&&<div style={{background:'var(--bg)',borderRadius:6,padding:'6px 8px',marginBottom:6}}>
+                    {planesCoach.map(([p,b])=>{
+                      const totalPlan=instaladoPorPlan2m[p]||b.n;
+                      const pct=Math.round(b.n/totalPlan*100);
+                      return <div key={p} style={{fontSize:13,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:'1px solid var(--border)'}}>
+                        <span>{p}</span>
+                        <span><b>{b.n}</b> cta{b.n!==1?'s':''} · {pct}% de {totalPlan} inst. · <b style={{color:'var(--red)'}}>{fmtMoney(b.importe)}</b></span>
+                      </div>;
+                    })}
+                  </div>}
+                </div>;
+              }):sinPagarPorPlanOrdenado.map(([p,b])=>{
                 const totalPlan=instaladoPorPlan2m[p]||b.n;
                 const pct=Math.round(b.n/totalPlan*100);
-                return <div key={p} style={{fontSize:13,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:'1px solid var(--border)'}}>
+                return <div key={p} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:13,padding:'6px 0',borderBottom:'1px solid var(--border)'}}>
                   <span>{p}</span>
                   <span><b>{b.n}</b> cta{b.n!==1?'s':''} · {pct}% de {totalPlan} inst. · <b style={{color:'var(--red)'}}>{fmtMoney(b.importe)}</b></span>
                 </div>;
               })}
-            </div>}
-          </div>;
-        }):sinPagarPorPlanOrdenado.map(([p,b])=>{
-          const totalPlan=instaladoPorPlan2m[p]||b.n;
-          const pct=Math.round(b.n/totalPlan*100);
-          return <div key={p} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:13,padding:'6px 0',borderBottom:'1px solid var(--border)'}}>
-            <span>{p}</span>
-            <span><b>{b.n}</b> cta{b.n!==1?'s':''} · {pct}% de {totalPlan} inst. · <b style={{color:'var(--red)'}}>{fmtMoney(b.importe)}</b></span>
-          </div>;
-        })}
-      </PanelAcordeon>
-    }
-
-    {/* La otra cara del panel de arriba: de esas mismas cuentas (instaladas hace 25 a 90 días),
-        cuántas SÍ se pagaron. Se comparan las dos semanas de pago ya cerradas (columna V de
-        COMISIONES) y nunca la que corre: su comisión se paga hasta la semana siguiente. */}
-    {(pagosTotales.pasada>0||pagosTotales.antepasada>0)&&
-      <PanelAcordeon
-        title={`✅ Cuentas pagadas: semana ${semanaPasadaNum} vs ${semanaAntepasadaNum} (${pagosTotales.pasada} vs ${pagosTotales.antepasada} · ${pagosTotales.pasada-pagosTotales.antepasada>=0?'+':''}${pagosTotales.pasada-pagosTotales.antepasada} · ${fmtMoney(pagosTotales.importePasada)})`}
-        abierto={abrirPagos} onToggle={()=>setAbrirPagos(!abrirPagos)}>
-        <p style={{fontSize:12,color:'var(--dim)',marginBottom:6,lineHeight:1.45}}>
-          Semana <b>{semanaPasadaNum}</b> ({fmtDateObj(semanaPasadaIni)} al {fmtDateObj(semanaPasadaFin)}) vs semana <b>{semanaAntepasadaNum}</b> ({fmtDateObj(semanaAntepasadaIni)} al {fmtDateObj(semanaAntepasadaFin)}). La semana {semanaActualNum}, la que corre, no entra: su comisión se paga hasta la siguiente.
-        </p>
-        <p style={{fontSize:12,color:'var(--dim)',marginBottom:6,lineHeight:1.45}}>
-          Si lo cotejas contra COMISIONES: ahí esas cuentas vienen marcadas como semana <b>{vSemanaPasada}</b> y <b>{vSemanaAntepasada}</b>, porque la columna V trae la semana en que se paga la comisión, una adelante de la semana en que se pagó la cuenta.
-        </p>
-        {esLider?pagosPorCoach.map(c=>{
-          const key=c.coach.nombre;
-          const isExp=expandedCoachPago===key;
-          return <div key={key} style={{marginBottom:isExp?4:0}}>
-            <div onClick={()=>setExpandedCoachPago(isExp?null:key)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:13,padding:'6px 0',borderBottom:isExp?'none':'1px solid var(--border)',cursor:'pointer'}}>
-              <span style={{fontWeight:600}}>{c.coach.nombre.split(' ').slice(0,3).join(' ')}</span>
-              <span style={{display:'flex',alignItems:'center',gap:6}}>
-                <DeltaPagos pasada={c.pasada} antepasada={c.antepasada} importe={c.importePasada}/>
-                <span style={{fontSize:13,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
-              </span>
-            </div>
-            {isExp&&<div style={{background:'var(--bg)',borderRadius:6,padding:'6px 8px',marginBottom:6}}>
-              {c.vendedores.map(({m,pasada,antepasada,importePasada})=>
-                <div key={m.numEmp||m.nombre} style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:6,fontSize:13,color:'var(--dim)',padding:'3px 0',borderBottom:'1px solid var(--border)'}}>
-                  <span>{m.nombre.split(' ').slice(0,3).join(' ')}</span>
+            </PanelAcordeon>
+          }
+      </div>
+      <div style={{order:11}}>
+          {/* La otra cara del panel de arriba: de esas mismas cuentas (instaladas hace 25 a 90 días),
+              cuántas SÍ se pagaron. Se comparan las dos semanas de pago ya cerradas (columna V de
+              COMISIONES) y nunca la que corre: su comisión se paga hasta la semana siguiente. */}
+          {(pagosTotales.pasada>0||pagosTotales.antepasada>0)&&
+            <PanelAcordeon
+              title={`✅ Cuentas pagadas: semana ${semanaPasadaNum} vs ${semanaAntepasadaNum} (${pagosTotales.pasada} vs ${pagosTotales.antepasada} · ${pagosTotales.pasada-pagosTotales.antepasada>=0?'+':''}${pagosTotales.pasada-pagosTotales.antepasada} · ${fmtMoney(pagosTotales.importePasada)})`}
+              abierto={abrirPagos} onToggle={()=>setAbrirPagos(!abrirPagos)}>
+              <p style={{fontSize:12,color:'var(--dim)',marginBottom:6,lineHeight:1.45}}>
+                Semana <b>{semanaPasadaNum}</b> ({fmtDateObj(semanaPasadaIni)} al {fmtDateObj(semanaPasadaFin)}) vs semana <b>{semanaAntepasadaNum}</b> ({fmtDateObj(semanaAntepasadaIni)} al {fmtDateObj(semanaAntepasadaFin)}). La semana {semanaActualNum}, la que corre, no entra: su comisión se paga hasta la siguiente.
+              </p>
+              <p style={{fontSize:12,color:'var(--dim)',marginBottom:6,lineHeight:1.45}}>
+                Si lo cotejas contra COMISIONES: ahí esas cuentas vienen marcadas como semana <b>{vSemanaPasada}</b> y <b>{vSemanaAntepasada}</b>, porque la columna V trae la semana en que se paga la comisión, una adelante de la semana en que se pagó la cuenta.
+              </p>
+              {esLider?pagosPorCoach.map(c=>{
+                const key=c.coach.nombre;
+                const isExp=expandedCoachPago===key;
+                return <div key={key} style={{marginBottom:isExp?4:0}}>
+                  <div onClick={()=>setExpandedCoachPago(isExp?null:key)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:13,padding:'6px 0',borderBottom:isExp?'none':'1px solid var(--border)',cursor:'pointer'}}>
+                    <span style={{fontWeight:600}}>{c.coach.nombre.split(' ').slice(0,3).join(' ')}</span>
+                    <span style={{display:'flex',alignItems:'center',gap:6}}>
+                      <DeltaPagos pasada={c.pasada} antepasada={c.antepasada} importe={c.importePasada}/>
+                      <span style={{fontSize:13,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
+                    </span>
+                  </div>
+                  {isExp&&<div style={{background:'var(--bg)',borderRadius:6,padding:'6px 8px',marginBottom:6}}>
+                    {c.vendedores.map(({m,pasada,antepasada,importePasada})=>
+                      <div key={m.numEmp||m.nombre} style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:6,fontSize:13,color:'var(--dim)',padding:'3px 0',borderBottom:'1px solid var(--border)'}}>
+                        <span>{m.nombre.split(' ').slice(0,3).join(' ')}</span>
+                        <DeltaPagos pasada={pasada} antepasada={antepasada} importe={importePasada}/>
+                      </div>
+                    )}
+                  </div>}
+                </div>;
+              }):pagosPorVendedorOrdenado.map(({m,pasada,antepasada,importePasada})=>
+                <div key={m.numEmp||m.nombre} style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:6,padding:'6px 2px',borderBottom:'1px solid var(--border)'}}>
+                  <span style={{fontSize:13,fontWeight:600}}>{m.nombre.split(' ').slice(0,3).join(' ')}</span>
                   <DeltaPagos pasada={pasada} antepasada={antepasada} importe={importePasada}/>
                 </div>
               )}
-            </div>}
-          </div>;
-        }):pagosPorVendedorOrdenado.map(({m,pasada,antepasada,importePasada})=>
-          <div key={m.numEmp||m.nombre} style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:6,padding:'6px 2px',borderBottom:'1px solid var(--border)'}}>
-            <span style={{fontSize:13,fontWeight:600}}>{m.nombre.split(' ').slice(0,3).join(' ')}</span>
-            <DeltaPagos pasada={pasada} antepasada={antepasada} importe={importePasada}/>
-          </div>
-        )}
-        <p style={{fontSize:12,color:'var(--dim)',marginTop:6,lineHeight:1.45}}>
-          Informativo. Se toma la semana de pago de COMISIONES (columna V) de las cuentas instaladas hace 25 a 90 días — las mismas del panel de arriba. El importe es el de la semana {semanaPasadaNum}.
-        </p>
-      </PanelAcordeon>
-    }
-
-    <Card title="🚦 Semáforo del equipo">
-      <SemBar/>
-      <div style={{display:'flex',justifyContent:'space-around',marginTop:10,fontSize:14,color:'var(--dim)',fontWeight:600}}>
-        <span>🟢 {verdes}</span><span>🟡 {amarillos}</span><span>🔴 {rojos}</span><span>⚪ {sinEval}</span>
+              <p style={{fontSize:12,color:'var(--dim)',marginTop:6,lineHeight:1.45}}>
+                Informativo. Se toma la semana de pago de COMISIONES (columna V) de las cuentas instaladas hace 25 a 90 días — las mismas del panel de arriba. El importe es el de la semana {semanaPasadaNum}.
+              </p>
+            </PanelAcordeon>
+          }
       </div>
-      {sinEval>0&&<p style={{fontSize:14,color:'var(--yellow)',marginTop:10,fontWeight:600}}>
-        ⚠️ Falta{sinEval!==1?'n':''} <b>{sinEval}</b> por semaforizar — márcalos abajo, en Equipo.
-      </p>}
-    </Card>
-
-    <Card title={esDirector?`👥 Distrito por Coach (${(coaches||[]).length} coaches · ${vendedores.length} vendedores)`
-      :esLider?`👥 Equipo por Coach (${(coaches||[]).length})`
-      :`👥 Equipo (${vendedores.length})`}>
-      <p style={{fontSize:14,color:'var(--dim)',marginBottom:10,lineHeight:1.45}}>
-        Toca el <b>nombre</b> para ver el detalle · toca la <b>pastilla de color</b> para poner el semáforo.
-      </p>
-      {sinEval>0&&<div style={{display:'flex',gap:8,alignItems:'center',padding:'10px 12px',borderRadius:10,background:'var(--ybg)',border:'1.5px solid var(--yellow)',marginBottom:10}}>
-        <span style={{fontSize:18}}>⚪</span>
-        <span style={{fontSize:14,fontWeight:600,color:'var(--yellow)',lineHeight:1.4}}>
-          {sinEval} {sinEval===1?'vendedor sigue':'vendedores siguen'} sin semáforo. Todos deben tener uno.
-        </span>
-      </div>}
-      {esLider?(coaches||[]).map(c=>{
-        const vendCoach=vendedoresPorCoach[c.nombre]||[];
-        const key=c.nombre;
-        const isExp=expandedCoachEquipo===key;
-        const v=vendCoach.filter(m=>semColor(m.nombre)==='verde').length;
-        const a=vendCoach.filter(m=>semColor(m.nombre)==='amarillo').length;
-        const r=vendCoach.filter(m=>semColor(m.nombre)==='rojo').length;
-        const sinEv2=vendCoach.length-v-a-r;
-        // Mismos totales que la caja "🛒 Ventas" de cada vendedor (ContextCard), pero sumados entre
-        // todos los vendedores del coach.
-        let opSemana=0,valSemana=0,instSemana=0,opMes=0,valMes=0,instMes=0,metaMesCoach=0;
-        vendCoach.forEach(m=>{
-          const fSem=funnelPeriodo(m.ventas,semanaIni,semanaFin);
-          const fMes=funnelPeriodo(m.ventas,mesIni,mesFin);
-          opSemana+=fSem.oportunidades;valSemana+=fSem.validadas;instSemana+=fSem.instaladas;
-          opMes+=fMes.oportunidades;valMes+=fMes.validadas;instMes+=fMes.instaladas;
-          metaMesCoach+=metaMensual(m.badge);
-        });
-        return <div key={key}>
-          <div onClick={()=>setExpandedCoachEquipo(isExp?null:key)} style={{
-            display:'flex',alignItems:'center',justifyContent:'space-between',
-            padding:'8px 10px',borderRadius:isExp?'8px 8px 0 0':8,marginBottom:isExp?0:4,cursor:'pointer',
-            background:r>0?'var(--rbg)':a>0?'var(--ybg)':'transparent',
-            border:`1px solid ${r>0?'var(--red)':a>0?'var(--yellow)':'var(--border)'}`,
-            borderBottom:isExp?'none':undefined,
-          }}>
-            <div style={{flex:1}}>
-              <div style={{fontSize:14,fontWeight:700}}>{c.nombre.split(' ').slice(0,3).join(' ')}</div>
-              {/* El director ve coaches de varios líderes juntos: sin esto no se sabe de quién es cuál. */}
-              {esDirector&&c.reportaA&&<div style={{fontSize:12,color:'var(--accent)',fontWeight:600,marginTop:1}}>⭐ {nombreCorto(c.reportaA)}</div>}
-              <div style={{fontSize:12,color:'var(--dim)',marginTop:1}}>{vendCoach.length} vendedor{vendCoach.length!==1?'es':''} · 🟢{v} 🟡{a} 🔴{r} ⚪{sinEv2}</div>
-              <div style={{fontSize:12,color:'var(--dim)',marginTop:2}}>Semana: {opSemana} op · {valSemana} val · {instSemana} inst</div>
-              <div style={{fontSize:12,color:'var(--dim)',marginTop:1}}>Mes: {opMes} op · {valMes} val · {instMes} inst</div>
-              {metaMesCoach>0&&<div style={{fontSize:12,color:'var(--dim)',marginTop:1}}>🎯 Meta del mes: <b>{instMes}/{metaMesCoach}</b></div>}
+      <div style={{order:14}}>
+          {compPendientes.length>0&&
+            <Card title={`⏰ Compromisos por revisar (${compPendientes.length})`} style={{borderLeft:'4px solid var(--yellow)'}}>
+              {compPendientes.slice(0,5).map(r=><div key={r.id} style={{fontSize:13,padding:'6px 0',borderBottom:'1px solid var(--border)'}}>
+                <div style={{display:'flex',justifyContent:'space-between'}}><b>{r.vendedor}</b><span style={{color:'var(--dim)'}}>{fmt(r.fecha_revision)}</span></div>
+                <p style={{color:'var(--dim)',margin:'2px 0 0'}}>{r.compromisos?.slice(0,100)}{r.compromisos?.length>100?'...':''}</p>
+              </div>)}
+            </Card>
+          }
+      </div>
+      <div style={{order:15}}>
+          <Card title="⚡ Acciones rápidas">
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+              <Btn onClick={()=>setTab('arranque')} variant="secondary" style={{fontSize:14}}>☀️ Arranque</Btn>
+              <Btn onClick={()=>setTab('cierre')} variant="secondary" style={{fontSize:14}}>🌙 Cierre</Btn>
+              <Btn onClick={()=>setTab('feedback')} variant="secondary" style={{fontSize:14}}>💬 Hallazgo</Btn>
+              <Btn onClick={()=>setTab('plan')} variant="secondary" style={{fontSize:14}}>📊 Plan</Btn>
             </div>
-            <span style={{fontSize:13,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
-          </div>
-          {isExp&&<div style={{border:'1px solid var(--border)',borderTop:'none',borderRadius:'0 0 8px 8px',padding:'8px',marginBottom:4}}>
-            {vendCoach.length===0?<p style={{fontSize:13,color:'var(--dim)'}}>Sin vendedores asignados.</p>:
-            vendCoach.map(m=><VendedorRow key={m.numEmp||m.nombre} m={m} nested/>)}
-          </div>}
-        </div>;
-      }):vendedores.map(m=><VendedorRow key={m.numEmp||m.nombre} m={m}/>)}
-    </Card>
-
-    {compPendientes.length>0&&
-      <Card title={`⏰ Compromisos por revisar (${compPendientes.length})`} style={{borderLeft:'4px solid var(--yellow)'}}>
-        {compPendientes.slice(0,5).map(r=><div key={r.id} style={{fontSize:13,padding:'6px 0',borderBottom:'1px solid var(--border)'}}>
-          <div style={{display:'flex',justifyContent:'space-between'}}><b>{r.vendedor}</b><span style={{color:'var(--dim)'}}>{fmt(r.fecha_revision)}</span></div>
-          <p style={{color:'var(--dim)',margin:'2px 0 0'}}>{r.compromisos?.slice(0,100)}{r.compromisos?.length>100?'...':''}</p>
-        </div>)}
-      </Card>
-    }
-
-    <Card title="⚡ Acciones rápidas">
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
-        <Btn onClick={()=>setTab('arranque')} variant="secondary" style={{fontSize:14}}>☀️ Arranque</Btn>
-        <Btn onClick={()=>setTab('cierre')} variant="secondary" style={{fontSize:14}}>🌙 Cierre</Btn>
-        <Btn onClick={()=>setTab('feedback')} variant="secondary" style={{fontSize:14}}>💬 Hallazgo</Btn>
-        <Btn onClick={()=>setTab('plan')} variant="secondary" style={{fontSize:14}}>📊 Plan</Btn>
+          </Card>
       </div>
-    </Card>
+    </div>
+    <div className="dash-completo" style={{order:13}}>
+        <Card title={esDirector?`👥 Distrito por Coach (${(coaches||[]).length} coaches · ${vendedores.length} vendedores)`
+          :esLider?`👥 Equipo por Coach (${(coaches||[]).length})`
+          :`👥 Equipo (${vendedores.length})`}>
+          <p style={{fontSize:14,color:'var(--dim)',marginBottom:10,lineHeight:1.45}}>
+            Toca el <b>nombre</b> para ver el detalle · toca la <b>pastilla de color</b> para poner el semáforo.
+          </p>
+          {sinEval>0&&<div style={{display:'flex',gap:8,alignItems:'center',padding:'10px 12px',borderRadius:10,background:'var(--ybg)',border:'1.5px solid var(--yellow)',marginBottom:10}}>
+            <span style={{fontSize:18}}>⚪</span>
+            <span style={{fontSize:14,fontWeight:600,color:'var(--yellow)',lineHeight:1.4}}>
+              {sinEval} {sinEval===1?'vendedor sigue':'vendedores siguen'} sin semáforo. Todos deben tener uno.
+            </span>
+          </div>}
+          {esLider?(coaches||[]).map(c=>{
+            const vendCoach=vendedoresPorCoach[c.nombre]||[];
+            const key=c.nombre;
+            const isExp=expandedCoachEquipo===key;
+            const v=vendCoach.filter(m=>semColor(m.nombre)==='verde').length;
+            const a=vendCoach.filter(m=>semColor(m.nombre)==='amarillo').length;
+            const r=vendCoach.filter(m=>semColor(m.nombre)==='rojo').length;
+            const sinEv2=vendCoach.length-v-a-r;
+            // Mismos totales que la caja "🛒 Ventas" de cada vendedor (ContextCard), pero sumados entre
+            // todos los vendedores del coach.
+            let opSemana=0,valSemana=0,instSemana=0,opMes=0,valMes=0,instMes=0,metaMesCoach=0;
+            vendCoach.forEach(m=>{
+              const fSem=funnelPeriodo(m.ventas,semanaIni,semanaFin);
+              const fMes=funnelPeriodo(m.ventas,mesIni,mesFin);
+              opSemana+=fSem.oportunidades;valSemana+=fSem.validadas;instSemana+=fSem.instaladas;
+              opMes+=fMes.oportunidades;valMes+=fMes.validadas;instMes+=fMes.instaladas;
+              metaMesCoach+=metaMensual(m.badge);
+            });
+            return <div key={key}>
+              <div onClick={()=>setExpandedCoachEquipo(isExp?null:key)} style={{
+                display:'flex',alignItems:'center',justifyContent:'space-between',
+                padding:'8px 10px',borderRadius:isExp?'8px 8px 0 0':8,marginBottom:isExp?0:4,cursor:'pointer',
+                background:r>0?'var(--rbg)':a>0?'var(--ybg)':'transparent',
+                border:`1px solid ${r>0?'var(--red)':a>0?'var(--yellow)':'var(--border)'}`,
+                borderBottom:isExp?'none':undefined,
+              }}>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:14,fontWeight:700}}>{c.nombre.split(' ').slice(0,3).join(' ')}</div>
+                  {/* El director ve coaches de varios líderes juntos: sin esto no se sabe de quién es cuál. */}
+                  {esDirector&&c.reportaA&&<div style={{fontSize:12,color:'var(--accent)',fontWeight:600,marginTop:1}}>⭐ {nombreCorto(c.reportaA)}</div>}
+                  <div style={{fontSize:12,color:'var(--dim)',marginTop:1}}>{vendCoach.length} vendedor{vendCoach.length!==1?'es':''} · 🟢{v} 🟡{a} 🔴{r} ⚪{sinEv2}</div>
+                  <div style={{fontSize:12,color:'var(--dim)',marginTop:2}}>Semana: {opSemana} op · {valSemana} val · {instSemana} inst</div>
+                  <div style={{fontSize:12,color:'var(--dim)',marginTop:1}}>Mes: {opMes} op · {valMes} val · {instMes} inst</div>
+                  {metaMesCoach>0&&<div style={{fontSize:12,color:'var(--dim)',marginTop:1}}>🎯 Meta del mes: <b>{instMes}/{metaMesCoach}</b></div>}
+                </div>
+                <span style={{fontSize:13,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
+              </div>
+              {isExp&&<div style={{border:'1px solid var(--border)',borderTop:'none',borderRadius:'0 0 8px 8px',padding:'8px',marginBottom:4}}>
+                {vendCoach.length===0?<p style={{fontSize:13,color:'var(--dim)'}}>Sin vendedores asignados.</p>:
+                vendCoach.map(m=><VendedorRow key={m.numEmp||m.nombre} m={m} nested/>)}
+              </div>}
+            </div>;
+          }):vendedores.map(m=><VendedorRow key={m.numEmp||m.nombre} m={m}/>)}
+        </Card>
+    </div>
   </div>;
 }
 
@@ -4086,7 +4195,8 @@ function HistorialTab({data,session}){
   const botonCuadro=deshabilitado=>({width:38,height:38,borderRadius:8,border:'1.5px solid var(--border)',background:'var(--card)',fontSize:18,lineHeight:1,color:deshabilitado?'var(--border)':'var(--text)',cursor:deshabilitado?'default':'pointer',flexShrink:0});
   const cargandoSinNada=sheet.estado==='cargando'&&!lista.length;
 
-  return <div>
+  return <div className="hist">
+    <div className="hist-lateral">
     <Card title="📁 Historial" actions={<button onClick={()=>setRecarga(x=>x+1)} title="Actualizar desde el Sheet" style={botonCuadro(false)}>🔄</button>}>
       <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:8}}>
         {[['dia','Día'],['semana','Semana'],['mes','Mes'],['rango','Rango']].map(([v,l])=>
@@ -4120,7 +4230,9 @@ function HistorialTab({data,session}){
       <div style={{fontSize:17,fontWeight:800,lineHeight:1.3,margin:'2px 0 12px'}}>{alcance}</div>
       <ResumenHistorial res={res} vendedor={vendedorFoco} tipoActivo={tipo} onTipo={tp=>setTipo(tipo===tp?'todos':tp)}/>
     </Card>
+    </div>
 
+    <div style={{minWidth:0}}>
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap',margin:'0 2px 10px'}}>
       <div style={{display:'flex',gap:5,alignItems:'center',flexWrap:'wrap'}}>
         <span style={{fontSize:13,color:'var(--dim)',fontWeight:600}}>Agrupar:</span>
@@ -4143,6 +4255,7 @@ function HistorialTab({data,session}){
         </RenglonHistorial>;
       })}
     </div>)}
+    </div>
 
     {informe&&<InformeImprimible
       nombreArchivo={`Informe ${alcance} ${per.desde}${per.hasta!==per.desde?' a '+per.hasta:''}`}
@@ -4383,81 +4496,93 @@ function MainApp({session,setSession,onLogout,sessionBase,vistas,onAbrirVista,on
     const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`reporte-supervision-${today()}.html`;a.click();toast('📥 Reporte descargado');
   };
 
-  // 760 y no 600: con la letra ya en su tamaño bueno, a 600 los renglones del panel Equipo se
-  // partían en dos en laptop. En celular no cambia nada, la pantalla nunca llega a ese ancho.
-  return <div style={{maxWidth:760,margin:'0 auto',minHeight:'100vh',background:'var(--bg)'}}>
-    {/* Header */}
-    <div style={{padding:'12px 16px',background:'linear-gradient(135deg,#1e3a8a,#1e40af)',color:'#fff'}}>
-      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-        <div>
-          <h1 style={{margin:0,fontSize:17,fontWeight:800}}>Supervisión 2.0</h1>
-          <p style={{margin:0,fontSize:13,opacity:.85}}>{roleLabels[role]} · {user.nombre}</p>
-        </div>
-        <div style={{display:'flex',gap:6,alignItems:'center'}}>
-          {hasArr&&<span style={{fontSize:15}}>☀️</span>}
-          {hasCie&&<span style={{fontSize:15}}>🌙</span>}
-          {/* El reporte se arma con los registros de este teléfono — en vista prestada no hay
-              ninguno de esa persona, así que saldría en blanco: mejor no ofrecerlo ahí. */}
-          {!enVista&&<button onClick={exportReporte} style={{background:'rgba(255,255,255,.15)',border:'none',borderRadius:8,padding:'5px 8px',color:'#fff',cursor:'pointer',fontSize:15}} title="Descargar reporte">📥</button>}
-          <button onClick={onLogout} style={{background:'rgba(255,255,255,.15)',border:'none',borderRadius:8,padding:'5px 8px',color:'#fff',cursor:'pointer',fontSize:13,fontWeight:700}} title="Cerrar sesión">Salir</button>
-        </div>
+  // El marco se acomoda solo con CSS según la pantalla (ver .app en el <style>). En vertical:
+  // encabezado, resumen y la barra de secciones, que se queda fija arriba al bajar. Acostado (celular
+  // con poca altura) y desde 1024 px de ancho (tablet acostada, laptop): las secciones pasan a una
+  // barra lateral para dejarle toda la altura al contenido. Dashboard e Historial aprovechan el ancho;
+  // los formularios de captura se quedan a un ancho cómodo de leer y llenar.
+  const anchoContenido=tab==='dashboard'||tab==='historial'?'ancho-amplio':'ancho-angosto';
+  // Con la barra fija se puede cambiar de sección estando a media página: la nueva sección se
+  // abre desde su inicio, no a la altura en que iba la anterior.
+  const contenidoRef=useRef(null);
+  const irATab=id=>{
+    setTab(id);
+    const arriba=contenidoRef.current?contenidoRef.current.getBoundingClientRect().top:0;
+    if(arriba<0)window.scrollTo({top:0});
+  };
+  return <div className="app">
+    <header className="app-enc">
+      <div className="app-enc-titulo">
+        <h1>Supervisión 2.0</h1>
+        <p>{roleLabels[role]} · {user.nombre}</p>
       </div>
-    </div>
+      <div className="app-enc-acciones">
+        {hasArr&&<span style={{fontSize:15}}>☀️</span>}
+        {hasCie&&<span style={{fontSize:15}}>🌙</span>}
+        {/* El reporte se arma con los registros de este teléfono — en vista prestada no hay
+            ninguno de esa persona, así que saldría en blanco: mejor no ofrecerlo ahí. */}
+        {!enVista&&<button onClick={exportReporte} style={{background:'rgba(255,255,255,.15)',border:'none',borderRadius:8,padding:'5px 8px',color:'#fff',cursor:'pointer',fontSize:15}} title="Descargar reporte">📥</button>}
+        <button onClick={onLogout} style={{background:'rgba(255,255,255,.15)',border:'none',borderRadius:8,padding:'5px 8px',color:'#fff',cursor:'pointer',fontSize:13,fontWeight:700}} title="Cerrar sesión">Salir</button>
+      </div>
+    </header>
 
     {/* Cambio de vista (solo Director) */}
     {sessionBase.role==='director'&&<BarraVistaDirector
       sessionBase={sessionBase} vistas={vistas} abriendo={abriendoVista}
       onAbrir={abrirVista} onRegresar={onRegresarVista} onSalir={onSalirVista}/>}
 
-    {/* Stats */}
-    <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:6,padding:'10px 14px'}}>
-      {[{l:'Hoy',v:todayRecs.length,c:'var(--accent)'},{l:'Equipo',v:team.length,c:'var(--green)'},{l:supervisaCoaches?'Coaches':'Total',v:supervisaCoaches?(coaches||[]).length:data.records.length,c:'#7c3aed'},{l:'Registros',v:data.records.length,c:'#ca8a04'}].map(s=>
-        <div key={s.l} style={{background:'var(--card)',borderRadius:10,padding:'6px 8px',textAlign:'center',border:'1px solid var(--border)'}}>
-          <div style={{fontSize:18,fontWeight:800,color:s.c}}>{s.v}</div>
-          <div style={{fontSize:12,color:'var(--dim)',fontWeight:600,textTransform:'uppercase'}}>{s.l}</div>
-        </div>
-      )}
-    </div>
+    <div className="app-cuerpo">
+      <nav className="app-nav" aria-label="Secciones">
+        {TABS.map(t=><button key={t.id} onClick={()=>irATab(t.id)} className={tab===t.id?'activa':undefined} aria-current={tab===t.id?'page':undefined}>
+          <span className="app-nav-icono">{t.icon}</span><span>{t.label}</span>
+        </button>)}
+      </nav>
 
-    {/* Team info — el líder ve sus coaches; el director, sus líderes (sus coaches son decenas
-        y no caben como chips: van agrupados en la tarjeta de Distrito por Coach del Dashboard). */}
-    {chipsEquipo.length>0&&
-      <div style={{padding:'0 14px 8px',display:'flex',gap:4,flexWrap:'wrap'}}>
-        {chipsEquipo.map(c=><span key={c.nombre} style={{fontSize:13,background:'var(--accent-light)',color:'var(--accent)',padding:'2px 8px',borderRadius:10,fontWeight:600}}>{c.nombre.split(' ').slice(0,2).join(' ')}</span>)}
-      </div>
-    }
+      <main className="app-main">
+        <div className="app-resumen"><div className={anchoContenido}>
+          <div className="app-stats">
+            {[{l:'Hoy',v:todayRecs.length,c:'var(--accent)'},{l:'Equipo',v:team.length,c:'var(--green)'},{l:supervisaCoaches?'Coaches':'Total',v:supervisaCoaches?(coaches||[]).length:data.records.length,c:'#7c3aed'},{l:'Registros',v:data.records.length,c:'#ca8a04'}].map(s=>
+              <div key={s.l} className="app-stat"><b style={{color:s.c}}>{s.v}</b><span>{s.l}</span></div>
+            )}
+          </div>
 
-    {/* Ventas/ranking no cargaron: hay que decirlo con todas sus letras. Un Dashboard en ceros
-        por una lectura fallida se ve idéntico a uno en ceros porque no hubo ventas, y así se
-        han perdido horas buscando el problema del lado equivocado. */}
-    {session.avisoDatos&&<p style={{margin:'0 14px 10px',fontSize:13,fontWeight:600,color:'var(--red)',background:'var(--rbg)',border:'1.5px solid var(--red)',borderRadius:8,padding:'9px 11px'}}>
-      ⚠️ Esta vez {session.avisoDatos}. Los números de oportunidades, validadas e instaladas de abajo salen en cero por eso — no es que el equipo no haya vendido. Toca 🔄 para reintentar.
-    </p>}
+          {/* Team info — el líder ve sus coaches; el director, sus líderes (sus coaches son decenas
+              y no caben como chips: van agrupados en la tarjeta de Distrito por Coach del Dashboard). */}
+          {chipsEquipo.length>0&&
+            <div style={{paddingBottom:8,display:'flex',gap:4,flexWrap:'wrap'}}>
+              {chipsEquipo.map(c=><span key={c.nombre} style={{fontSize:13,background:'var(--accent-light)',color:'var(--accent)',padding:'2px 8px',borderRadius:10,fontWeight:600}}>{c.nombre.split(' ').slice(0,2).join(' ')}</span>)}
+            </div>
+          }
 
-    {/* En vista prestada los registros de esa persona se leen del Sheet — mientras llegan, los
-        contadores están incompletos y hay que decirlo, o se leerían como "no trabajó". */}
-    {enVista&&<p style={{margin:'0 14px 10px',fontSize:13,color:'var(--dim)',background:'var(--card)',border:'1px dashed var(--border)',borderRadius:8,padding:'8px 10px'}}>
-      {registrosVista===null
-        ?`⏳ Cargando del Sheet los registros de ${nombreCorto(user.nombre)}…`
-        :`📄 ${registrosVista.length} registro${registrosVista.length!==1?'s':''} de ${nombreCorto(user.nombre)} leídos del Sheet.`}
-    </p>}
+          {/* Ventas/ranking no cargaron: hay que decirlo con todas sus letras. Un Dashboard en ceros
+              por una lectura fallida se ve idéntico a uno en ceros porque no hubo ventas, y así se
+              han perdido horas buscando el problema del lado equivocado. */}
+          {session.avisoDatos&&<p style={{margin:'0 0 10px',fontSize:13,fontWeight:600,color:'var(--red)',background:'var(--rbg)',border:'1.5px solid var(--red)',borderRadius:8,padding:'9px 11px'}}>
+            ⚠️ Esta vez {session.avisoDatos}. Los números de oportunidades, validadas e instaladas de abajo salen en cero por eso — no es que el equipo no haya vendido. Toca 🔄 para reintentar.
+          </p>}
 
-    {/* Tabs */}
-    <div style={{display:'flex',overflowX:'auto',gap:0,padding:'0 10px',borderBottom:'1px solid var(--border)',background:'var(--card)',WebkitOverflowScrolling:'touch'}}>
-      {TABS.map(t=><button key={t.id} onClick={()=>setTab(t.id)} style={{flex:'0 0 auto',padding:'10px 12px',border:'none',background:'transparent',cursor:'pointer',fontSize:13,fontWeight:600,color:tab===t.id?'var(--accent)':'var(--dim)',borderBottom:tab===t.id?'3px solid var(--accent)':'3px solid transparent',whiteSpace:'nowrap'}}><span style={{fontSize:16,display:'block'}}>{t.icon}</span>{t.label}</button>)}
-    </div>
+          {/* En vista prestada los registros de esa persona se leen del Sheet — mientras llegan, los
+              contadores están incompletos y hay que decirlo, o se leerían como "no trabajó". */}
+          {enVista&&<p style={{margin:'0 0 10px',fontSize:13,color:'var(--dim)',background:'var(--card)',border:'1px dashed var(--border)',borderRadius:8,padding:'8px 10px'}}>
+            {registrosVista===null
+              ?`⏳ Cargando del Sheet los registros de ${nombreCorto(user.nombre)}…`
+              :`📄 ${registrosVista.length} registro${registrosVista.length!==1?'s':''} de ${nombreCorto(user.nombre)} leídos del Sheet.`}
+          </p>}
+        </div></div>
 
-    {/* Content — la `key` cambia al entrar/salir de una vista prestada, para que las pestañas
-        se vuelvan a montar de cero y no arrastren el formulario a medio llenar ni los paneles
-        ya cargados de la persona anterior. */}
-    <div key={session.verComo||'propia'} style={{padding:14,paddingBottom:30}}>
-      {tab==='dashboard'&&<DashboardTab data={data} setData={setData} team={allTeam} coaches={coaches} session={session} setTab={setTab} toast={toast}/>}
-      {tab==='arranque'&&<ArranqueTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
-      {tab==='permisos'&&<PermisosTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
-      {tab==='cierre'&&<CierreTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
-      {tab==='plan'&&<PlanTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
-      {tab==='feedback'&&<FeedbackTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
-      {tab==='historial'&&<HistorialTab data={data} setData={setData} toast={toast} session={session}/>}
+        {/* Content — la `key` cambia al entrar/salir de una vista prestada, para que las pestañas
+            se vuelvan a montar de cero y no arrastren el formulario a medio llenar ni los paneles
+            ya cargados de la persona anterior. */}
+        <div key={session.verComo||'propia'} ref={contenidoRef} className="app-contenido"><div className={anchoContenido}>
+          {tab==='dashboard'&&<DashboardTab data={data} setData={setData} team={allTeam} coaches={coaches} session={session} setTab={irATab} toast={toast}/>}
+          {tab==='arranque'&&<ArranqueTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
+          {tab==='permisos'&&<PermisosTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
+          {tab==='cierre'&&<CierreTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
+          {tab==='plan'&&<PlanTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
+          {tab==='feedback'&&<FeedbackTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
+          {tab==='historial'&&<HistorialTab data={data} session={session}/>}
+        </div></div>
+      </main>
     </div>
     <button onClick={actualizarInfo} disabled={refreshing} title="Actualizar información"
       style={{position:'fixed',bottom:20,right:16,zIndex:50,width:52,height:52,borderRadius:'50%',
