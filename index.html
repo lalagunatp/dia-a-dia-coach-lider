@@ -81,7 +81,12 @@ const metaSemanal=badge=>META_SEMANAL_RANKING[badge]||0;
 const metaMensual=badge=>Math.round(metaSemanal(badge)*4.33);
 
 // ═══ HELPERS ═══
-const today=()=>new Date().toISOString().slice(0,10);
+// Fecha de HOY en hora local ('YYYY-MM-DD'). Antes salía de toISOString(), que es UTC: en Torreón
+// (UTC-6) todo lo capturado después de las 6 de la tarde se guardaba con la fecha del día siguiente
+// — un cierre del viernes a las 19:05 decía sábado, el "¿ya hizo cierre hoy?" del líder buscaba en
+// el día equivocado, y el último día del mes por la noche la app ya creía estar en el mes siguiente.
+// Va escrita aquí mismo y no con ymdLocal porque esa se define más abajo.
+const today=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;};
 const now=()=>new Date().toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'});
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,6);
 const fmt=d=>{if(!d)return'';const p=d.split('-');return`${p[2]}/${p[1]}/${p[0]}`};
@@ -3397,15 +3402,18 @@ function horaDeRegistro(r){
   const d=capturadoDe(r);
   return d?dos(d.getHours())+':'+dos(d.getMinutes()):'';
 }
-// Día al que pertenece el registro. today() saca la fecha en UTC, así que lo capturado después de
-// las 6 de la tarde (hora de Torreón) se guardó con la fecha del día SIGUIENTE: un cierre del viernes
-// a las 19:05 dice sábado. Aquí se corrige solo ese caso, sin tocar lo guardado: si la fecha es justo
-// la fecha UTC del momento de captura y no coincide con la local, fue el valor por defecto con el
-// error y se usa la local. Si alguien cambió la fecha a mano no coincide con la UTC y se respeta.
+// Día al que pertenece el registro. Hasta el 13/09/2026 today() sacaba la fecha en UTC, así que lo
+// capturado después de las 6 de la tarde (hora de Torreón) se guardó con la fecha del día SIGUIENTE:
+// un cierre del viernes a las 19:05 dice sábado. Esos registros viejos se corrigen aquí sin tocar lo
+// guardado: si la fecha es justo la fecha UTC del momento de captura y no la local, fue el valor por
+// defecto con el error y se usa la local. Si alguien cambió la fecha a mano no coincide y se respeta.
+// Solo aplica a lo capturado antes del arreglo: desde ahí today() ya da la fecha local, y la misma
+// regla movería por error un permiso registrado de noche con la fecha de mañana puesta a propósito.
+const ARREGLO_FECHA_LOCAL=new Date(2026,8,14);
 function fechaEfectiva(r){
   const f=String(r.date||'').slice(0,10);
   const d=capturadoDe(r);
-  if(!d)return f;
+  if(!d||d>=ARREGLO_FECHA_LOCAL)return f||(d?ymdLocal(d):'');
   const utc=String(r.savedAt).slice(0,10),local=ymdLocal(d);
   return f===utc&&local!==utc?local:(f||local);
 }
