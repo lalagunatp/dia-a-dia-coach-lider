@@ -36,12 +36,26 @@ body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:#f0f2f8;c
 input,textarea,select,button{font-family:inherit}
 textarea{resize:vertical}
 ::-webkit-scrollbar{width:4px}::-webkit-scrollbar-thumb{background:#c4c8d4;border-radius:4px}
+/* Informe del Historial (InformeImprimible): al imprimir solo sale el documento. Se oculta todo lo
+   demás que cuelga de <body> con display:none y no con visibility, porque visibility deja el espacio
+   de la app y el PDF salía con páginas en blanco al final. Solo aplica con la clase con-informe, que
+   pone el informe mientras está abierto: sin ella, imprimir la app desde el navegador saldría en blanco. */
+@media print{
+  @page{size:letter;margin:12mm}
+  body{background:#fff!important}
+  body.con-informe>*:not(.informe-print-root){display:none!important}
+  .informe-print-root{position:static!important;overflow:visible!important;background:#fff!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .informe-hoja{max-width:none!important;margin:0!important;padding:0!important;box-shadow:none!important;border-radius:0!important}
+  .no-print{display:none!important}
+  .h-ficha-print,.h-firmas{break-inside:avoid;page-break-inside:avoid}
+  .h-grupo-print{break-after:avoid;page-break-after:avoid}
+}
 </style>
 </head>
 <body>
 <div id="root"></div>
 <script type="text/babel">
-const{useState,useEffect,useRef,useCallback}=React;
+const{useState,useEffect,useRef,useCallback,useMemo}=React;
 
 // ═══ CONFIG ═══
 // Ya no queda ningún dato (ni siquiera el catálogo de Clusters/Colonias) leído directo del
@@ -107,6 +121,8 @@ const FEEDBACK_TIPOS=['Acompañamiento','Feedback 1 a 1','Revisión semanal','In
 const FEEDBACK_TIPOS_CON_FOTO=['Acompañamiento','Evidencia de asignación externa'];
 const DIAS_SEMANA=['lunes','martes','miercoles','jueves','viernes','sabado','domingo'];
 const DIAS_SEMANA_LABEL={lunes:'Lunes',martes:'Martes',miercoles:'Miércoles',jueves:'Jueves',viernes:'Viernes',sabado:'Sábado',domingo:'Domingo'};
+const MESES=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+const MESES_LARGO=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
 // Compromiso vs. meta oficial: rojo si se comprometen por debajo, negro si es igual, verde si es mayor.
 const colorVsMeta=(val,meta)=>{const v=Number(val)||0;if(!meta)return'var(--text)';if(v<meta)return'var(--red)';if(v>meta)return'var(--green)';return'#000';};
 
@@ -217,14 +233,19 @@ const qsVerComo=verComo=>verComo?`&verComo=${encodeURIComponent(verComo)}`:'';
 // Historial del equipo leído del Sheet del Director (no solo lo capturado en este teléfono).
 // `token` (emitido por fetchLogin) es obligatorio: el servidor valida la sesión y filtra
 // el historial por jerarquía ahí mismo, ya no confía en que el cliente se autolimite.
-async function fetchHistorialEquipo(hoja,token,verComo){
-  if(!DOPOST_URL||!token)return[];
+// Regresa también si la lectura funcionó: el Historial necesita distinguir "no hay registros" de
+// "no hubo conexión", porque en el segundo caso tiene que avisar que lo que muestra está incompleto.
+async function fetchHistorialHoja(hoja,token,verComo){
+  if(!DOPOST_URL||!token)return{ok:false,registros:[],error:'Sin sesión'};
   try{
     const res=await fetchConTope(`${DOPOST_URL}?accion=historial&hoja=${encodeURIComponent(hoja||'ARRANQUE')}&token=${encodeURIComponent(token)}${qsVerComo(verComo)}`);
     const json=await res.json();
-    if(!json.ok)return[];
-    return json.registros||[];
-  }catch(e){console.error('Historial equipo fetch error:',e);return[];}
+    if(!json.ok)return{ok:false,registros:[],error:json.error||'El servidor no pudo leer la hoja'};
+    return{ok:true,registros:json.registros||[]};
+  }catch(e){console.error('Historial equipo fetch error:',e);return{ok:false,registros:[],error:e.message};}
+}
+async function fetchHistorialEquipo(hoja,token,verComo){
+  return(await fetchHistorialHoja(hoja,token,verComo)).registros;
 }
 // "Nombre: liga; Nombre: liga" (como lo guarda el Apps Script) → [{nombre, url}]
 function parseFotosAusentes(txt){
@@ -243,7 +264,7 @@ function parseFotosAusentes(txt){
 // para que los contadores, el semáforo, el plan de la semana y el historial se vean completos.
 // Dos cosas no se pueden reconstruir porque el Sheet no las guarda: los NOMBRES de los presentes
 // en un arranque (solo queda el total, que es lo que se muestra) y las fotos, que llegan como
-// liga de Drive en vez de la imagen embebida (la app ya sabe abrir ambas, ver FotoMini).
+// liga de Drive en vez de la imagen embebida (la app ya sabe abrir ambas, ver EvidenciaFoto).
 const HOJA_POR_TIPO={arranque:'ARRANQUE',permiso:'PERMISO',cierre:'CIERRE',plan:'PLAN',plan_resultado:'PLAN_RESULTADO',feedback:'FEEDBACK',semaforo:'SEMAFORO'};
 const nNum=v=>Number(v)||0;
 // "Nombre: resto; Nombre: resto" → [{nombre,resto}] — el formato de lista que usa buildRow.
@@ -300,7 +321,9 @@ function recordDesdeFila(tipo,f){
           return{name:nombre,reason:(partes[0]||'').trim(),detail:(partes[1]||'').trim(),
             photo:(fotosAus.find(x=>x.nombre===nombre)||{}).url||null};
         }),
-        notas:f['Notas']||'',photo:f['Foto grupo']||null,photoSubida:f['Foto grupo subida']||null,fotosVendedores};
+        notas:f['Notas']||'',photo:f['Foto grupo']||null,photoSubida:f['Foto grupo subida']||null,fotosVendedores,
+        // El Sheet guarda los compromisos de "fuera de ruta" como un solo texto, no por persona.
+        compromisosTexto:f['Compromisos del día']||''};
     }
     case'permiso':
       return{...base,vendedor:f['Integrante']||'',tipo:f['Tipo']||'',motivo:f['Motivo']||'',
@@ -2275,8 +2298,6 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
   const{role}=session;
   const now=new Date();
   const mesActual=now.getMonth();const anioActual=now.getFullYear();
-  const MESES=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
-  const MESES_LARGO=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
   const mesEvaluado=mesActual===0?MESES[11]+' '+(anioActual-1):MESES[mesActual-1]+' '+anioActual;
   const thisMonth=r=>{const d=new Date(r.date);return d.getMonth()===mesActual&&d.getFullYear()===anioActual;};
   const recs=data.records;
@@ -3324,206 +3345,803 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
 }
 
 // ─── Historial ───
-function HistorialTab({data,setData,toast,session}){
-  const[filter,setFilter]=useState('todos');const[dateF,setDateF]=useState('');
-  const[verFoto,setVerFoto]=useState(null);
-  // 'dispositivo' (los registros propios: de este teléfono, o los de esa persona reconstruidos
-  // del Sheet en la vista prestada del director) | 'equipo' (los de todo su equipo, del Sheet).
-  const[vista,setVista]=useState('dispositivo');
-  const enVista=!!session?.verComo;
-  const[equipoRecs,setEquipoRecs]=useState([]);
-  const[cargandoEquipo,setCargandoEquipo]=useState(false);
-  // Nombres cuyos registros puede ver este usuario: los suyos propios y los de su equipo.
-  const nombresEquipo=new Set([session?.user?.nombre,...(session?.team||[]).map(m=>m.nombre),...(session?.coaches||[]).map(m=>m.nombre)].filter(Boolean));
-  const HOJAS_EQUIPO=Object.keys(HOJA_POR_TIPO);
-  useEffect(()=>{
-    if(vista!=='equipo')return;
-    setCargandoEquipo(true);
-    const hojas=filter==='todos'?HOJAS_EQUIPO:[filter];
-    Promise.all(hojas.map(tipo=>fetchHistorialEquipo(HOJA_POR_TIPO[tipo],session.token,session.verComo).then(regs=>regs.map(r=>({...r,_tipo:tipo})))))
-      .then(resultados=>{
-        const todos=resultados.flat().filter(r=>nombresEquipo.has(r['Registrado por']));
-        todos.sort((a,b)=>String(b['Timestamp']||'').localeCompare(String(a['Timestamp']||'')));
-        setEquipoRecs(todos);
-        setCargandoEquipo(false);
-      });
-  },[vista,filter]);
-  const typeL={arranque:'☀️ Arranque',cierre:'🌙 Cierre',permiso:'📋 Permiso',plan:'📊 Plan',plan_resultado:'📊 Resultado Plan',feedback:'💬 Hallazgo',semaforo:'🚦 Semáforo'};
-  const recs=data.records.filter(r=>filter==='todos'||r.type===filter).filter(r=>!dateF||r.date===dateF).sort((a,b)=>b.savedAt.localeCompare(a.savedAt));
-  const del=id=>{if(enVista)return;if(!confirm('¿Eliminar?'))return;const upd={...data,records:data.records.filter(r=>r.id!==id)};setData(upd);saveData(upd);toast('Eliminado');};
-  // Si ya se subió a Drive, `src` es una liga (no una foto embebida) — no carga como <img>,
-  // así que se ofrece como botón para abrirla, en vez de intentar mostrarla en línea.
-  const FotoMini=({src,style:s})=>{
-    if(!src?.startsWith('data:'))return <a href={src} target="_blank" rel="noopener noreferrer" style={{display:'inline-flex',alignItems:'center',gap:6,padding:'8px 12px',borderRadius:8,background:'var(--accent-light)',color:'var(--accent)',fontSize:13,fontWeight:700,textDecoration:'none',...s}}>📷 Ver foto (Drive)</a>;
-    return <img src={src} alt="" onClick={()=>setVerFoto(src)} style={{width:'100%',objectFit:'cover',borderRadius:8,cursor:'pointer',...s}}/>;
-  };
-  const detail=r=>{
-    switch(r.type){
-      case'arranque':return <div style={{fontSize:14}}><p><b>Presentes:</b> {r.presentes?.length||0} · <b>Ausentes:</b> {r.ausentes?.length||0}</p>{r.ausentes?.map(a=><div key={a.name} style={{margin:'2px 0'}}><p style={{color:'var(--red)',margin:0}}>✗ {a.name}: {a.reason}{a.detail?` — ${a.detail}`:''}</p>{a.photo&&<FotoMini src={a.photo} style={{maxHeight:160,marginTop:4}}/>}</div>)}{r.notas&&<p style={{marginTop:6}}>{r.notas}</p>}{r.photo&&<FotoMini src={r.photo} style={{maxHeight:120,marginTop:6}}/>}</div>;
-      case'permiso':return <div style={{fontSize:14}}><p><b>{r.vendedor}</b> — {r.tipo}</p><p>{r.motivo}</p>{r.compromiso&&(r.compromiso.cuentas||r.compromiso.ventas||r.compromiso.instalaciones)&&<p>🎯 Compromiso: {r.compromiso.cuentas||0} cuentas · {r.compromiso.ventas||0} ventas · {r.compromiso.instalaciones||0} instal.</p>}{r.colonia&&<p>📍 {r.colonia}</p>}{r.autorizado_por&&<p style={{color:'var(--dim)'}}>Autorizado: {r.autorizado_por}</p>}{r.photo&&<FotoMini src={r.photo} style={{maxHeight:160,marginTop:6}}/>}</div>;
-      case'cierre':return <div style={{fontSize:14}}>
-        {r.resultados?.filter(x=>x.oportunidades||x.validadas||x.instaladas||x.pagadasHoy||x.pendiente).map((x,i)=>
-          <div key={i} style={{fontSize:13,padding:'3px 0',borderBottom:'1px solid var(--border)'}}>
-            <b>{x.nombre}:</b> {x.oportunidades||0} op · {x.validadas||0} val · {x.instaladas||0} inst{x.pagadasHoy?` · ${x.pagadasHoy} cta(s) pagada(s) hoy`:''}
-            {x.pendiente&&<div style={{color:'var(--dim)'}}>Pendiente: {x.pendiente}</div>}
+// Un solo historial para todo: lo que ya está en el Sheet (lo del equipo, visible desde cualquier
+// teléfono) más lo capturado en este teléfono que todavía no sube. Antes eran dos vistas separadas
+// ("Este dispositivo" y "Equipo") que se leían distinto, y la del dispositivo se perdía al cambiar
+// de celular — ninguna de las dos servía como evidencia para Recursos Humanos o una auditoría.
+const TIPOS_HIST={
+  arranque:{icon:'☀️',label:'Arranque',color:'#b45309',fondo:'#fef3c7'},
+  cierre:{icon:'🌙',label:'Cierre',color:'#1e40af',fondo:'#dbeafe'},
+  permiso:{icon:'📋',label:'Permiso',color:'#7c3aed',fondo:'#ede9fe'},
+  feedback:{icon:'💬',label:'Hallazgo',color:'#be123c',fondo:'#ffe4e6'},
+  semaforo:{icon:'🚦',label:'Semáforo',color:'#0f766e',fondo:'#ccfbf1'},
+  plan:{icon:'📊',label:'Plan',color:'#15803d',fondo:'#dcfce7'},
+  plan_resultado:{icon:'🏁',label:'Resultado del plan',color:'#15803d',fondo:'#dcfce7'},
+};
+const ORDEN_TIPOS_HIST=['arranque','cierre','permiso','feedback','semaforo','plan','plan_resultado'];
+// Qué tan grave es cada motivo de ausencia, para pintar el renglón. Descanso, vacaciones y permiso
+// autorizado son ausencias previstas y no se pintan. "Trabajo fuera de ruta" y "Actividad especial"
+// ni siquiera son ausencias (ver ABSENCE_REASONS): se cuentan aparte, como fuera de ruta.
+const GRAVEDAD_AUSENCIA={'Falta injustificada':'rojo','Falta justificada':'amarillo','Incapacidad':'amarillo','Retardo':'amarillo','Otro':'amarillo'};
+const colorGravedad=g=>g==='rojo'?['var(--red)','var(--rbg)']:g==='amarillo'?['var(--yellow)','var(--ybg)']:['var(--dim)','var(--bg)'];
+const esFueraDeRuta=motivo=>TIPOS_CON_COMPROMISO.includes(motivo);
+// Un renglón de cierre cuenta si tuvo algo que reportar — el mismo criterio con el que buildRow
+// (apps-script.gs) decide qué vendedores escribir en el Sheet, para que lo local y lo del Sheet cuadren.
+const conActividad=x=>!!(Number(x.oportunidades)||Number(x.validadas)||Number(x.instaladas)||Number(x.pagadasHoy)||x.pendiente);
+const dos=n=>String(n).padStart(2,'0');
+const diaDe=ymd=>{const[y,m,d]=String(ymd).split('-').map(Number);return new Date(y,m-1,d);};
+const nombreDia=ymd=>DIAS_SEMANA_LABEL[DIAS_SEMANA[(diaDe(ymd).getDay()+6)%7]];
+const fechaLarga=ymd=>/^\d{4}-\d{2}-\d{2}/.test(String(ymd))?`${nombreDia(ymd)} ${fmt(String(ymd).slice(0,10))}`:String(ymd||'');
+const fechaCorta=ymd=>/^\d{4}-\d{2}-\d{2}/.test(String(ymd))?`${nombreDia(ymd).slice(0,3).toLowerCase()} ${fmt(String(ymd).slice(0,10)).slice(0,5)}`:'';
+
+// Momento real en que llegó el registro: savedAt local (cuando se capturó) o el Timestamp del Sheet
+// (cuando el servidor lo recibió, que para un pendiente que subió después no es la hora de captura).
+function capturadoDe(r){
+  const s=String(r.savedAt||'');
+  if(!/^\d{4}-\d{2}-\d{2}T/.test(s))return null;
+  const d=new Date(s);
+  return isNaN(d)?null:d;
+}
+// Hora en 24 h, para poder ordenar los registros de un mismo día. `time` (arranque y cierre) lo
+// escribe now() como "08:12 p.m.": si solo se cortara "08:12", un cierre de la noche se ordenaría
+// como si fuera de la mañana. Si el Sheet convirtió la hora en fecha (llega "1899-12-30"), no cuadra
+// con el patrón y se toma del momento de captura.
+function horaDeRegistro(r){
+  const m=String(r.time||'').trim().toLowerCase().match(/^(\d{1,2}):(\d{2})\s*(a\.?\s*m|p\.?\s*m)?/);
+  if(m){
+    let h=Number(m[1]);
+    if(m[3]&&m[3][0]==='p'&&h<12)h+=12;
+    if(m[3]&&m[3][0]==='a'&&h===12)h=0;
+    return dos(h)+':'+m[2];
+  }
+  const d=capturadoDe(r);
+  return d?dos(d.getHours())+':'+dos(d.getMinutes()):'';
+}
+// Día al que pertenece el registro. today() saca la fecha en UTC, así que lo capturado después de
+// las 6 de la tarde (hora de Torreón) se guardó con la fecha del día SIGUIENTE: un cierre del viernes
+// a las 19:05 dice sábado. Aquí se corrige solo ese caso, sin tocar lo guardado: si la fecha es justo
+// la fecha UTC del momento de captura y no coincide con la local, fue el valor por defecto con el
+// error y se usa la local. Si alguien cambió la fecha a mano no coincide con la UTC y se respeta.
+function fechaEfectiva(r){
+  const f=String(r.date||'').slice(0,10);
+  const d=capturadoDe(r);
+  if(!d)return f;
+  const utc=String(r.savedAt).slice(0,10),local=ymdLocal(d);
+  return f===utc&&local!==utc?local:(f||local);
+}
+// Vendedores de los que habla un registro. Es lo que arma el expediente de una persona: sus
+// ausencias, permisos, hallazgos, semáforos y sus resultados en los cierres.
+function sujetosDe(r){
+  const lista=[];
+  const add=(nombre,papel)=>{const nm=String(nombre||'').trim();if(nm&&!lista.some(x=>x.nombre===nm))lista.push({nombre:nm,papel});};
+  switch(r.type){
+    case'arranque':(r.ausentes||[]).forEach(a=>add(a.name,esFueraDeRuta(a.reason)?'fuera':'ausente'));break;
+    case'cierre':
+      (r.resultados||[]).filter(conActividad).forEach(x=>add(x.nombre,'cierre'));
+      (r.seguimiento||[]).forEach(s=>add(s.name,'seguimiento'));
+      break;
+    case'permiso':add(r.vendedor,'permiso');break;
+    case'feedback':add(r.vendedor,'hallazgo');break;
+    case'semaforo':add(r.vendedor,'semaforo');break;
+  }
+  return lista;
+}
+// Una línea que dice de qué trata el registro sin abrirlo. Con `vendedor`, solo lo que toca a esa
+// persona (su ausencia en ese arranque, sus números en ese cierre).
+function resumenDe(r,vendedor){
+  const n=v=>Number(v)||0;
+  switch(r.type){
+    case'arranque':{
+      if(vendedor){
+        const a=(r.ausentes||[]).find(x=>x.name===vendedor);
+        return a?`${esFueraDeRuta(a.reason)?'🧭':'🚫'} ${a.reason||'Sin motivo'}${a.detail?' — '+a.detail:''}`:'Presente';
+      }
+      const aus=(r.ausentes||[]).filter(a=>!esFueraDeRuta(a.reason)).length;
+      const fuera=(r.ausentes||[]).length-aus,pres=(r.presentes||[]).length;
+      return `${pres} presente${pres!==1?'s':''} · ${aus} ausencia${aus!==1?'s':''}${fuera?` · ${fuera} fuera de ruta`:''}`;
+    }
+    case'cierre':{
+      const filas=(r.resultados||[]).filter(conActividad);
+      if(vendedor){
+        const x=filas.find(f=>f.nombre===vendedor),s=(r.seguimiento||[]).find(f=>f.name===vendedor);
+        const partes=[];
+        if(x)partes.push(`${n(x.oportunidades)} op · ${n(x.validadas)} val · ${n(x.instaladas)} inst`);
+        if(x&&x.pendiente)partes.push('Pendiente: '+x.pendiente);
+        if(s)partes.push('Seguimiento'+(s.motivo?': '+s.motivo:''));
+        return partes.join(' · ')||'Sin actividad';
+      }
+      const t=filas.reduce((a,x)=>({op:a.op+n(x.oportunidades),val:a.val+n(x.validadas),inst:a.inst+n(x.instaladas)}),{op:0,val:0,inst:0});
+      return `${t.op} op · ${t.val} val · ${t.inst} inst${r.incidencias?' · ⚠️ con incidencias':''}`;
+    }
+    case'permiso':return vendedor?`${r.tipo||''}${r.motivo?' — '+r.motivo:''}`:`${nombreCorto(r.vendedor)} · ${r.tipo||''}`;
+    case'feedback':return vendedor?(r.tipo||'Hallazgo'):`${nombreCorto(r.vendedor)} · ${r.tipo||''}`;
+    case'semaforo':{
+      const s=`${SEM_EMOJI[r.semaforo]||'⚪'} ${STATUS[r.semaforo]?.label||r.semaforo||''}`;
+      return vendedor?s:`${nombreCorto(r.vendedor)} → ${s}`;
+    }
+    case'plan':return `Semana ${r.semanaLabel||''}${r.objetivos?` · obj. ${n(r.objetivos.instalaciones)} inst`:''}`;
+    case'plan_resultado':{
+      const o=n(r.objetivos?.instalaciones),v=n(r.resultados?.instalaciones);
+      return `Semana ${r.semanaLabel||''} · ${v}/${o} inst${o?` (${Math.round(v/o*100)}%)`:''}`;
+    }
+    default:return'';
+  }
+}
+// Color del renglón: el semáforo en hallazgos, la ausencia más grave en arranques, las incidencias en
+// cierres y el cumplimiento en resultados de plan. null = sin nada que llamar la atención.
+function tonoDe(r,vendedor){
+  switch(r.type){
+    case'feedback':case'semaforo':return STATUS[r.semaforo]?r.semaforo:null;
+    case'arranque':{
+      const g=(r.ausentes||[]).filter(a=>!vendedor||a.name===vendedor).map(a=>GRAVEDAD_AUSENCIA[a.reason]).filter(Boolean);
+      return g.includes('rojo')?'rojo':g.length?'amarillo':null;
+    }
+    case'cierre':return !vendedor&&r.incidencias?'amarillo':null;
+    case'plan_resultado':{
+      const o=Number(r.objetivos?.instalaciones)||0;
+      if(!o)return null;
+      const p=(Number(r.resultados?.instalaciones)||0)/o*100;
+      return p>=95?'verde':p>=60?'amarillo':'rojo';
+    }
+    default:return null;
+  }
+}
+function normalizarEvento(r,pendientes){
+  if(!r||!TIPOS_HIST[r.type])return null;
+  return{id:r.id,tipo:r.type,fecha:fechaEfectiva(r),hora:horaDeRegistro(r),autor:r.registradoPor||'',
+    pendiente:pendientes.has(r.id),desdeSheet:!!r.desdeSheet,sujetos:sujetosDe(r),r};
+}
+// {desde, hasta} en 'YYYY-MM-DD' (hora local) y la etiqueta a mostrar. offset 0 = el periodo actual,
+// 1 = el anterior, etc. Las semanas llevan su número, que es como el negocio las nombra.
+function rangoPeriodo(periodo,offset,rango,base){
+  const hoy=new Date(base);hoy.setHours(0,0,0,0);
+  const corto=d=>`${dos(d.getDate())} ${MESES[d.getMonth()].toLowerCase()}`;
+  if(periodo==='dia'){
+    const d=new Date(hoy);d.setDate(d.getDate()-offset);
+    const s=ymdLocal(d);
+    return{desde:s,hasta:s,etiqueta:offset===0?`Hoy · ${fechaLarga(s)}`:offset===1?`Ayer · ${fechaLarga(s)}`:fechaLarga(s)};
+  }
+  if(periodo==='semana'){
+    const ini=startOfWeek(hoy);ini.setDate(ini.getDate()-7*offset);
+    const fin=new Date(ini);fin.setDate(fin.getDate()+6);
+    const nombre=offset===0?'Esta semana':offset===1?'Semana pasada':'Semana';
+    return{desde:ymdLocal(ini),hasta:ymdLocal(fin),etiqueta:`${nombre} ${semanaISO(ini)} · ${corto(ini)} al ${corto(fin)}`};
+  }
+  if(periodo==='mes'){
+    const ini=new Date(hoy.getFullYear(),hoy.getMonth()-offset,1),fin=new Date(ini.getFullYear(),ini.getMonth()+1,0);
+    return{desde:ymdLocal(ini),hasta:ymdLocal(fin),etiqueta:`${MESES_LARGO[ini.getMonth()]} ${ini.getFullYear()}`};
+  }
+  let desde=rango.desde||rango.hasta||ymdLocal(hoy),hasta=rango.hasta||rango.desde||ymdLocal(hoy);
+  if(desde>hasta)[desde,hasta]=[hasta,desde];
+  return{desde,hasta,etiqueta:desde===hasta?fechaLarga(desde):`${fmt(desde)} al ${fmt(hasta)}`};
+}
+// Contadores de un conjunto de registros. Con `vendedor`, las ausencias y los cierres cuentan solo lo
+// de esa persona — es el resumen de su expediente.
+function resumirEventos(eventos,vendedor){
+  const res={total:eventos.length,porTipo:{},colores:{rojo:0,amarillo:0,verde:0},ausencias:0,motivos:{},fueraRuta:0,
+    cierre:{dias:0,op:0,val:0,inst:0},semaforo:null,pendientes:0};
+  const n=v=>Number(v)||0;
+  eventos.forEach(e=>{
+    const r=e.r;
+    res.porTipo[e.tipo]=(res.porTipo[e.tipo]||0)+1;
+    if(e.pendiente)res.pendientes++;
+    if(e.tipo==='feedback'&&STATUS[r.semaforo])res.colores[r.semaforo]++;
+    if(e.tipo==='arranque')(r.ausentes||[]).filter(a=>!vendedor||a.name===vendedor).forEach(a=>{
+      if(esFueraDeRuta(a.reason)){res.fueraRuta++;return;}
+      const m=a.reason||'Sin motivo';
+      res.ausencias++;res.motivos[m]=(res.motivos[m]||0)+1;
+    });
+    if(vendedor&&e.tipo==='cierre'){
+      const x=(r.resultados||[]).find(f=>f.nombre===vendedor&&conActividad(f));
+      if(x){res.cierre.dias++;res.cierre.op+=n(x.oportunidades);res.cierre.val+=n(x.validadas);res.cierre.inst+=n(x.instaladas);}
+    }
+    if(vendedor&&(e.tipo==='semaforo'||e.tipo==='feedback')&&STATUS[r.semaforo]){
+      const clave=e.fecha+' '+e.hora;
+      if(!res.semaforo||clave>res.semaforo.clave)res.semaforo={valor:r.semaforo,fecha:e.fecha,clave};
+    }
+  });
+  return res;
+}
+// Agrupa para mostrar: por día (el más reciente arriba y, dentro del día, en el orden en que pasó),
+// por tipo, por coach que capturó o por vendedor. En "vendedor" un mismo registro sale bajo cada
+// persona de la que habla (un cierre, bajo cada vendedor con actividad), marcado con `_vendedor`
+// para que el renglón muestre solo lo de esa persona. Lo que no habla de nadie (planes, arranques
+// sin ausencias) no se pierde: va al final, en "Generales".
+function agruparEventos(eventos,modo,soloVendedor){
+  const porMomento=(a,b)=>(a.fecha+' '+a.hora).localeCompare(b.fecha+' '+b.hora);
+  const grupos=new Map();
+  const meter=(clave,titulo,e)=>{if(!grupos.has(clave))grupos.set(clave,{clave,titulo,eventos:[]});grupos.get(clave).eventos.push(e);};
+  eventos.forEach(e=>{
+    if(modo==='tipo')meter(e.tipo,`${TIPOS_HIST[e.tipo].icon} ${TIPOS_HIST[e.tipo].label}`,e);
+    else if(modo==='coach')meter('c:'+(e.autor||'—'),e.autor||'Sin registrar',e);
+    else if(modo==='vendedor'){
+      // A "Generales" va solo lo que no habla de NADIE. Lo que habla de otras personas pero no de la
+      // que está en foco no es general: simplemente no le toca a este expediente.
+      // Y con una persona en foco (su expediente) no hay generales que mostrar.
+      if(!e.sujetos.length){if(!soloVendedor)meter('~generales','📌 Generales (sin vendedor específico)',e);return;}
+      e.sujetos.map(s=>s.nombre).filter(nm=>!soloVendedor||nm===soloVendedor)
+        .forEach(nm=>meter('v:'+nm,nm,{...e,_vendedor:nm}));
+    }
+    else meter(e.fecha,fechaLarga(e.fecha),e);
+  });
+  const lista=[...grupos.values()];
+  if(modo==='dia'||!['tipo','coach','vendedor'].includes(modo)){
+    lista.sort((a,b)=>b.clave.localeCompare(a.clave));
+    lista.forEach(g=>g.eventos.sort(porMomento));
+  }else{
+    if(modo==='tipo')lista.sort((a,b)=>ORDEN_TIPOS_HIST.indexOf(a.clave)-ORDEN_TIPOS_HIST.indexOf(b.clave));
+    else lista.sort((a,b)=>a.clave==='~generales'?1:b.clave==='~generales'?-1:a.titulo.localeCompare(b.titulo));
+    lista.forEach(g=>g.eventos.sort((a,b)=>porMomento(b,a)));
+  }
+  return lista;
+}
+
+const HS={
+  etiqueta:{fontSize:12,fontWeight:700,color:'var(--dim)',textTransform:'uppercase',letterSpacing:'.6px',margin:'14px 0 4px'},
+  texto:{fontSize:14,lineHeight:1.5,color:'var(--text)',whiteSpace:'pre-wrap',wordBreak:'break-word'},
+  renglon:{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:8,padding:'8px 0',borderBottom:'1px solid var(--border)'},
+  // El último de una lista va sin línea: debajo ya viene la del pie del registro y se veían dos.
+  ultimo:(i,lista)=>i===lista.length-1?{borderBottom:'none'}:null,
+  chip:(color,fondo)=>({display:'inline-flex',alignItems:'center',gap:4,padding:'2px 9px',borderRadius:999,background:fondo,color,fontSize:12,fontWeight:700,whiteSpace:'nowrap'}),
+};
+function Seccion({titulo,children}){
+  return <div><div style={HS.etiqueta}>{titulo}</div>{children}</div>;
+}
+function Metricas({items}){
+  const v=items.filter(Boolean);
+  if(!v.length)return null;
+  return <div style={{display:'grid',gridTemplateColumns:`repeat(${Math.min(v.length,4)},minmax(0,1fr))`,gap:6,marginTop:6}}>
+    {v.map((it,i)=><div key={i} style={{background:'var(--bg)',borderRadius:8,padding:'8px 4px',textAlign:'center',minWidth:0}}>
+      <div style={{fontSize:19,fontWeight:800,lineHeight:1.15,color:it.color||'var(--text)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{it.valor}</div>
+      <div style={{fontSize:12,color:'var(--dim)',marginTop:2}}>{it.label}</div>
+      {it.sub&&<div style={{fontSize:11,color:'var(--dim)'}}>{it.sub}</div>}
+    </div>)}
+  </div>;
+}
+// Foto de evidencia: si todavía es la imagen embebida (no ha subido) se muestra; si ya es liga de
+// Drive, no carga como <img> (es una página del visor), así que se ofrece como botón para abrirla.
+function EvidenciaFoto({src,onVer,imprimir,etiqueta}){
+  if(!src)return null;
+  if(!String(src).startsWith('data:'))
+    return <a href={src} target="_blank" rel="noopener noreferrer" style={{display:'inline-flex',alignItems:'center',gap:6,padding:'6px 10px',borderRadius:8,background:'var(--accent-light)',color:'var(--accent)',fontSize:13,fontWeight:700,textDecoration:'none'}}>📷 {etiqueta||'Ver evidencia'}</a>;
+  return <img src={src} alt={etiqueta||'Evidencia'} onClick={imprimir?undefined:()=>onVer&&onVer(src)}
+    style={{width:imprimir?150:96,height:imprimir?150:96,objectFit:'cover',borderRadius:8,cursor:imprimir?'default':'pointer',border:'1px solid var(--border)'}}/>;
+}
+function Transcripcion({texto,imprimir}){
+  const[abierta,setAbierta]=useState(false);
+  const t=String(texto||''),largo=t.length>240;
+  return <Seccion titulo="🎙️ Transcripción de la grabación">
+    <div style={{...HS.texto,fontStyle:'italic',background:'var(--bg)',borderRadius:8,padding:'8px 10px'}}>{imprimir||abierta||!largo?t:t.slice(0,240)+'…'}</div>
+    {!imprimir&&largo&&<button onClick={()=>setAbierta(!abierta)} style={{background:'none',border:'none',color:'var(--accent)',fontWeight:700,fontSize:13,padding:'4px 0',cursor:'pointer'}}>{abierta?'Ver menos':'Ver completa'}</button>}
+  </Seccion>;
+}
+
+// El detalle de un registro, ordenado para leerse rápido: números grandes arriba, listas con un
+// renglón por persona y cada texto bajo su etiqueta. `resaltar` marca en amarillo el renglón de una
+// persona (en pantalla, dentro del registro completo). `enfoque` muestra SOLO lo de esa persona: es
+// lo que va al PDF de un expediente, para no imprimir los números de todo el equipo en el de uno.
+function FichaRegistro({ev,resaltar,enfoque,onVerFoto,imprimir,conEncabezado,rolDe}){
+  const r=ev.r,t=TIPOS_HIST[ev.tipo],n=v=>Number(v)||0;
+  const marca=nombre=>resaltar&&nombre===resaltar?{background:'#fff7d6',borderRadius:6,paddingLeft:6,paddingRight:6,marginLeft:-6,marginRight:-6}:null;
+  const texto=(titulo,valor)=>valor?<Seccion titulo={titulo}><div style={HS.texto}>{valor}</div></Seccion>:null;
+  const encabezadoPersona=(nombre,extra)=><div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap',marginTop:4}}>
+    <span style={{fontSize:15,fontWeight:700}}>{nombre}</span>
+    <span style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>{extra}</span>
+  </div>;
+  let cuerpo=null;
+  switch(ev.tipo){
+    case'arranque':{
+      const todos=r.ausentes||[];
+      const aus=todos.filter(a=>!esFueraDeRuta(a.reason)&&(!enfoque||a.name===enfoque));
+      const fuera=todos.filter(a=>esFueraDeRuta(a.reason)&&(!enfoque||a.name===enfoque));
+      const nombresPres=(r.presentes||[]).filter(Boolean);
+      const fotosVend=Object.entries(r.fotosVendedores||{}).filter(([nm,u])=>u&&(!enfoque||nm===enfoque));
+      const renglonAusencia=(a,i,lista)=>{
+        const[c,f]=colorGravedad(GRAVEDAD_AUSENCIA[a.reason]);
+        return <div key={i} style={{...HS.renglon,...HS.ultimo(i,lista),...marca(a.name)}}>
+          <div style={{minWidth:0}}>
+            <div style={{fontSize:14,fontWeight:600}}>{a.name}</div>
+            {a.detail&&<div style={{fontSize:13,color:'var(--dim)'}}>{a.detail}</div>}
+            {a.photo&&<div style={{marginTop:6}}><EvidenciaFoto src={a.photo} onVer={onVerFoto} imprimir={imprimir} etiqueta="Evidencia"/></div>}
           </div>
-        )}
-        {r.incidencias&&<p style={{marginTop:4}}><b>Incidencias:</b> {r.incidencias}</p>}
-        {r.seguimiento?.length>0&&<div style={{marginTop:4}}>
-          <b>Seguimiento mañana:</b>
-          {r.seguimiento.map((s,i)=><p key={i} style={{fontSize:13,margin:'2px 0'}}>• {s.name}{s.motivo?`: ${s.motivo}`:''}</p>)}
-        </div>}
-        {/* Compatibilidad con cierres guardados antes de este cambio */}
-        {r.resultado&&<p><b>Resultado:</b> {r.resultado}</p>}
-        {r.pendientes&&<p><b>Pendientes:</b> {r.pendientes}</p>}
-        {r.vendedores_seguimiento&&<p><b>Seguimiento:</b> {r.vendedores_seguimiento}</p>}
-      </div>;
-      case'plan':return <div style={{fontSize:14}}>
-        <p><b>Semana:</b> {r.semanaLabel||''}</p>
-        {r.objetivos&&<p>🎯 Oport: {r.objetivos.oportunidades||0} (meta {r.metaOficial?.oportunidades??'-'}) · Ventas: {r.objetivos.ventas||0} (meta {r.metaOficial?.ventas??'-'}) · Instal: {r.objetivos.instalaciones||0} (meta {r.metaOficial?.instalaciones??'-'})</p>}
-        {r.objetivos&&<p>NPPF: {r.objetivos.cuentasRecuperadas||0} · ARPU: {r.objetivos.arpu||0}</p>}
-        {r.prioridades&&<p><b>Prioridades:</b> {r.prioridades}</p>}
-        {r.vendedores_acompanar&&<p><b>Acompañamientos:</b> {r.vendedores_acompanar}</p>}
-        {zonasATexto(r.zonas)&&<div style={{marginTop:4}}>
-          <b>Zonas:</b>
-          {zonasATexto(r.zonas).split('\n').map((linea,i)=><p key={i} style={{margin:'2px 0'}}>• {linea}</p>)}
-        </div>}
-        {r.resultado_esperado&&<p><b>Resultado esperado:</b> {r.resultado_esperado}</p>}
-        {/* Compatibilidad con planes guardados antes de este cambio */}
-        {r.objetivo&&<p><b>Objetivo:</b> {r.objetivo}</p>}
-      </div>;
-      case'plan_resultado':{
-        const pctKpi=(k)=>{const o=Number(r.objetivos?.[k])||0;const v=Number(r.resultados?.[k])||0;return o?Math.round(v/o*100):null;};
-        return <div style={{fontSize:14}}>
-          <p><b>Semana:</b> {r.semanaLabel||''}</p>
-          {['oportunidades','ventas','instalaciones'].map(k=>{
-            const p=pctKpi(k);
-            return <p key={k} style={{margin:'2px 0'}}>{k[0].toUpperCase()+k.slice(1)}: {r.resultados?.[k]||0}{r.objetivos?.[k]!=null&&` / obj. ${r.objetivos[k]}`}{p!=null&&<b style={{marginLeft:6,color:p>=95?'var(--green)':p>=60?'var(--yellow)':'var(--red)'}}>{p}%</b>}</p>;
-          })}
-          <p>NPPF: {r.resultados?.cuentasRecuperadas||0} · ARPU: {r.resultados?.arpu||0}</p>
+          <span style={HS.chip(c,f)}>{a.reason||'Sin motivo'}</span>
         </div>;
-      }
-      case'feedback':return <div style={{fontSize:14}}><div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><b>{r.vendedor}</b> — {r.tipo}<StatusBadge status={r.semaforo} small/></div>{r.hallazgos&&<p>{r.hallazgos}</p>}{r.compromisos&&<p><b>Compromisos:</b> {r.compromisos}</p>}{r.transcript&&<p style={{fontStyle:'italic',background:'var(--bg)',padding:8,borderRadius:6,marginTop:4}}>🎙️ {r.transcript.slice(0,200)}{r.transcript.length>200?'...':''}</p>}{r.photo&&<FotoMini src={r.photo} style={{maxHeight:160,marginTop:6}}/>}{r.fotos?.length>0&&<div style={{display:'flex',flexWrap:'wrap',gap:6,marginTop:6}}>{r.fotos.map((p,i)=><FotoMini key={i} src={p} style={{width:90,height:90,maxHeight:90}}/>)}</div>}</div>;
-      case'semaforo':return <div style={{fontSize:14}}>
-        <p><b>{r.vendedor}</b> — {SEM_EMOJI[r.semaforo]||'⚪'} {STATUS[r.semaforo]?.label||r.semaforo}</p>
-        {r.nota&&<p style={{color:'var(--dim)'}}>{r.nota}</p>}
-      </div>;
-      default:return null;
-    }
-  };
-  // Detalle para registros que vienen del Sheet (vista "Equipo"): las columnas ya son texto
-  // legible tal cual el Apps Script las guardó, no hay que reconstruir estructuras.
-  const detailEquipo=(tipo,r)=>{
-    switch(tipo){
-      case'arranque':{
-        const fotosAus=parseFotosAusentes(r['Fotos evidencia ausentes']);
-        return <>
-          <p style={{fontSize:14}}><b>Presentes:</b> {r['Presentes']} · <b>Ausentes:</b> {r['Ausentes']}</p>
-          {r['Detalle ausentes']&&<p style={{fontSize:13,color:'var(--red)',margin:'2px 0'}}>{r['Detalle ausentes']}</p>}
-          {r['Compromisos del día']&&<p style={{fontSize:13,margin:'2px 0'}}>🎯 {r['Compromisos del día']}</p>}
-          {r['Notas']&&<p style={{fontSize:14,marginTop:4}}>{r['Notas']}</p>}
-          {(r['Foto grupo']||r['Foto grupo subida'])&&<div style={{marginTop:6,display:'flex',gap:6}}>
-            {r['Foto grupo']&&<FotoMini src={r['Foto grupo']}/>}
-            {r['Foto grupo subida']&&<FotoMini src={r['Foto grupo subida']}/>}
-          </div>}
-          {fotosAus.length>0&&<div style={{marginTop:6,display:'flex',flexWrap:'wrap',gap:6}}>
-            {fotosAus.map((f,j)=><a key={j} href={f.url} target="_blank" rel="noopener noreferrer" style={{display:'inline-flex',alignItems:'center',gap:6,padding:'6px 10px',borderRadius:8,background:'var(--rbg)',color:'var(--red)',fontSize:13,fontWeight:700,textDecoration:'none'}}>📷 {f.nombre}</a>)}
-          </div>}
+      };
+      const renglonFuera=(a,i,lista)=>{
+        const c=a.compromiso||{},comp=n(c.cuentas)||n(c.ventas)||n(c.instalaciones);
+        return <div key={i} style={{...HS.renglon,...HS.ultimo(i,lista),...marca(a.name)}}>
+          <div style={{minWidth:0}}>
+            <div style={{fontSize:14,fontWeight:600}}>{a.name}</div>
+            {comp?<div style={{fontSize:13,color:'var(--dim)'}}>🎯 {n(c.cuentas)} cuentas · {n(c.ventas)} ventas · {n(c.instalaciones)} instalaciones</div>:null}
+            {a.colonia&&<div style={{fontSize:13,color:'var(--dim)'}}>📍 {a.colonia}</div>}
+            {a.detail&&<div style={{fontSize:13,color:'var(--dim)'}}>{a.detail}</div>}
+          </div>
+          <span style={HS.chip('var(--accent)','var(--accent-light)')}>{a.reason}</span>
+        </div>;
+      };
+      cuerpo=enfoque
+        ?<>
+          {!aus.length&&!fuera.length&&<div style={{...HS.texto,marginTop:4}}>✅ Presente en el arranque</div>}
+          {aus.length>0&&<Seccion titulo="Ausencia">{aus.map(renglonAusencia)}</Seccion>}
+          {fuera.length>0&&<Seccion titulo="Fuera de ruta / actividad especial">{fuera.map(renglonFuera)}</Seccion>}
+          {fotosVend.length>0&&<Seccion titulo="Foto de entrada">{fotosVend.map(([nm,u])=><EvidenciaFoto key={nm} src={u} onVer={onVerFoto} imprimir={imprimir} etiqueta="Foto de entrada"/>)}</Seccion>}
+        </>
+        :<>
+          <Metricas items={[{label:'Presentes',valor:(r.presentes||[]).length},{label:'Ausencias',valor:aus.length,color:aus.length?'var(--red)':null},fuera.length?{label:'Fuera de ruta',valor:fuera.length}:null]}/>
+          {aus.length>0&&<Seccion titulo={`Ausencias (${aus.length})`}>{aus.map(renglonAusencia)}</Seccion>}
+          {fuera.length>0&&<Seccion titulo={`Fuera de ruta / actividad especial (${fuera.length})`}>{fuera.map(renglonFuera)}</Seccion>}
+          {texto('Compromisos del día',r.compromisosTexto)}
+          {nombresPres.length>0&&<Seccion titulo={`Presentes (${nombresPres.length})`}><div style={{fontSize:13,color:'var(--dim)',lineHeight:1.6}}>{nombresPres.map(nombreCorto).join(' · ')}</div></Seccion>}
+          {texto('Notas',r.notas)}
+          {(r.photo||r.photoSubida||fotosVend.length>0)&&<Seccion titulo="Evidencia">
+            <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+              <EvidenciaFoto src={r.photo} onVer={onVerFoto} imprimir={imprimir} etiqueta="Foto de grupo"/>
+              <EvidenciaFoto src={r.photoSubida} onVer={onVerFoto} imprimir={imprimir} etiqueta="Foto subida"/>
+              {fotosVend.map(([nm,u])=><EvidenciaFoto key={nm} src={u} onVer={onVerFoto} imprimir={imprimir} etiqueta={nombreCorto(nm)}/>)}
+            </div>
+          </Seccion>}
         </>;
-      }
-      case'cierre':return <>
-        {r['Resultados por vendedor']&&<p style={{fontSize:14}}>{r['Resultados por vendedor']}</p>}
-        {r['Incidencias']&&<p style={{fontSize:14}}><b>Incidencias:</b> {r['Incidencias']}</p>}
-        {r['Seguimiento mañana']&&<p style={{fontSize:14}}><b>Seguimiento mañana:</b> {r['Seguimiento mañana']}</p>}
-        {r['Notas']&&<p style={{fontSize:14}}>{r['Notas']}</p>}
-      </>;
-      case'permiso':return <>
-        <p style={{fontSize:14}}><b>{r['Integrante']}</b> — {r['Tipo']}</p>
-        {r['Motivo']&&<p style={{fontSize:14}}>{r['Motivo']}</p>}
-        {(r['Compromiso Cuentas']||r['Compromiso Ventas']||r['Compromiso Instalaciones'])&&<p style={{fontSize:14}}>🎯 Compromiso: {r['Compromiso Cuentas']||0} cuentas · {r['Compromiso Ventas']||0} ventas · {r['Compromiso Instalaciones']||0} instal.</p>}
-        {r['Colonia']&&<p style={{fontSize:14}}>📍 {r['Colonia']}</p>}
-        {r['Autorizado por']&&<p style={{fontSize:13,color:'var(--dim)'}}>Autorizado: {r['Autorizado por']}</p>}
-        {r['Foto evidencia']&&<FotoMini src={r['Foto evidencia']} style={{maxHeight:160,marginTop:6}}/>}
-      </>;
-      case'plan':return <>
-        <p style={{fontSize:14}}><b>Semana:</b> {r['Semana']}</p>
-        <p style={{fontSize:14}}>🎯 Oport: {r['Obj. Oportunidades']||0} (meta {r['Meta Oportunidades']??'-'}) · Ventas: {r['Obj. Ventas']||0} (meta {r['Meta Ventas']??'-'}) · Instal: {r['Obj. Instalaciones']||0} (meta {r['Meta Instalaciones']??'-'})</p>
-        <p style={{fontSize:14}}>NPPF: {r['Obj. Cuentas recuperadas NPPF']||0} · ARPU: {fmtMoney(r['Obj. ARPU'])}</p>
-        {r['Prioridades']&&<p style={{fontSize:14}}><b>Prioridades:</b> {r['Prioridades']}</p>}
-        {r['Acompañamientos']&&<p style={{fontSize:14}}><b>Acompañamientos:</b> {r['Acompañamientos']}</p>}
-        {r['Zonas']&&<p style={{fontSize:14}}><b>Zonas:</b> {r['Zonas']}</p>}
-        {r['Resultado esperado']&&<p style={{fontSize:14}}><b>Resultado esperado:</b> {r['Resultado esperado']}</p>}
-      </>;
-      case'plan_resultado':return <>
-        <p style={{fontSize:14}}><b>Semana:</b> {r['Semana']}</p>
-        <p style={{fontSize:14}}>Oport: {r['Real Oportunidades']||0}{r['% Oportunidades']!==''?` (${r['% Oportunidades']}%)`:''} · Ventas: {r['Real Ventas']||0}{r['% Ventas']!==''?` (${r['% Ventas']}%)`:''} · Instal: {r['Real Instalaciones']||0}{r['% Instalaciones']!==''?` (${r['% Instalaciones']}%)`:''}</p>
-        <p style={{fontSize:14}}>NPPF: {r['Real Cuentas recuperadas NPPF']||0} · ARPU: {fmtMoney(r['Real ARPU'])}</p>
-      </>;
-      case'feedback':{
-        const fotos=String(r['Foto evidencia']||'').split(';').map(s=>s.trim()).filter(Boolean);
-        return <>
-          <div style={{display:'flex',alignItems:'center',gap:8}}><b style={{fontSize:14}}>{r['Integrante']}</b><span style={{fontSize:14}}>— {r['Tipo']}</span>{r['Semáforo']&&<StatusBadge status={r['Semáforo']} small/>}</div>
-          {r['Hallazgos']&&<p style={{fontSize:14}}>{r['Hallazgos']}</p>}
-          {r['Compromisos']&&<p style={{fontSize:14}}><b>Compromisos:</b> {r['Compromisos']}</p>}
-          {r['Transcripción']&&<p style={{fontStyle:'italic',background:'var(--bg)',padding:8,borderRadius:6,marginTop:4,fontSize:13}}>🎙️ {String(r['Transcripción']).slice(0,200)}{String(r['Transcripción']).length>200?'...':''}</p>}
-          {fotos.length>0&&<div style={{display:'flex',flexWrap:'wrap',gap:6,marginTop:6}}>{fotos.map((f,i)=><FotoMini key={i} src={f} style={{width:90,height:90,maxHeight:90}}/>)}</div>}
-        </>;
-      }
-      case'semaforo':return <>
-        <div style={{display:'flex',alignItems:'center',gap:8}}>
-          <b style={{fontSize:14}}>{r['Integrante']}</b>
-          {r['Semáforo']&&<StatusBadge status={r['Semáforo']} small/>}
-        </div>
-        {r['Nota']&&<p style={{fontSize:14,color:'var(--dim)'}}>{r['Nota']}</p>}
-      </>;
-      default:return null;
+      break;
     }
-  };
-  const equipoRecsFiltrados=equipoRecs.filter(r=>!dateF||r['Fecha']===dateF);
+    case'cierre':{
+      const filas=(r.resultados||[]).filter(conActividad);
+      if(enfoque){
+        const x=filas.find(f=>f.nombre===enfoque),s=(r.seguimiento||[]).find(f=>f.name===enfoque);
+        cuerpo=<>
+          {x?<Metricas items={[{label:'Oportunidades',valor:n(x.oportunidades)},{label:'Validadas',valor:n(x.validadas)},{label:'Instaladas',valor:n(x.instaladas),color:'var(--green)'},n(x.pagadasHoy)?{label:'Pagadas hoy',valor:n(x.pagadasHoy)}:null]}/>
+            :<div style={{...HS.texto,marginTop:4,color:'var(--dim)'}}>Sin actividad reportada en este cierre.</div>}
+          {texto('Pendiente',x&&x.pendiente)}
+          {s&&texto('Seguimiento para mañana',s.motivo||'Marcado para seguimiento')}
+        </>;
+        break;
+      }
+      const tot=filas.reduce((a,x)=>({op:a.op+n(x.oportunidades),val:a.val+n(x.validadas),inst:a.inst+n(x.instaladas),pag:a.pag+n(x.pagadasHoy)}),{op:0,val:0,inst:0,pag:0});
+      const cols={display:'grid',gridTemplateColumns:'minmax(0,1fr) repeat(3,40px)',alignItems:'baseline'};
+      cuerpo=<>
+        <Metricas items={[{label:'Oportunidades',valor:tot.op},{label:'Validadas',valor:tot.val},{label:'Instaladas',valor:tot.inst,color:'var(--green)'},tot.pag?{label:'Pagadas hoy',valor:tot.pag}:null]}/>
+        {filas.length>0&&<Seccion titulo={`Resultados por vendedor (${filas.length})`}>
+          <div style={{...cols,fontSize:12,color:'var(--dim)',fontWeight:700,paddingBottom:4,borderBottom:'1px solid var(--border)'}}>
+            <span>Vendedor</span><span style={{textAlign:'right'}}>Op</span><span style={{textAlign:'right'}}>Val</span><span style={{textAlign:'right'}}>Inst</span>
+          </div>
+          {filas.map((x,i)=><div key={i} style={{padding:'6px 0',borderBottom:i<filas.length-1?'1px solid var(--border)':'none',...marca(x.nombre)}}>
+            <div style={{...cols,fontSize:14}}>
+              <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',fontWeight:600}}>{nombreCorto(x.nombre)}</span>
+              <span style={{textAlign:'right'}}>{n(x.oportunidades)}</span>
+              <span style={{textAlign:'right'}}>{n(x.validadas)}</span>
+              <span style={{textAlign:'right',fontWeight:700}}>{n(x.instaladas)}</span>
+            </div>
+            {(n(x.pagadasHoy)>0||x.pendiente)&&<div style={{fontSize:12,color:'var(--dim)',marginTop:2}}>
+              {[n(x.pagadasHoy)>0?`💲 ${n(x.pagadasHoy)} pagada${n(x.pagadasHoy)!==1?'s':''} hoy`:'',x.pendiente?`Pendiente: ${x.pendiente}`:''].filter(Boolean).join(' · ')}
+            </div>}
+          </div>)}
+        </Seccion>}
+        {r.incidencias&&<Seccion titulo="Incidencias"><div style={{...HS.texto,background:'var(--ybg)',borderRadius:8,padding:'8px 10px'}}>{r.incidencias}</div></Seccion>}
+        {r.seguimiento?.length>0&&<Seccion titulo="Seguimiento para mañana">{r.seguimiento.map((s,i,lista)=><div key={i} style={{...HS.renglon,...HS.ultimo(i,lista),...marca(s.name)}}>
+          <span style={{fontSize:14,fontWeight:600}}>{s.name}</span>
+          <span style={{fontSize:13,color:'var(--dim)',textAlign:'right'}}>{s.motivo}</span>
+        </div>)}</Seccion>}
+        {texto('Notas',r.notas)}
+        {/* Cierres guardados antes de que el formulario fuera por vendedor */}
+        {texto('Resultado',r.resultado)}
+        {texto('Pendientes',r.pendientes)}
+        {texto('Seguimiento',r.vendedores_seguimiento)}
+      </>;
+      break;
+    }
+    case'permiso':{
+      const c=r.compromiso||{},comp=n(c.cuentas)||n(c.ventas)||n(c.instalaciones);
+      cuerpo=<>
+        {encabezadoPersona(r.vendedor,r.tipo&&<span style={HS.chip(t.color,t.fondo)}>{r.tipo}</span>)}
+        {texto('Motivo',r.motivo)}
+        {comp?<Seccion titulo="Compromiso del día"><Metricas items={[{label:'Cuentas',valor:n(c.cuentas)},{label:'Ventas',valor:n(c.ventas)},{label:'Instalaciones',valor:n(c.instalaciones)}]}/></Seccion>:null}
+        {r.colonia&&<Seccion titulo="Dónde trabaja"><div style={HS.texto}>📍 {r.colonia}</div></Seccion>}
+        {texto('Autorizó',r.autorizado_por)}
+        {texto('Notas',r.notas)}
+        {r.photo&&<Seccion titulo="Evidencia"><EvidenciaFoto src={r.photo} onVer={onVerFoto} imprimir={imprimir}/></Seccion>}
+      </>;
+      break;
+    }
+    case'feedback':{
+      const fotos=[...(r.photo?[r.photo]:[]),...(r.fotos||[])];
+      cuerpo=<>
+        {encabezadoPersona(r.vendedor,<>
+          {r.tipo&&<span style={HS.chip(t.color,t.fondo)}>{r.tipo}</span>}
+          {STATUS[r.semaforo]&&<StatusBadge status={r.semaforo} small/>}
+        </>)}
+        {texto('Hallazgo',r.hallazgos)}
+        {texto('Fortalezas',r.fortalezas)}
+        {texto('Áreas de oportunidad',r.areas_oportunidad)}
+        {texto('Compromisos',r.compromisos)}
+        {r.fecha_revision&&<Seccion titulo="Fecha de revisión"><div style={HS.texto}>📅 {fechaLarga(r.fecha_revision)}</div></Seccion>}
+        {texto('Notas',r.notas)}
+        {r.transcript&&<Transcripcion texto={r.transcript} imprimir={imprimir}/>}
+        {fotos.length>0&&<Seccion titulo="Evidencia"><div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+          {fotos.map((f,i)=><EvidenciaFoto key={i} src={f} onVer={onVerFoto} imprimir={imprimir} etiqueta={fotos.length>1?`Evidencia ${i+1}`:'Evidencia'}/>)}
+        </div></Seccion>}
+      </>;
+      break;
+    }
+    case'semaforo':
+      cuerpo=<>
+        {encabezadoPersona(r.vendedor,STATUS[r.semaforo]&&<StatusBadge status={r.semaforo} small/>)}
+        {texto('Nota',r.nota)}
+      </>;
+      break;
+    case'plan':{
+      const o=r.objetivos||{},m=r.metaOficial||{},zt=zonasATexto(r.zonas);
+      const vsMeta=(k,label)=>({label,valor:n(o[k]),sub:m[k]!=null&&m[k]!==''?`meta ${n(m[k])}`:null,color:colorVsMeta(o[k],n(m[k]))});
+      cuerpo=<>
+        {r.semanaLabel&&<div style={{fontSize:15,fontWeight:700,marginTop:4}}>Semana {r.semanaLabel}</div>}
+        {r.objetivos&&<Seccion titulo="Compromiso de la semana">
+          <Metricas items={[vsMeta('oportunidades','Oportunidades'),vsMeta('ventas','Ventas'),vsMeta('instalaciones','Instalaciones'),{label:'NPPF',valor:n(o.cuentasRecuperadas)}]}/>
+          {n(o.arpu)>0&&<div style={{fontSize:13,color:'var(--dim)',marginTop:6}}>ARPU objetivo: <b style={{color:'var(--text)'}}>{fmtMoney(o.arpu)}</b></div>}
+        </Seccion>}
+        {texto('Prioridades',r.prioridades)}
+        {texto('Acompañamientos',r.vendedores_acompanar)}
+        {zt&&<Seccion titulo="Zonas por día">{zt.split('\n').map((l,i)=><div key={i} style={{fontSize:14,padding:'3px 0'}}>• {l}</div>)}</Seccion>}
+        {texto('Resultado esperado',r.resultado_esperado)}
+        {texto('Notas',r.notas)}
+        {texto('Objetivo',r.objetivo)}
+      </>;
+      break;
+    }
+    case'plan_resultado':{
+      const o=r.objetivos||{},v=r.resultados||{};
+      const kpi=(k,label)=>{
+        const ob=n(o[k]),val=n(v[k]),p=ob?Math.round(val/ob*100):null;
+        return{label,valor:val,sub:ob?`de ${ob} · ${p}%`:null,color:p==null?null:p>=95?'var(--green)':p>=60?'var(--yellow)':'var(--red)'};
+      };
+      cuerpo=<>
+        {r.semanaLabel&&<div style={{fontSize:15,fontWeight:700,marginTop:4}}>Semana {r.semanaLabel}</div>}
+        <Metricas items={[kpi('oportunidades','Oportunidades'),kpi('ventas','Ventas'),kpi('instalaciones','Instalaciones')]}/>
+        <div style={{fontSize:13,color:'var(--dim)',marginTop:8}}>NPPF recuperadas: <b style={{color:'var(--text)'}}>{n(v.cuentasRecuperadas)}</b> · ARPU: <b style={{color:'var(--text)'}}>{fmtMoney(v.arpu)}</b></div>
+      </>;
+      break;
+    }
+    default:cuerpo=null;
+  }
+  const capt=capturadoDe(r),rol=rolDe?rolDe(ev.autor):'';
+  return <div className={imprimir?'h-ficha-print':undefined}
+    style={imprimir?{border:'1px solid #d8dbe4',borderLeft:`4px solid ${t.color}`,borderRadius:8,padding:'10px 12px 8px',marginBottom:10,background:'#fff'}:{paddingTop:4}}>
+    {conEncabezado&&<div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+      <span style={HS.chip(t.color,t.fondo)}>{t.icon} {t.label}</span>
+      <span style={{fontSize:13,color:'var(--dim)',fontWeight:600}}>{fechaLarga(ev.fecha)}{ev.hora?` · ${ev.hora}`:''}</span>
+    </div>}
+    {ev.pendiente&&<div style={{...HS.chip('var(--yellow)','var(--ybg)'),marginTop:6}}>⏳ Todavía no sube al Sheet</div>}
+    {cuerpo}
+    <div style={{display:'flex',flexWrap:'wrap',gap:'2px 14px',fontSize:12,color:'var(--dim)',marginTop:12,paddingTop:8,borderTop:'1px dashed var(--border)'}}>
+      <span>Registró: <b style={{color:'var(--text)'}}>{ev.autor||'—'}</b>{rol?` · ${rol}`:''}</span>
+      {capt&&<span>{ev.desdeSheet?'Recibido en el Sheet':'Capturado'}: {fmt(ymdLocal(capt))} {dos(capt.getHours())}:{dos(capt.getMinutes())}</span>}
+      <span>Folio: {ev.id}</span>
+    </div>
+  </div>;
+}
+
+// Renglón corto de la lista: tipo, de qué trata y la hora. Al tocarlo se abre el detalle.
+function RenglonHistorial({ev,vendedor,abierto,onToggle,mostrarFecha,mostrarAutor,children}){
+  const t=TIPOS_HIST[ev.tipo],tono=tonoDe(ev.r,vendedor);
+  return <div style={{background:'var(--card)',border:'1px solid var(--border)',borderLeft:`4px solid ${tono?STATUS[tono].border:t.color}`,borderRadius:10,marginBottom:6,overflow:'hidden'}}>
+    <button onClick={onToggle} aria-expanded={abierto}
+      style={{display:'flex',alignItems:'center',gap:10,width:'100%',padding:'10px 12px',background:abierto?'var(--bg)':'transparent',border:'none',textAlign:'left',cursor:'pointer',color:'var(--text)'}}>
+      <span style={{flexShrink:0,width:36,height:36,borderRadius:'50%',background:t.fondo,display:'flex',alignItems:'center',justifyContent:'center',fontSize:18}}>{t.icon}</span>
+      <span style={{flex:1,minWidth:0}}>
+        <span style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
+          <span style={{fontSize:14,fontWeight:700}}>{t.label}</span>
+          {ev.pendiente&&<span style={HS.chip('var(--yellow)','var(--ybg)')}>⏳ Pendiente</span>}
+        </span>
+        <span style={{display:'block',fontSize:13,color:'var(--dim)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{resumenDe(ev.r,vendedor)}</span>
+        {mostrarAutor&&ev.autor&&<span style={{display:'block',fontSize:12,color:'var(--dim)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>por {nombreCorto(ev.autor)}</span>}
+      </span>
+      <span style={{flexShrink:0,textAlign:'right'}}>
+        <span style={{display:'block',fontSize:13,fontWeight:700}}>{mostrarFecha?fechaCorta(ev.fecha):(ev.hora||'')}</span>
+        {mostrarFecha&&ev.hora&&<span style={{display:'block',fontSize:12,color:'var(--dim)'}}>{ev.hora}</span>}
+      </span>
+      {tono&&ev.tipo!=='semaforo'&&<span style={{flexShrink:0,fontSize:12}}>{SEM_EMOJI[tono]}</span>}
+      <span style={{flexShrink:0,color:'var(--dim)',fontSize:18,lineHeight:1,transform:abierto?'rotate(90deg)':'none',transition:'transform .15s'}}>›</span>
+    </button>
+    {abierto&&<div style={{padding:'0 12px 12px',borderTop:'1px solid var(--border)'}}>{children}</div>}
+  </div>;
+}
+
+function EncabezadoGrupo({g,agrupar,onPersona}){
+  const vendedor=agrupar==='vendedor'&&g.clave.startsWith('v:')?g.titulo:'';
+  const coach=agrupar==='coach'&&g.clave.startsWith('c:')?g.titulo:'';
+  const r=resumirEventos(g.eventos,vendedor);
+  const partes=[];
+  if(vendedor){
+    if(r.ausencias)partes.push(`🚫 ${r.ausencias}`);
+    if(r.fueraRuta)partes.push(`🧭 ${r.fueraRuta}`);
+    if(r.porTipo.permiso)partes.push(`📋 ${r.porTipo.permiso}`);
+    if(r.porTipo.feedback)partes.push(`💬 ${r.porTipo.feedback}`);
+    if(r.cierre.dias)partes.push(`🌙 ${r.cierre.inst} inst`);
+  }else ORDEN_TIPOS_HIST.forEach(tp=>{if(r.porTipo[tp])partes.push(`${TIPOS_HIST[tp].icon} ${r.porTipo[tp]}`);});
+  const accion=vendedor?{txt:'Expediente ›',val:'sujeto:'+vendedor}:coach?{txt:'Actividad ›',val:'autor:'+coach}:null;
+  return <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-end',gap:8,padding:'2px 4px 6px',borderBottom:'2px solid var(--border)',marginBottom:8}}>
+    <div style={{minWidth:0}}>
+      <div style={{fontSize:15,fontWeight:800}}>{g.titulo}</div>
+      <div style={{fontSize:12,color:'var(--dim)'}}>{g.eventos.length} registro{g.eventos.length!==1?'s':''}{partes.length?' · '+partes.join('   '):''}</div>
+    </div>
+    {accion&&onPersona&&<button onClick={()=>onPersona(accion.val)} style={{background:'none',border:'none',color:'var(--accent)',fontWeight:700,fontSize:13,cursor:'pointer',whiteSpace:'nowrap',padding:'4px 0'}}>{accion.txt}</button>}
+  </div>;
+}
+
+// Contadores del periodo. Cada cuadro, al tocarlo, filtra la lista a ese tipo (y al volver a
+// tocarlo se quita el filtro). Con `vendedor` es el resumen de su expediente.
+function ResumenHistorial({res,vendedor,tipoActivo,onTipo,imprimir}){
+  const pt=tp=>res.porTipo[tp]||0;
+  const c=(tipo,icon,valor,label,color)=>({tipo,icon,valor,label,color});
+  const chips=(vendedor
+    ?[c('arranque','🚫',res.ausencias,'Ausencias',res.ausencias?'var(--red)':null),
+      res.fueraRuta?c('arranque','🧭',res.fueraRuta,'Fuera de ruta'):null,
+      c('permiso','📋',pt('permiso'),'Permisos'),
+      c('feedback','💬',pt('feedback'),'Hallazgos'),
+      c('cierre','🌙',res.cierre.dias,'Cierres con actividad')]
+    :[c('arranque','☀️',pt('arranque'),'Arranques'),
+      c('cierre','🌙',pt('cierre'),'Cierres'),
+      c('arranque','🚫',res.ausencias,'Ausencias',res.ausencias?'var(--red)':null),
+      res.fueraRuta?c('arranque','🧭',res.fueraRuta,'Fuera de ruta'):null,
+      c('permiso','📋',pt('permiso'),'Permisos'),
+      c('feedback','💬',pt('feedback'),'Hallazgos'),
+      pt('semaforo')?c('semaforo','🚦',pt('semaforo'),'Semáforos'):null,
+      pt('plan')?c('plan','📊',pt('plan'),'Planes'):null,
+      pt('plan_resultado')?c('plan_resultado','🏁',pt('plan_resultado'),'Resultados de plan'):null]
+  ).filter(Boolean);
+  const motivos=Object.entries(res.motivos).sort((a,b)=>b[1]-a[1]);
+  const colores=['rojo','amarillo','verde'].filter(k=>res.colores[k]);
+  const interactivo=!imprimir&&!!onTipo;
+  const extras=motivos.length>0||colores.length>0||(vendedor&&res.cierre.dias>0)||(vendedor&&res.semaforo)||(!imprimir&&res.pendientes>0);
   return <div>
-    <Card title="📁 Historial">
-      <div style={{display:'flex',gap:6,marginBottom:10}}>
-        <button onClick={()=>setVista('dispositivo')} style={{flex:1,padding:'8px 10px',borderRadius:8,border:'1.5px solid var(--border)',background:vista==='dispositivo'?'var(--accent)':'var(--card)',color:vista==='dispositivo'?'#fff':'var(--dim)',fontWeight:700,fontSize:13,cursor:'pointer'}}>{enVista?'📄 Sus registros':'📱 Este dispositivo'}</button>
-        <button onClick={()=>setVista('equipo')} style={{flex:1,padding:'8px 10px',borderRadius:8,border:'1.5px solid var(--border)',background:vista==='equipo'?'var(--accent)':'var(--card)',color:vista==='equipo'?'#fff':'var(--dim)',fontWeight:700,fontSize:13,cursor:'pointer'}}>👥 Equipo</button>
+    <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(100px,1fr))',gap:6}}>
+      {chips.map((ch,i)=>{
+        const activo=interactivo&&tipoActivo===ch.tipo;
+        // En columna y separados: si una etiqueta baja a dos líneas, los números siguen alineados abajo.
+        const estilo={display:'flex',flexDirection:'column',justifyContent:'space-between',gap:2,textAlign:'left',padding:'8px 10px',borderRadius:10,border:`1.5px solid ${activo?'var(--accent)':'var(--border)'}`,background:activo?'var(--accent-light)':'var(--bg)',color:'var(--text)',minWidth:0,cursor:interactivo?'pointer':'default'};
+        const contenido=<>
+          <div style={{fontSize:12,color:'var(--dim)',lineHeight:1.25}}>{ch.icon} {ch.label}</div>
+          <div style={{fontSize:22,fontWeight:800,lineHeight:1.15,color:ch.color||'var(--text)'}}>{ch.valor}</div>
+        </>;
+        return interactivo
+          ?<button key={i} onClick={()=>onTipo(ch.tipo)} style={estilo}>{contenido}</button>
+          :<div key={i} style={estilo}>{contenido}</div>;
+      })}
+    </div>
+    {extras&&<div style={{marginTop:10,display:'flex',flexDirection:'column',gap:4,fontSize:13,color:'var(--dim)',lineHeight:1.45}}>
+      {motivos.length>0&&<div><b style={{color:'var(--text)'}}>Ausencias por motivo:</b> {motivos.map(([m,k])=>`${m} ${k}`).join(' · ')}</div>}
+      {colores.length>0&&<div><b style={{color:'var(--text)'}}>Hallazgos por semáforo:</b> {colores.map(k=>`${SEM_EMOJI[k]} ${res.colores[k]}`).join('   ')}</div>}
+      {vendedor&&res.cierre.dias>0&&<div><b style={{color:'var(--text)'}}>Resultados en cierres:</b> {res.cierre.op} op · {res.cierre.val} val · {res.cierre.inst} inst</div>}
+      {vendedor&&res.semaforo&&<div><b style={{color:'var(--text)'}}>Último semáforo del periodo:</b> {SEM_EMOJI[res.semaforo.valor]} {STATUS[res.semaforo.valor].label} ({fmt(res.semaforo.fecha)})</div>}
+      {!imprimir&&res.pendientes>0&&<div style={{color:'var(--yellow)',fontWeight:600}}>⏳ {res.pendientes} registro{res.pendientes!==1?'s':''} de este teléfono todavía no sube{res.pendientes!==1?'n':''} al Sheet</div>}
+    </div>}
+  </div>;
+}
+
+// Informe para Recursos Humanos o auditoría: lo mismo que se ve en pantalla con los filtros puestos,
+// pero con todo abierto y en formato de documento. Se imprime con el diálogo del navegador, que en
+// el celular y en la compu ofrece "Guardar como PDF". Se monta directo en <body> (portal) para que
+// la regla de impresión pueda ocultar la app completa y dejar solo el documento — si viviera dentro
+// de la app, la impresión saldría con páginas en blanco del resto de la pantalla.
+function InformeImprimible({nombreArchivo,alcance,periodo,filtros,generadoPor,res,vendedor,grupos,rolDe,avisos,onCerrar}){
+  useEffect(()=>{
+    // Chrome sugiere el título de la página como nombre del PDF.
+    const previo=document.title;
+    document.title=nombreArchivo;
+    document.body.classList.add('con-informe');
+    return()=>{document.title=previo;document.body.classList.remove('con-informe');};
+  },[nombreArchivo]);
+  const ahora=new Date();
+  const h2={fontSize:16,fontWeight:800,color:'#1e3a8a',margin:'22px 0 10px',paddingBottom:4,borderBottom:'2px solid #dbeafe'};
+  const botonBarra={padding:'8px 14px',borderRadius:8,border:'none',fontSize:14,fontWeight:700,cursor:'pointer',whiteSpace:'nowrap'};
+  return ReactDOM.createPortal(
+    <div className="informe-print-root" style={{position:'fixed',inset:0,zIndex:10000,overflow:'auto',background:'#525659'}}>
+      <div className="no-print" style={{position:'sticky',top:0,zIndex:1,display:'flex',gap:8,justifyContent:'space-between',alignItems:'center',padding:'10px 12px',background:'#323639'}}>
+        <button onClick={onCerrar} style={{...botonBarra,background:'rgba(255,255,255,.15)',color:'#fff'}}>← Volver</button>
+        <button onClick={()=>window.print()} style={{...botonBarra,background:'#fff',color:'#1e40af'}}>🖨️ Imprimir / Guardar PDF</button>
       </div>
-      <div style={{display:'flex',gap:6,marginBottom:10,flexWrap:'wrap'}}>
-        <Select value={filter} onChange={v=>setFilter(v)} options={[{value:'todos',label:'Todos'},{value:'arranque',label:'☀️ Arranque'},{value:'cierre',label:'🌙 Cierre'},{value:'permiso',label:'📋 Permisos'},{value:'plan',label:'📊 Planes'},{value:'plan_resultado',label:'📊 Resultados Plan'},{value:'feedback',label:'💬 Hallazgos'},{value:'semaforo',label:'🚦 Semáforo'}]} style={{flex:1,minWidth:120}}/>
-        <Input type="date" value={dateF} onChange={e=>setDateF(e.target.value)} style={{flex:1,minWidth:120}}/>
-        {dateF&&<Btn variant="ghost" onClick={()=>setDateF('')}>✕</Btn>}
+      <div className="informe-hoja" style={{maxWidth:820,margin:'16px auto 40px',background:'#fff',color:'#1a1d29',padding:'28px 24px',borderRadius:4,boxShadow:'0 2px 14px rgba(0,0,0,.35)'}}>
+        <div style={{borderBottom:'3px solid #1e40af',paddingBottom:12}}>
+          <div style={{fontSize:12,fontWeight:800,letterSpacing:'1.5px',color:'#1e40af'}}>SUPERVISIÓN 2.0 · INFORME DE REGISTROS</div>
+          <h1 style={{fontSize:22,lineHeight:1.25,margin:'6px 0 2px'}}>{alcance}</h1>
+          <div style={{fontSize:15,fontWeight:700}}>{periodo}</div>
+          <div style={{fontSize:12,color:'#6b7086',marginTop:8,lineHeight:1.55}}>
+            {filtros}<br/>
+            Generado por {generadoPor} el {fmt(ymdLocal(ahora))} a las {dos(ahora.getHours())}:{dos(ahora.getMinutes())} · {res.total} registro{res.total!==1?'s':''}
+          </div>
+        </div>
+        <h2 style={h2}>Resumen</h2>
+        <ResumenHistorial res={res} vendedor={vendedor} imprimir/>
+        {/* Con la clase del grupo: el título se va a la hoja siguiente junto con el primer registro,
+            en vez de quedarse solo al pie de la hoja del resumen. */}
+        <h2 className="h-grupo-print" style={h2}>Detalle</h2>
+        {grupos.length===0&&<p style={{fontSize:14,color:'#6b7086'}}>No hay registros para este periodo con los filtros elegidos.</p>}
+        {grupos.map(g=><div key={g.clave}>
+          <div className="h-grupo-print" style={{fontSize:14,fontWeight:800,margin:'16px 0 8px',color:'#1a1d29'}}>
+            {g.titulo} <span style={{fontWeight:400,color:'#6b7086'}}>· {g.eventos.length} registro{g.eventos.length!==1?'s':''}</span>
+          </div>
+          {g.eventos.map(ev=>{
+            const enfoque=ev._vendedor||vendedor;
+            return <FichaRegistro key={g.clave+'|'+ev.id} ev={ev} enfoque={enfoque} rolDe={rolDe} imprimir conEncabezado/>;
+          })}
+        </div>)}
+        {/* Avisos y firmas van juntos y sin partirse: sueltas, las firmas llegaban a quedar solas en
+            la última hoja. */}
+        <div className="h-firmas">
+          <div style={{fontSize:12,color:'#6b7086',marginTop:18,borderTop:'1px solid #e2e4ec',paddingTop:10,lineHeight:1.55}}>
+            {avisos.map((a,i)=><p key={i} style={{margin:'2px 0'}}>{a}</p>)}
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:48,marginTop:40}}>
+            {['Elaboró','Revisó'].map(x=><div key={x} style={{textAlign:'center',fontSize:12,color:'#6b7086'}}>
+              <div style={{borderTop:'1px solid #1a1d29',paddingTop:6}}>{x}</div>
+            </div>)}
+          </div>
+        </div>
       </div>
-      {vista==='dispositivo'?
-        <p style={{fontSize:13,color:'var(--dim)'}}>{recs.length} registro{recs.length!==1?'s':''} · {enVista?`capturados por ${nombreCorto(session.user.nombre)}, leídos del Sheet`:'guardados en este teléfono'}</p>
-      :
-        <p style={{fontSize:13,color:'var(--dim)'}}>{cargandoEquipo?'Cargando…':`${equipoRecsFiltrados.length} registro${equipoRecsFiltrados.length!==1?'s':''} del equipo`} · sincronizados al Sheet, se ven desde cualquier dispositivo.</p>
-      }
+    </div>,
+    document.body);
+}
+
+function HistorialTab({data,session}){
+  const[periodo,setPeriodo]=useState('semana');
+  const[offset,setOffset]=useState(0);
+  const[rango,setRango]=useState({desde:'',hasta:''});
+  const[tipo,setTipo]=useState('todos');
+  const[persona,setPersona]=useState('');
+  const[agrupar,setAgrupar]=useState('dia');
+  const[abiertos,setAbiertos]=useState(()=>new Set());
+  const[verFoto,setVerFoto]=useState(null);
+  const[informe,setInforme]=useState(false);
+  const[recarga,setRecarga]=useState(0);
+  const[sheet,setSheet]=useState({estado:'cargando',registros:[],actualizado:null});
+
+  const user=session?.user||{};
+  const nombresCoach=new Set((session?.coaches||[]).map(c=>c.nombre));
+  const nombresLider=new Set((session?.lideres||[]).map(c=>c.nombre));
+  const tieneEquipoDeCoaches=nombresCoach.size>0;
+  const ROL_LABEL={coach:'Coach',lider:'Líder',director:'Director',gestor:'Gestor CH'};
+  const rolDe=nombre=>!nombre?'':nombre===user.nombre?(ROL_LABEL[session?.role]||''):nombresLider.has(nombre)?'Líder':nombresCoach.has(nombre)?'Coach':'';
+
+  // Las 7 hojas se leen una vez al abrir (y con 🔄). Mientras llegan, ya se ve lo del teléfono.
+  useEffect(()=>{
+    let vivo=true;
+    setSheet(s=>({...s,estado:'cargando'}));
+    Promise.all(Object.entries(HOJA_POR_TIPO).map(([tp,hoja])=>fetchHistorialHoja(hoja,session?.token,session?.verComo).then(res=>({tp,res}))))
+      .then(lista=>{
+        if(!vivo)return;
+        const registros=[];let fallas=0;
+        lista.forEach(({tp,res})=>{
+          if(!res.ok){fallas++;return;}
+          res.registros.forEach(f=>{const r=recordDesdeFila(tp,f);if(r)registros.push(r);});
+        });
+        setSheet({estado:fallas===lista.length?'error':fallas?'parcial':'listo',registros,actualizado:new Date()});
+      });
+    return()=>{vivo=false;};
+  },[session?.token,session?.verComo,recarga]);
+
+  // Lo del Sheet y lo del teléfono, sin repetir: el mismo registro trae el mismo ID en los dos lados.
+  // Si está en ambos gana el del teléfono, que es más completo (el Sheet guarda cuántos presentes
+  // hubo, no quiénes). Del teléfono solo entra lo de esta persona y su gente, por si el celular lo
+  // usó antes alguien más.
+  const eventos=useMemo(()=>{
+    let pendientes=new Set();
+    try{pendientes=new Set(JSON.parse(localStorage.getItem('sv2-pending')||'[]').map(p=>p.id));}catch(e){}
+    const permitidos=new Set([user.nombre,...nombresCoach,...nombresLider].filter(Boolean));
+    const porId=new Map();
+    sheet.registros.forEach(r=>porId.set(r.id,r));
+    (data.records||[]).filter(r=>!r.registradoPor||permitidos.has(r.registradoPor)).forEach(r=>porId.set(r.id,r));
+    return[...porId.values()].map(r=>normalizarEvento(r,pendientes)).filter(Boolean);
+  },[data.records,sheet.registros]);
+
+  const opcionesPersona=useMemo(()=>{
+    const autores=new Set([user.nombre,...nombresCoach,...nombresLider,...eventos.map(e=>e.autor)].filter(Boolean));
+    const vendedores=new Set([...(session?.team||[]).filter(m=>isVendedor(m.posicion)).map(m=>m.nombre),...eventos.flatMap(e=>e.sujetos.map(s=>s.nombre))].filter(Boolean));
+    return[
+      ...[...autores].sort().map(nm=>({value:'autor:'+nm,label:`${nm} · ${nm===user.nombre?'Tú':rolDe(nm)||'Captura'} — actividad`})),
+      ...[...vendedores].sort().map(nm=>({value:'sujeto:'+nm,label:`${nm} · ${rolDe(nm)||'Vendedor'} — expediente`})),
+    ];
+  },[eventos]);
+
+  const per=rangoPeriodo(periodo,offset,rango,new Date());
+  const sep=persona.indexOf(':');
+  const modoPersona=persona?persona.slice(0,sep):'',nombrePersona=persona?persona.slice(sep+1):'';
+  const vendedorFoco=modoPersona==='sujeto'?nombrePersona:'';
+  // El resumen se saca sin el filtro de tipo, para que sus cuadros sigan diciendo cuántos hay de
+  // cada cosa mientras la lista muestra solo el tipo elegido.
+  const base=eventos
+    .filter(e=>e.fecha>=per.desde&&e.fecha<=per.hasta)
+    .filter(e=>!persona||(modoPersona==='autor'?e.autor===nombrePersona:e.sujetos.some(s=>s.nombre===nombrePersona)));
+  const lista=tipo==='todos'?base:base.filter(e=>e.tipo===tipo);
+  const res=resumirEventos(base,vendedorFoco);
+  const grupos=agruparEventos(lista,agrupar,vendedorFoco);
+
+  const alcance=modoPersona==='sujeto'?`Expediente de ${nombrePersona}`
+    :modoPersona==='autor'?`Actividad de ${nombrePersona}`
+    :session?.role==='director'?`Distrito de ${user.nombre||''}`
+    :session?.role==='gestor'?'Coaches y vendedores (Capital Humano)'
+    :`Equipo de ${user.nombre||''}`;
+  const etiquetaAgrupar={dia:'Día',vendedor:'Vendedor',coach:'Coach',tipo:'Tipo'};
+  const opcionesAgrupar=['dia','vendedor',tieneEquipoDeCoaches?'coach':null,'tipo'].filter(Boolean);
+  const irAPersona=val=>{setPersona(val);setAgrupar('dia');setAbiertos(new Set());};
+  const toggle=k=>setAbiertos(prev=>{const s=new Set(prev);s.has(k)?s.delete(k):s.add(k);return s;});
+
+  const estadoFuente=sheet.estado==='cargando'?'Actualizando desde el Sheet…'
+    :sheet.estado==='error'?'⚠️ Sin conexión con el Sheet: solo se ven los registros guardados en este teléfono.'
+    :sheet.estado==='parcial'?'⚠️ Algunas secciones no cargaron del Sheet: la información puede estar incompleta.'
+    :`Actualizado a las ${dos(sheet.actualizado.getHours())}:${dos(sheet.actualizado.getMinutes())} · incluye lo de todo el equipo`;
+  const avisosInforme=[
+    'Fuente: registros de Supervisión 2.0 guardados en el Sheet del distrito. Cada registro lleva su folio para ubicarlo en la hoja.',
+    res.pendientes>0?`${res.pendientes} registro${res.pendientes!==1?'s':''} marcado${res.pendientes!==1?'s':''} como pendiente todavía no llega${res.pendientes!==1?'n':''} al Sheet: se tomaron de este dispositivo.`:'',
+    sheet.estado==='error'?'ATENCIÓN: al generar este informe no hubo conexión con el Sheet. Incluye solo lo guardado en este dispositivo y puede estar incompleto.':'',
+    sheet.estado==='parcial'?'ATENCIÓN: algunas secciones no se pudieron leer del Sheet al generar este informe; puede estar incompleto.':'',
+  ].filter(Boolean);
+  const filtrosTexto=`Periodo: ${per.desde===per.hasta?fmt(per.desde):`${fmt(per.desde)} al ${fmt(per.hasta)}`} · Tipo: ${tipo==='todos'?'Todos':TIPOS_HIST[tipo].label} · Agrupado por: ${etiquetaAgrupar[agrupar]}`;
+
+  const chipBtn=activo=>({padding:'7px 13px',borderRadius:999,border:`1.5px solid ${activo?'var(--accent)':'var(--border)'}`,background:activo?'var(--accent)':'var(--card)',color:activo?'#fff':'var(--text)',fontSize:13,fontWeight:700,cursor:'pointer',whiteSpace:'nowrap'});
+  const botonCuadro=deshabilitado=>({width:38,height:38,borderRadius:8,border:'1.5px solid var(--border)',background:'var(--card)',fontSize:18,lineHeight:1,color:deshabilitado?'var(--border)':'var(--text)',cursor:deshabilitado?'default':'pointer',flexShrink:0});
+  const cargandoSinNada=sheet.estado==='cargando'&&!lista.length;
+
+  return <div>
+    <Card title="📁 Historial" actions={<button onClick={()=>setRecarga(x=>x+1)} title="Actualizar desde el Sheet" style={botonCuadro(false)}>🔄</button>}>
+      <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:8}}>
+        {[['dia','Día'],['semana','Semana'],['mes','Mes'],['rango','Rango']].map(([v,l])=>
+          <button key={v} onClick={()=>{setPeriodo(v);setOffset(0);}} style={chipBtn(periodo===v)}>{l}</button>)}
+      </div>
+      {periodo!=='rango'
+        ?<div style={{display:'flex',alignItems:'center',gap:6,marginBottom:10}}>
+          <button onClick={()=>setOffset(o=>o+1)} style={botonCuadro(false)} aria-label="Periodo anterior">‹</button>
+          <div style={{flex:1,textAlign:'center',fontSize:14,fontWeight:700,lineHeight:1.3}}>{per.etiqueta}</div>
+          <button onClick={()=>setOffset(o=>Math.max(0,o-1))} disabled={offset===0} style={botonCuadro(offset===0)} aria-label="Periodo siguiente">›</button>
+        </div>
+        :<div style={{display:'flex',gap:6,alignItems:'center',marginBottom:10}}>
+          <Input type="date" value={rango.desde} onChange={e=>setRango(r=>({...r,desde:e.target.value}))} style={{flex:1,minWidth:0}}/>
+          <span style={{color:'var(--dim)',fontSize:13}}>al</span>
+          <Input type="date" value={rango.hasta} onChange={e=>setRango(r=>({...r,hasta:e.target.value}))} style={{flex:1,minWidth:0}}/>
+        </div>}
+      <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+        <div style={{flex:'1 1 150px',minWidth:0}}>
+          <Select value={tipo} onChange={setTipo} options={[{value:'todos',label:'Todos los tipos'},...ORDEN_TIPOS_HIST.map(tp=>({value:tp,label:`${TIPOS_HIST[tp].icon} ${TIPOS_HIST[tp].label}`}))]}/>
+        </div>
+        <div style={{flex:'2 1 210px',minWidth:0,display:'flex',gap:6}}>
+          <div style={{flex:1,minWidth:0}}><Autocomplete value={persona} onChange={v=>irAPersona(v)} options={opcionesPersona} placeholder="🔎 Buscar persona…"/></div>
+          {persona&&<button onClick={()=>irAPersona('')} style={botonCuadro(false)} aria-label="Quitar persona">✕</button>}
+        </div>
+      </div>
+      <p style={{fontSize:12,color:sheet.estado==='error'||sheet.estado==='parcial'?'var(--yellow)':'var(--dim)',marginTop:8}}>{estadoFuente}</p>
     </Card>
 
-    {vista==='dispositivo'&&<>
-      {recs.length===0&&<div style={{textAlign:'center',padding:40,color:'var(--dim)'}}>Sin registros.</div>}
-      {recs.map(r=><Card key={r.id} style={{borderLeft:`4px solid ${r.type==='feedback'&&r.semaforo?STATUS[r.semaforo]?.border:'var(--accent)'}`}}>
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
-          <div><span style={{fontWeight:700,fontSize:14}}>{typeL[r.type]||r.type}</span><span style={{marginLeft:8,fontSize:13,color:'var(--dim)'}}>{fmt(r.date)} · {r.time||new Date(r.savedAt).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'})}</span></div>
-          {/* "Eliminar" solo aplica a lo guardado en este teléfono: un registro reconstruido del
-              Sheet (vista prestada) no es de aquí y borrarlo no significaría nada. */}
-          {!r.desdeSheet&&<Btn variant="ghost" onClick={()=>del(r.id)} style={{color:'var(--red)',fontSize:13}}>Eliminar</Btn>}
-        </div>
-        {detail(r)}
-        {r.registradoPor&&<p style={{fontSize:13,color:'var(--dim)',marginTop:6,borderTop:'1px solid var(--border)',paddingTop:4}}>Registrado por: {r.registradoPor}</p>}
-      </Card>)}
-    </>}
+    <Card>
+      <div style={{fontSize:12,fontWeight:700,color:'var(--dim)',textTransform:'uppercase',letterSpacing:'.6px'}}>{per.etiqueta}</div>
+      <div style={{fontSize:17,fontWeight:800,lineHeight:1.3,margin:'2px 0 12px'}}>{alcance}</div>
+      <ResumenHistorial res={res} vendedor={vendedorFoco} tipoActivo={tipo} onTipo={tp=>setTipo(tipo===tp?'todos':tp)}/>
+    </Card>
 
-    {vista==='equipo'&&<>
-      {cargandoEquipo&&<div style={{textAlign:'center',padding:30}}><Spinner/></div>}
-      {!cargandoEquipo&&equipoRecsFiltrados.length===0&&<div style={{textAlign:'center',padding:40,color:'var(--dim)'}}>Sin registros del equipo todavía.</div>}
-      {!cargandoEquipo&&equipoRecsFiltrados.map((r,i)=><Card key={(r.ID||i)+'_'+r._tipo} style={{borderLeft:`4px solid ${r._tipo==='feedback'&&r['Semáforo']?STATUS[r['Semáforo']]?.border:'var(--accent)'}`}}>
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
-          <span style={{fontWeight:700,fontSize:14}}>{typeL[r._tipo]||r._tipo}</span>
-          <span style={{fontSize:13,color:'var(--dim)'}}>{fmt(r['Fecha'])}{r['Hora']?' · '+r['Hora']:''}</span>
-        </div>
-        {detailEquipo(r._tipo,r)}
-        <p style={{fontSize:13,color:'var(--dim)',marginTop:6,borderTop:'1px solid var(--border)',paddingTop:4}}>Registrado por: {r['Registrado por']}{r['Rol']?` (${r['Rol']})`:''}</p>
-      </Card>)}
-    </>}
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap',margin:'0 2px 10px'}}>
+      <div style={{display:'flex',gap:5,alignItems:'center',flexWrap:'wrap'}}>
+        <span style={{fontSize:13,color:'var(--dim)',fontWeight:600}}>Agrupar:</span>
+        {opcionesAgrupar.map(v=><button key={v} onClick={()=>{setAgrupar(v);setAbiertos(new Set());}} style={chipBtn(agrupar===v)}>{etiquetaAgrupar[v]}</button>)}
+      </div>
+      <Btn onClick={()=>setInforme(true)} variant="secondary" style={{fontSize:14,padding:'8px 12px'}}>🖨️ Informe PDF</Btn>
+    </div>
+
+    {cargandoSinNada&&<div style={{textAlign:'center',padding:30}}><Spinner/></div>}
+    {!cargandoSinNada&&grupos.length===0&&<div style={{textAlign:'center',padding:'36px 16px',color:'var(--dim)',fontSize:14}}>
+      No hay registros {persona||tipo!=='todos'?'con estos filtros ':''}en este periodo.
+    </div>}
+    {grupos.map(g=><div key={g.clave} style={{marginBottom:16}}>
+      <EncabezadoGrupo g={g} agrupar={agrupar} onPersona={irAPersona}/>
+      {g.eventos.map(ev=>{
+        const k=g.clave+'|'+ev.id,abierto=abiertos.has(k),vend=ev._vendedor||vendedorFoco;
+        return <RenglonHistorial key={k} ev={ev} vendedor={vend} abierto={abierto} onToggle={()=>toggle(k)}
+          mostrarFecha={agrupar!=='dia'} mostrarAutor={tieneEquipoDeCoaches&&agrupar!=='coach'&&modoPersona!=='autor'}>
+          <FichaRegistro ev={ev} resaltar={vend} onVerFoto={setVerFoto} rolDe={rolDe}/>
+        </RenglonHistorial>;
+      })}
+    </div>)}
+
+    {informe&&<InformeImprimible
+      nombreArchivo={`Informe ${alcance} ${per.desde}${per.hasta!==per.desde?' a '+per.hasta:''}`}
+      alcance={alcance} periodo={per.etiqueta} filtros={filtrosTexto}
+      generadoPor={`${user.nombre||''}${rolDe(user.nombre)?` (${rolDe(user.nombre)})`:''}`}
+      res={res} vendedor={vendedorFoco} grupos={grupos} rolDe={rolDe} avisos={avisosInforme}
+      onCerrar={()=>setInforme(false)}/>}
 
     {verFoto&&<div onClick={()=>setVerFoto(null)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,.9)',zIndex:9999,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}>
       <img src={verFoto} alt="" style={{maxWidth:'100%',maxHeight:'100%',objectFit:'contain',borderRadius:8}}/>
@@ -3536,14 +4154,8 @@ function HistorialTab({data,setData,toast,session}){
 // REPORTE (respaldo legible, para reemplazar el JSON crudo)
 // ═══════════════════════════════════════
 const escapeHtml=s=>String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-const REPORTE_TIPOS={
-  arranque:{icon:'☀️',label:'Arranque',color:'#ca8a04'},
-  cierre:{icon:'🌙',label:'Cierre',color:'#1e40af'},
-  permiso:{icon:'📋',label:'Permiso',color:'#7c3aed'},
-  plan:{icon:'📊',label:'Plan',color:'#16a34a'},
-  plan_resultado:{icon:'📊',label:'Resultado Plan',color:'#16a34a'},
-  feedback:{icon:'💬',label:'Hallazgo',color:'#dc2626'},
-};
+// Mismos iconos y colores que el Historial, para que el respaldo descargable se vea igual.
+const REPORTE_TIPOS=TIPOS_HIST;
 function reporteDetalleHTML(r){
   switch(r.type){
     case'arranque':
