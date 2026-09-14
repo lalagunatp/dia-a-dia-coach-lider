@@ -492,6 +492,16 @@ function startOfMonth(date){const d=new Date(date.getFullYear(),date.getMonth(),
 function endOfMonth(date){const d=new Date(date.getFullYear(),date.getMonth()+1,0);d.setHours(23,59,59,999);return d;}
 function enRango(fecha,inicio,fin){return fecha&&fecha>=inicio&&fecha<=fin;}
 const fmtDateObj=d=>d?`${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`:'';
+// "7 – 13 Sep", o "31 Ago – 6 Sep" si la semana cruza de mes; el año solo si no es `anioRef`.
+function etiquetaSemana(ini,fin,anioRef){
+  const i=ini.getMonth()===fin.getMonth()?`${ini.getDate()}`:`${ini.getDate()} ${MESES[ini.getMonth()]}`;
+  const anio=fin.getFullYear()!==anioRef?` ${fin.getFullYear()}`:'';
+  return `${i} – ${fin.getDate()} ${MESES[fin.getMonth()]}${anio}`;
+}
+function etiquetaMes(ini,anioRef){
+  const anio=ini.getFullYear()!==anioRef?` ${ini.getFullYear()}`:'';
+  return `${MESES_LARGO[ini.getMonth()]}${anio}`;
+}
 // yyyy-mm-dd en hora LOCAL (a diferencia de toISOString, que es UTC y puede recorrer la fecha un día).
 const ymdLocal=d=>d?`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`:'';
 const fmtMoney=n=>'$'+Number(n||0).toLocaleString('es-MX',{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -2421,7 +2431,7 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
   }
 
   // ── Ventas del equipo: semana/mes en curso, rechazos, asignaciones y cuentas sin pagar ──
-  const semanaIni=startOfWeek(now),semanaFin=endOfWeek(now);
+  const semanaIni=startOfWeek(now);
   // Las dos semanas de pago que se comparan: las dos ya cerradas antes de la que corre. La semana
   // viva nunca entra, porque su comisión se paga hasta la siguiente. Si hoy es la 37, se comparan
   // la 36 contra la 35. Las fechas son esas mismas semanas, solo para mostrarlas en pantalla.
@@ -2439,7 +2449,6 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
   const semanaPasadaFin=endOfWeek(semanaPasadaIni);
   const semanaAntepasadaIni=(()=>{const d=new Date(semanaIni);d.setDate(d.getDate()-14);return d;})();
   const semanaAntepasadaFin=endOfWeek(semanaAntepasadaIni);
-  const mesIni=startOfMonth(now),mesFin=endOfMonth(now);
   const[periodoVentas,setPeriodoVentas]=useState('semana');
   // offsetVentas: 0 = periodo actual, 1 = el anterior, 2 = dos atrás... permite hojear semanas/meses previos
   // sin perder el resto de las tarjetas (sin pagar, pendientes), que siempre reflejan el estado de "hoy".
@@ -2458,16 +2467,19 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
     return d;
   })();
   const[rangoIni,rangoFin]=periodoVentas==='semana'?[startOfWeek(fechaRefVentas),endOfWeek(fechaRefVentas)]:[startOfMonth(fechaRefVentas),endOfMonth(fechaRefVentas)];
-  const labelPeriodoVentas=(()=>{
-    if(periodoVentas==='semana'){
-      const mismoMes=rangoIni.getMonth()===rangoFin.getMonth();
-      const ini=mismoMes?`${rangoIni.getDate()}`:`${rangoIni.getDate()} ${MESES[rangoIni.getMonth()]}`;
-      const anio=rangoFin.getFullYear()!==anioActual?` ${rangoFin.getFullYear()}`:'';
-      return `${ini} – ${rangoFin.getDate()} ${MESES[rangoFin.getMonth()]}${anio}`;
-    }
-    const anio=rangoIni.getFullYear()!==anioActual?` ${rangoIni.getFullYear()}`:'';
-    return `${MESES_LARGO[rangoIni.getMonth()]}${anio}`;
-  })();
+  const labelPeriodoVentas=periodoVentas==='semana'?etiquetaSemana(rangoIni,rangoFin,anioActual):etiquetaMes(rangoIni,anioActual);
+  // La lista del Equipo (ficha de cada vendedor y renglón de cada coach) sigue el periodo elegido
+  // aquí: si arriba se ve la semana del 7 al 13, su renglón "Semana" es esa semana y no la que corre
+  // hoy. Sus dos renglones, semana y mes, salen del mismo día: el último del periodo elegido, o hoy
+  // si ese periodo todavía no termina. Con una semana pasada, el mes es el de su domingo; con un mes
+  // pasado, la semana es la de su último día.
+  const refEquipo=rangoFin<now?rangoFin:now;
+  const semEqIni=startOfWeek(refEquipo),semEqFin=endOfWeek(refEquipo);
+  const mesEqIni=startOfMonth(refEquipo),mesEqFin=endOfMonth(refEquipo);
+  const labelSemEq=etiquetaSemana(semEqIni,semEqFin,anioActual);
+  const labelMesEq=etiquetaMes(mesEqIni,anioActual);
+  const semEqEsActual=semEqIni.getTime()===semanaIni.getTime();
+  const mesEqEsActual=mesEqIni.getMonth()===mesActual&&mesEqIni.getFullYear()===anioActual;
   const ventasTotal={oportunidades:0,validadas:0,instaladas:0};
   let metaInstalTotal=0;
   const rechazosMotivos={};let rechazosTotalN=0; // motivo -> [{nombre,oportunidad,cuenta}]
@@ -2745,20 +2757,20 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
           📚 Cursos faltantes: {m.certFaltantes.join(', ')}
         </div>
       }
-      {/* Ventas: semana/mes en curso, meta y cuentas sin pagar */}
+      {/* Ventas: semana/mes del periodo elegido en "Ventas del equipo" (ver refEquipo) y meta */}
       {(()=>{
-        const fSem=funnelPeriodo(m.ventas,semanaIni,semanaFin);
-        const fMes=funnelPeriodo(m.ventas,mesIni,mesFin);
-        const arpuSem=arpuPromedioPeriodo(m.ventas,semanaIni,semanaFin);
-        const arpuMes=arpuPromedioPeriodo(m.ventas,mesIni,mesFin);
+        const fSem=funnelPeriodo(m.ventas,semEqIni,semEqFin);
+        const fMes=funnelPeriodo(m.ventas,mesEqIni,mesEqFin);
+        const arpuSem=arpuPromedioPeriodo(m.ventas,semEqIni,semEqFin);
+        const arpuMes=arpuPromedioPeriodo(m.ventas,mesEqIni,mesEqFin);
         const meta=metaMensual(m.badge);
         const sinPagar=cuentasSinPagar(m.cuentasCom,now);
         if(!m.ventas?.length&&!sinPagar.length)return null;
         return <div style={{padding:'6px 8px',background:'var(--card)',borderRadius:6,marginBottom:6}}>
           <div style={{fontSize:13,fontWeight:700,color:'var(--dim)',marginBottom:3}}>🛒 Ventas</div>
-          <div style={{display:'flex',justifyContent:'space-between'}}><span>Semana:</span><span>{fSem.oportunidades} op · {fSem.validadas} val · {fSem.instaladas} inst{arpuSem>0?` · ARPU ${fmtMoney(arpuSem)}`:''}</span></div>
-          <div style={{display:'flex',justifyContent:'space-between'}}><span>Mes:</span><span>{fMes.oportunidades} op · {fMes.validadas} val · {fMes.instaladas} inst{arpuMes>0?` · ARPU ${fmtMoney(arpuMes)}`:''}</span></div>
-          {meta>0&&<div style={{display:'flex',justifyContent:'space-between'}}><span>Meta del mes:</span><b>{fMes.instaladas}/{meta}</b></div>}
+          <div style={{display:'flex',justifyContent:'space-between',gap:8}}><span>Semana ({labelSemEq}):</span><span style={{textAlign:'right'}}>{fSem.oportunidades} op · {fSem.validadas} val · {fSem.instaladas} inst{arpuSem>0?` · ARPU ${fmtMoney(arpuSem)}`:''}</span></div>
+          <div style={{display:'flex',justifyContent:'space-between',gap:8}}><span>Mes ({labelMesEq}):</span><span style={{textAlign:'right'}}>{fMes.oportunidades} op · {fMes.validadas} val · {fMes.instaladas} inst{arpuMes>0?` · ARPU ${fmtMoney(arpuMes)}`:''}</span></div>
+          {meta>0&&<div style={{display:'flex',justifyContent:'space-between',gap:8}}><span>Meta del mes:</span><b>{fMes.instaladas}/{meta}</b></div>}
         </div>;
       })()}
       {/* Validadas en los últimos 30 días que todavía no se instalan */}
@@ -2870,10 +2882,10 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
             {m.mesesEnRanking>0&&<span> · {m.mesesEnRanking}m en nivel</span>}
           </div>}
           {metaMensual(m.badge)>0&&<div style={{fontSize:13,color:'var(--dim)',marginTop:2,lineHeight:1.4}}>
-            🎯 {funnelPeriodo(m.ventas,mesIni,mesFin).instaladas}/{metaMensual(m.badge)} inst. del mes
+            🎯 {funnelPeriodo(m.ventas,mesEqIni,mesEqFin).instaladas}/{metaMensual(m.badge)} inst. {mesEqEsActual?'del mes':`de ${labelMesEq}`}
           </div>}
           {metaSemanal(m.badge)>0&&<div style={{fontSize:13,color:'var(--dim)',marginTop:2,lineHeight:1.4}}>
-            🎯 {funnelPeriodo(m.ventas,semanaIni,semanaFin).instaladas}/{metaSemanal(m.badge)} inst. de la semana
+            🎯 {funnelPeriodo(m.ventas,semEqIni,semEqFin).instaladas}/{metaSemanal(m.badge)} inst. {semEqEsActual?'de la semana':`del ${labelSemEq}`}
           </div>}
           {m.rankingMen?.ventaSana&&<div style={{fontSize:13,color:'var(--dim)',marginTop:2,lineHeight:1.4}}>
             % Venta sana ({m.rankingMen.ventaSana.mes}): <b>{m.rankingMen.ventaSana.valor}</b>
@@ -3422,8 +3434,8 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
             // todos los vendedores del coach.
             let opSemana=0,valSemana=0,instSemana=0,opMes=0,valMes=0,instMes=0,metaMesCoach=0;
             vendCoach.forEach(m=>{
-              const fSem=funnelPeriodo(m.ventas,semanaIni,semanaFin);
-              const fMes=funnelPeriodo(m.ventas,mesIni,mesFin);
+              const fSem=funnelPeriodo(m.ventas,semEqIni,semEqFin);
+              const fMes=funnelPeriodo(m.ventas,mesEqIni,mesEqFin);
               opSemana+=fSem.oportunidades;valSemana+=fSem.validadas;instSemana+=fSem.instaladas;
               opMes+=fMes.oportunidades;valMes+=fMes.validadas;instMes+=fMes.instaladas;
               metaMesCoach+=metaMensual(m.badge);
@@ -3441,8 +3453,8 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
                   {/* El director ve coaches de varios líderes juntos: sin esto no se sabe de quién es cuál. */}
                   {esDirector&&c.reportaA&&<div style={{fontSize:12,color:'var(--accent)',fontWeight:600,marginTop:1}}>⭐ {nombreCorto(c.reportaA)}</div>}
                   <div style={{fontSize:12,color:'var(--dim)',marginTop:1}}>{vendCoach.length} vendedor{vendCoach.length!==1?'es':''} · 🟢{v} 🟡{a} 🔴{r} ⚪{sinEv2}</div>
-                  <div style={{fontSize:12,color:'var(--dim)',marginTop:2}}>Semana: {opSemana} op · {valSemana} val · {instSemana} inst</div>
-                  <div style={{fontSize:12,color:'var(--dim)',marginTop:1}}>Mes: {opMes} op · {valMes} val · {instMes} inst</div>
+                  <div style={{fontSize:12,color:'var(--dim)',marginTop:2}}>Semana ({labelSemEq}): {opSemana} op · {valSemana} val · {instSemana} inst</div>
+                  <div style={{fontSize:12,color:'var(--dim)',marginTop:1}}>Mes ({labelMesEq}): {opMes} op · {valMes} val · {instMes} inst</div>
                   {metaMesCoach>0&&<div style={{fontSize:12,color:'var(--dim)',marginTop:1}}>🎯 Meta del mes: <b>{instMes}/{metaMesCoach}</b></div>}
                 </div>
                 <span style={{fontSize:13,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
