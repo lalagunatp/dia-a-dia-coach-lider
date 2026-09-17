@@ -82,11 +82,12 @@
 // jerarquía real del usuario, igual que el historial — así "BASE LA LAGUNA 2026" ya
 // puede restringirse a solo esta cuenta (Ejecutar como) sin romper nada en la app.
 //
-// VISTA PRESTADA DEL DIRECTOR: las 4 lecturas con token (perfil/historial/ventas/ranking)
-// aceptan además ?verComo=<numEmp> para responder como si quien preguntara fuera esa
-// persona — solo si el dueño del token es Director Distrital y el objetivo es uno de sus
-// líderes o un coach de esos líderes (ver resolverUsuarioVista). doPost NO lo acepta: lo
-// que se guarde siempre queda a nombre del dueño del token, nunca del suplantado.
+// VISTA PRESTADA: las 4 lecturas con token (perfil/historial/ventas/ranking) aceptan
+// además ?verComo=<numEmp> para responder como si quien preguntara fuera esa persona —
+// solo si el objetivo cuelga del dueño del token: para un Director Distrital, uno de sus
+// líderes o un coach de esos líderes; para un Líder de Ventas, uno de sus coaches (ver
+// resolverUsuarioVista). doPost NO lo acepta: lo que se guarde siempre queda a nombre del
+// dueño del token, nunca del suplantado.
 //
 // ══════════════════════════════════════════════════════════════
 
@@ -157,14 +158,22 @@ function construirEquipo(user, allEmployees) {
   return { team: team, coaches: coaches, lideres: lideres, role: role };
 }
 
-// ─── Vista prestada del Director ("ver como") ───
+// ─── Vista prestada ("ver como") ───
 // El Director Distrital puede abrir la app tal como la ve uno de SUS líderes, o uno de los
-// coaches de esos líderes. Es solo de consulta: doPost sigue registrando siempre a nombre del
-// dueño del token (nunca del suplantado), así que ?verComo solo afecta a las lecturas.
+// coaches de esos líderes; el Líder de Ventas, la de uno de SUS coaches. En los dos casos el
+// último nivel es un coach: abajo ya solo hay vendedores, que no entran a la app.
+// Es solo de consulta: doPost sigue registrando siempre a nombre del dueño del token (nunca del
+// suplantado), así que ?verComo solo afecta a las lecturas.
 // A quién puede ver se decide SIEMPRE aquí: si esta validación viviera en el cliente, cualquiera
 // podría pedir el equipo/historial/ventas de otra persona con solo mandar su número de empleado.
+// Cada quien solo alcanza a los suyos — se recorre la jerarquía hacia abajo desde el dueño del
+// token, así que un líder nunca puede pedir la vista de un coach de otro líder.
 function objetivosVistaPermitidos(user, activos) {
-  if (getRoleType(user.posicion) !== 'director') return [];
+  const rol = getRoleType(user.posicion);
+  if (rol === 'lider') {
+    return activos.filter(function (e) { return e.reportaA === user.nombre && isCoachPos(e.posicion); });
+  }
+  if (rol !== 'director') return [];
   const lideres = activos.filter(function (e) { return e.reportaA === user.nombre && isLiderPos(e.posicion); });
   const liderNames = lideres.map(function (l) { return l.nombre; });
   const coaches = activos.filter(function (e) { return liderNames.indexOf(e.reportaA) !== -1 && isCoachPos(e.posicion); });
@@ -172,7 +181,7 @@ function objetivosVistaPermitidos(user, activos) {
 }
 
 // Resuelve de quién hay que construir el equipo en una lectura: el dueño del token, o el
-// líder/coach que el director pidió ver con ?verComo=<numEmp>. Regresa {user} o {error}.
+// líder/coach que se pidió ver con ?verComo=<numEmp>. Regresa {user} o {error}.
 function resolverUsuarioVista(params, all) {
   const numEmp = verificarToken(params && params.token);
   if (!numEmp) return { error: 'Sesión inválida o expirada, vuelve a iniciar sesión' };
@@ -322,7 +331,7 @@ function iniciarSesion(params) {
 
 // accion=perfil: como iniciarSesion pero autenticado con el token (no con el PIN) —
 // lo usa el botón "Actualizar información" para refrescar team/coaches sin volver a
-// pedir el PIN, y el Director para abrir la vista de un líder/coach suyo (?verComo).
+// pedir el PIN, y el Director/Líder para abrir la vista de un líder/coach suyo (?verComo).
 function refrescarPerfil(params) {
   try {
     const all = leerRosterCompleto();
