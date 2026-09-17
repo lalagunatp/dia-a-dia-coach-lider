@@ -309,10 +309,11 @@ async function retryPending(toast,setData){
   try{localStorage.setItem('sv2-pending',JSON.stringify(still));}catch(e){console.error('No se pudo actualizar la cola de pendientes:',e);}
   if(still.length===0&&pending.length>0)toast?.('✅ Registros pendientes sincronizados');
 }
-// Cuando el Director está viendo la app "como" uno de sus líderes/coaches, todas las lecturas
-// llevan además ?verComo=<numEmp> — el servidor valida ahí que ese objetivo sea suyo y responde
-// como si preguntara esa persona (ver apps-script.gs: resolverUsuarioVista). Sin él, se lee
-// normal, como el dueño del token.
+// Cuando alguien está viendo la app "como" otra persona de su equipo (el Director, uno de sus
+// líderes o un coach de ellos; el Líder, uno de sus coaches), todas las lecturas llevan además
+// ?verComo=<numEmp> — el servidor valida ahí que ese objetivo sea suyo y responde como si
+// preguntara esa persona (ver apps-script.gs: resolverUsuarioVista). Sin él, se lee normal, como
+// el dueño del token.
 const qsVerComo=verComo=>verComo?`&verComo=${encodeURIComponent(verComo)}`:'';
 
 // Historial del equipo leído del Sheet del Director (no solo lo capturado en este teléfono).
@@ -343,7 +344,7 @@ function parseFotosAusentes(txt){
 
 // ═══ REGISTROS DEL SHEET → FORMA LOCAL ═══
 // Todo lo que se captura se guarda en el teléfono de quien lo capturó Y se manda al Sheet
-// (saveAndSync). En la vista prestada del director no hay nada local de esa persona, así que sus
+// (saveAndSync). En una vista prestada no hay nada local de esa persona, así que sus
 // registros se reconstruyen desde el Sheet: es la misma información que escribió buildRow
 // (apps-script.gs), leída de vuelta al shape que usan Dashboard/Plan/Arranque/Cierre/Historial,
 // para que los contadores, el semáforo, el plan de la semana y el historial se vean completos.
@@ -656,12 +657,13 @@ async function refrescarYPersistirSesion(sesionBase,setSession){
 // viendo datos viejos para siempre sin explicación.
 const esSesionExpirada=e=>/expirada|inválida/i.test(e?.message||'');
 
-// ═══ VISTA PRESTADA DEL DIRECTOR ═══
-// Trae la sesión COMPLETA de uno de sus líderes (o de un coach de ese líder) tal como la vería
-// esa persona: mismo pipeline que un login normal, pero pidiéndole al servidor que responda
-// "como" ese objetivo (?verComo, validado allá). Va marcada `soloLectura` — el director consulta,
-// no captura a nombre de nadie — y NO se guarda en localStorage: lo persistido sigue siendo la
-// sesión del director, para que al reabrir la app entre en su propia vista.
+// ═══ VISTA PRESTADA (Director y Líder) ═══
+// Trae la sesión COMPLETA de alguien de su equipo (para el Director, uno de sus líderes o un
+// coach de ese líder; para el Líder, uno de sus coaches) tal como la vería esa persona: mismo
+// pipeline que un login normal, pero pidiéndole al servidor que responda "como" ese objetivo
+// (?verComo, validado allá). Va marcada `soloLectura` — quien presta la vista consulta, no
+// captura a nombre de nadie — y NO se guarda en localStorage: lo persistido sigue siendo su
+// propia sesión, para que al reabrir la app entre en su propia vista.
 async function cargarVistaComo(tokenBase,objetivo){
   const nuevo=await refrescarDatosSesion(tokenBase,objetivo.numEmp);
   return{...nuevo,token:tokenBase,verComo:objetivo.numEmp,soloLectura:true,loginTime:new Date().toISOString()};
@@ -1037,10 +1039,10 @@ function PanelAcordeon({title,abierto,onToggle,children}){
   </Card>;
 }
 function Select({value,onChange,options,style:s}){return <select value={value} onChange={e=>onChange(e.target.value)} style={{padding:'10px 12px',borderRadius:8,border:'1.5px solid var(--border)',background:'var(--input)',fontSize:15,color:'var(--text)',outline:'none',width:'100%',boxSizing:'border-box',...s}}>{options.map(o=><option key={typeof o==='string'?o:o.value} value={typeof o==='string'?o:o.value}>{typeof o==='string'?o:o.label}</option>)}</select>;}
-// Vista prestada del Director (solo lectura): toma el lugar del botón de guardar en cada
-// pestaña de captura. El director ve exactamente lo que ve el líder/coach, pero el registro
-// tiene que capturarlo esa persona desde su propia sesión — si no, quedaría a nombre de
-// alguien que no estuvo ahí (el servidor tampoco lo permitiría: doPost siempre usa el token).
+// Vista prestada (solo lectura): toma el lugar del botón de guardar en cada pestaña de captura.
+// El director/líder ve exactamente lo que ve el líder/coach, pero el registro tiene que
+// capturarlo esa persona desde su propia sesión — si no, quedaría a nombre de alguien que no
+// estuvo ahí (el servidor tampoco lo permitiría: doPost siempre usa el token).
 function AvisoSoloLectura({nombre}){
   const corto=nombre?nombre.split(' ').slice(0,3).join(' '):'esa persona';
   return <p style={{background:'var(--ybg)',color:'var(--yellow)',fontSize:13,fontWeight:600,textAlign:'center',padding:'10px 12px',borderRadius:8,margin:0}}>
@@ -1423,7 +1425,7 @@ function ArranqueTab({data,setData,team,toast,session,refreshKey}){
   const pendientesPDV=esCoachPDV?team.filter(m=>form.presentes.includes(m.nombre)&&!form.fotosVendedores[m.nombre]):[];
 
   const guardar=async()=>{
-    if(session.soloLectura)return; // vista prestada del director: solo consulta
+    if(session.soloLectura)return; // vista prestada: solo consulta
     if(!form.photo){alert(esLider?'Agrega la foto con el coach prioridad del día para poder guardar el arranque':'Agrega la foto de grupo para poder guardar el arranque');return;}
     if(pendientesPDV.length){alert('Falta resolver a: '+pendientesPDV.map(m=>m.nombre).join(', ')+'. De cada vendedor sube su foto de entrada o márcalo ausente con el motivo (falta, descanso, etc.) para poder guardar el arranque.');return;}
     const rec={id:uid(),type:'arranque',...form,registradoPor:session.user.nombre,rolRegistro:session.role,token:session.token,savedAt:new Date().toISOString()};
@@ -1547,7 +1549,7 @@ function PermisosTab({data,setData,team,toast,session,refreshKey}){
   const totalPermisosMes=permisosPorCoach.reduce((s,x)=>s+x.permisos.length,0);
 
   const guardar=async()=>{
-    if(session.soloLectura)return; // vista prestada del director: solo consulta
+    if(session.soloLectura)return; // vista prestada: solo consulta
     if(!form.vendedor){alert('Selecciona un integrante');return;}
     if(!form.photo){alert('Agrega una foto de evidencia (foto o conversación del motivo) para poder guardar el permiso');return;}
     const rec={id:uid(),type:'permiso',...form,registradoPor:session.user.nombre,token:session.token,savedAt:new Date().toISOString()};
@@ -1638,7 +1640,7 @@ function CierreTab({data,setData,team,toast,session,refreshKey}){
   });
   const updSeguimiento=(nombre,motivo)=>setForm(f=>({...f,seguimiento:f.seguimiento.map(s=>s.name===nombre?{...s,motivo}:s)}));
   const guardar=async()=>{
-    if(session.soloLectura)return; // vista prestada del director: solo consulta
+    if(session.soloLectura)return; // vista prestada: solo consulta
     const rec={id:uid(),type:'cierre',...form,registradoPor:session.user.nombre,token:session.token,savedAt:new Date().toISOString()};
     const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast);toast('✅ Cierre guardado');
     setUltimoGuardado(rec);
@@ -2007,7 +2009,7 @@ function PlanTab({data,setData,team,toast,session,refreshKey}){
   const updObjetivo=(k,v)=>setForm(f=>({...f,objetivos:{...f.objetivos,[k]:v}}));
 
   const guardarPlan=async()=>{
-    if(session.soloLectura)return; // vista prestada del director: solo consulta
+    if(session.soloLectura)return; // vista prestada: solo consulta
     const rec={id:uid(),type:'plan',date:today(),
       semanaInicio:semanaIniStr,semanaFin:semanaFinStr,semanaLabel,
       objetivos:esLider?objetivosEquipo:form.objetivos,
@@ -2036,7 +2038,7 @@ function PlanTab({data,setData,team,toast,session,refreshKey}){
   },[planPendiente?.id]);
 
   const guardarResultado=async()=>{
-    if(session.soloLectura)return; // vista prestada del director: solo consulta
+    if(session.soloLectura)return; // vista prestada: solo consulta
     if(!planPendiente||!resForm)return;
     const rec={id:uid(),type:'plan_resultado',planId:planPendiente.id,date:today(),
       semanaInicio:planPendiente.semanaInicio,semanaFin:planPendiente.semanaFin,semanaLabel:planPendiente.semanaLabel,
@@ -2239,7 +2241,7 @@ function FeedbackTab({data,setData,team,toast,session,refreshKey}){
   },[esLider,refreshKey]);
   const coachesFeedbackHoy=esLider?(session.coaches||[]).map(c=>({coach:c,rows:feedbackEquipo.filter(r=>r['Registrado por']===c.nombre&&r['Fecha']===hoyStr)})):[];
   const guardar=async()=>{
-    if(session.soloLectura)return; // vista prestada del director: solo consulta
+    if(session.soloLectura)return; // vista prestada: solo consulta
     if(!form.vendedor){alert('Selecciona un integrante');return;}
     if(esAcompanamiento&&!form.photo){alert('Agrega una foto (con sello) — es obligatoria para este tipo de hallazgo');return;}
     if(esEvidenciaExterna&&!form.fotos.length){alert('Agrega al menos una foto (persona en campo y conversación del avance) — es obligatoria para este tipo de hallazgo');return;}
@@ -2679,7 +2681,7 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
   const sinEval=vendedores.length-verdes-amarillos-rojos;
   // Marcar el semáforo es un toque: se guarda un registro propio, sin abrir formulario.
   const marcarSemaforo=(nombre,valor)=>{
-    if(session.soloLectura)return; // vista prestada del director: solo consulta
+    if(session.soloLectura)return; // vista prestada: solo consulta
     if(semColor(nombre)===valor)return; // mismo color: no se guarda un registro de más
     const rec={id:uid(),type:'semaforo',date:today(),vendedor:nombre,semaforo:valor,nota:'',
       registradoPor:session.user.nombre,token:session.token,savedAt:new Date().toISOString()};
@@ -2895,7 +2897,7 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
         </div>
         <div style={{display:'flex',alignItems:'center',gap:6}}>
           {/* El botón del semáforo NO abre el detalle del vendedor: stopPropagation, si no, cada
-              intento de marcar terminaría desplegando la ficha. En vista prestada del director no
+              intento de marcar terminaría desplegando la ficha. En vista prestada no
               se puede capturar nada, así que ahí se muestra el color pero sin invitar a tocarlo. */}
           <button onClick={e=>{e.stopPropagation();if(!session.soloLectura)setSemAbierto(abiertoSem?null:m.nombre);}}
             title={session.soloLectura?(sem?STATUS[sem].label:'Sin semáforo'):sem?`${STATUS[sem].label} — toca para cambiar`:'Sin semáforo — toca para marcar'}
@@ -4363,9 +4365,10 @@ ${cuerpo||'<p style="text-align:center;color:#6b7086;padding:40px">Sin registros
 // ═══════════════════════════════════════
 // MAIN APP
 // ═══════════════════════════════════════
-// ═══ VISTA PRESTADA DEL DIRECTOR ═══
-// Hoja para elegir a quién entrar (sus líderes en el primer nivel; los coaches de ese líder
-// en el segundo). Las listas son cortas — no hace falta buscador.
+// ═══ VISTA PRESTADA (Director y Líder) ═══
+// Hoja para elegir a quién entrar (para el director, sus líderes en el primer nivel y los coaches
+// de ese líder en el segundo; para el líder, sus coaches). Las listas son cortas — no hace falta
+// buscador.
 function ModalElegirVista({titulo,opciones,onElegir,onCerrar}){
   return <div onClick={onCerrar} style={{position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,.5)',zIndex:9998,display:'flex',alignItems:'flex-end',justifyContent:'center'}}>
     <div onClick={e=>e.stopPropagation()} style={{background:'var(--card)',width:'100%',maxWidth:600,borderRadius:'16px 16px 0 0',padding:18,maxHeight:'75vh',overflowY:'auto'}}>
@@ -4383,34 +4386,40 @@ function ModalElegirVista({titulo,opciones,onElegir,onCerrar}){
     </div>
   </div>;
 }
-// Barra bajo el encabezado, solo para el Director: entra a la vista de un líder y, desde ahí, a la
-// de uno de sus coaches (nivel 0 = su propia vista, 1 = líder, 2 = coach), y regresa un nivel a la
-// vez. En cada nivel las opciones son `coaches` de la sesión activa: para el director son sus
-// líderes; dentro de la vista de un líder son los coaches de ese líder.
-function BarraVistaDirector({sessionBase,vistas,onAbrir,onRegresar,onSalir,abriendo}){
+// Barra bajo el encabezado, para Director y Líder. El director entra a la vista de un líder y,
+// desde ahí, a la de uno de sus coaches (nivel 0 = su propia vista, 1 = líder, 2 = coach); el
+// líder entra directo a la de uno de sus coaches (nivel 0 = la suya, 1 = coach). Se regresa un
+// nivel a la vez. En los dos casos el último nivel es un coach: abajo ya solo hay vendedores, que
+// no entran a la app — por eso la profundidad máxima es 2 para el director y 1 para el líder.
+function BarraVistaPrestada({sessionBase,vistas,onAbrir,onRegresar,onSalir,abriendo}){
   const[eligiendo,setEligiendo]=useState(false);
+  const esDirector=sessionBase.role==='director';
   const nivel=vistas.length;
   const actual=nivel?vistas[nivel-1]:null;
-  // Nivel 0: los líderes del director (van en `lideres`, aparte de `coaches`, que ahora son
-  // todos los coaches del distrito). Nivel 1: los coaches del líder en el que ya se entró.
-  // El `||sessionBase.coaches` cubre una sesión guardada de antes de que existiera `lideres`.
-  const opciones=(actual?actual.coaches:(sessionBase.lideres&&sessionBase.lideres.length?sessionBase.lideres:sessionBase.coaches))||[];
-  const puedeBajar=nivel<2&&opciones.length>0;
+  // Nivel 0: para el director, sus líderes (van en `lideres`, aparte de `coaches`, que para él son
+  // todos los coaches del distrito); para el líder, sus coaches. Nivel 1 (solo director): los
+  // coaches del líder en el que ya se entró. El `||sessionBase.coaches` cubre una sesión guardada
+  // de antes de que existiera `lideres`.
+  const raiz=esDirector
+    ?(sessionBase.lideres&&sessionBase.lideres.length?sessionBase.lideres:sessionBase.coaches)
+    :sessionBase.coaches;
+  const opciones=(actual?actual.coaches:raiz)||[];
+  const puedeBajar=nivel<(esDirector?2:1)&&opciones.length>0;
   const ruta=vistas.map(v=>nombreCorto(v.user.nombre)).join(' › ');
   const chip={fontSize:13,fontWeight:700,padding:'6px 10px',borderRadius:8,border:'none',cursor:abriendo?'default':'pointer'};
   return <>
     <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap',padding:'8px 14px',background:nivel?'var(--ybg)':'var(--accent-light)',borderBottom:'1px solid var(--border)'}}>
       <span style={{flex:1,minWidth:150,fontSize:13,fontWeight:700,color:nivel?'var(--yellow)':'var(--accent)'}}>
-        {nivel?`👁️ Viendo como ${ruta} · solo consulta`:'👔 Estás en tu vista de director'}
+        {nivel?`👁️ Viendo como ${ruta} · solo consulta`:esDirector?'👔 Estás en tu vista de director':'⭐ Estás en tu vista de líder'}
       </span>
       {puedeBajar&&<button onClick={()=>setEligiendo(true)} disabled={!!abriendo} style={{...chip,background:'var(--accent)',color:'#fff',opacity:abriendo?.6:1}}>
-        {abriendo?'Abriendo…':nivel===0?'👁️ Ver como líder':'👁️ Ver un coach'}
+        {abriendo?'Abriendo…':esDirector&&nivel===0?'👁️ Ver como líder':'👁️ Ver un coach'}
       </button>}
       {nivel>0&&<button onClick={onRegresar} disabled={!!abriendo} style={{...chip,background:'var(--card)',color:'var(--text)',border:'1px solid var(--border)'}}>← Regresar</button>}
       {nivel>1&&<button onClick={onSalir} disabled={!!abriendo} style={{...chip,background:'var(--card)',color:'var(--dim)',border:'1px solid var(--border)'}}>Salir de la vista</button>}
     </div>
     {eligiendo&&<ModalElegirVista
-      titulo={nivel===0?'Ver la app como uno de tus líderes':'Ver la app como uno de sus coaches'}
+      titulo={nivel>0?'Ver la app como uno de sus coaches':esDirector?'Ver la app como uno de tus líderes':'Ver la app como uno de tus coaches'}
       opciones={opciones}
       onElegir={o=>{setEligiendo(false);onAbrir(o);}}
       onCerrar={()=>setEligiendo(false)}/>}
@@ -4424,9 +4433,9 @@ function MainApp({session,setSession,onLogout,sessionBase,vistas,onAbrirVista,on
   const toast=msg=>setToastMsg(msg);
   useEffect(()=>{retryPending(toast,setDatosLocales);},[]);
   const{user,team,coaches,role}=session;
-  const enVista=!!session.verComo; // el director está viendo la app como un líder/coach suyo
-  // Los registros guardados en ESTE teléfono son del director, no del líder/coach que está
-  // viendo. Los de esa persona están en el Sheet (todo se sincroniza al guardar), así que se
+  const enVista=!!session.verComo; // está viendo la app como un líder/coach de su equipo
+  // Los registros guardados en ESTE teléfono son de quien inició sesión, no del líder/coach que
+  // está viendo. Los de esa persona están en el Sheet (todo se sincroniza al guardar), así que se
   // traen de ahí y se reconstruyen a la forma local — con eso los contadores, el semáforo, el
   // plan de la semana y el historial se ven igual que en su propio teléfono, en vez de en 0.
   const[registrosVista,setRegistrosVista]=useState(null); // null = todavía cargando (ver efecto abajo)
@@ -4465,7 +4474,7 @@ function MainApp({session,setSession,onLogout,sessionBase,vistas,onAbrirVista,on
     setRefreshing(true);
     try{
       // En vista prestada se refresca esa vista (sin tocar lo guardado en localStorage, que
-      // sigue siendo la sesión propia del director); en la propia, el refresco de siempre.
+      // sigue siendo la sesión propia de quien entró); en la propia, el refresco de siempre.
       if(enVista)setSession(await cargarVistaComo(session.token,{numEmp:session.verComo}));
       else await refrescarYPersistirSesion(session,setSession);
       setRefreshKey(k=>k+1);
@@ -4538,8 +4547,8 @@ function MainApp({session,setSession,onLogout,sessionBase,vistas,onAbrirVista,on
       </div>
     </header>
 
-    {/* Cambio de vista (solo Director) */}
-    {sessionBase.role==='director'&&<BarraVistaDirector
+    {/* Cambio de vista (Director y Líder) */}
+    {(sessionBase.role==='director'||sessionBase.role==='lider')&&<BarraVistaPrestada
       sessionBase={sessionBase} vistas={vistas} abriendo={abriendoVista}
       onAbrir={abrirVista} onRegresar={onRegresarVista} onSalir={onSalirVista}/>}
 
@@ -4610,9 +4619,10 @@ function MainApp({session,setSession,onLogout,sessionBase,vistas,onAbrirVista,on
 function App(){
   const[session,setSession]=useState(null);
   const[avisoSesion,setAvisoSesion]=useState('');
-  // Pila de vistas prestadas del Director: [] = su propia vista, [líder] = viendo a un líder,
-  // [líder, coach] = viendo a un coach de ese líder. "Regresar" saca la de arriba. Vive solo en
-  // memoria: al recargar la app se entra siempre por la vista propia.
+  // Pila de vistas prestadas (Director y Líder): [] = su propia vista; para el director,
+  // [líder] = viendo a un líder y [líder, coach] = viendo a un coach de ese líder; para el líder,
+  // [coach]. "Regresar" saca la de arriba. Vive solo en memoria: al recargar la app se entra
+  // siempre por la vista propia.
   const[vistas,setVistas]=useState([]);
   const vistaActiva=vistas.length?vistas[vistas.length-1]:null;
   const abrirVista=async objetivo=>{
