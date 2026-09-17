@@ -898,6 +898,38 @@ function cuentasSinPagar(cuentas,ref){
 function cuentasPagadas(cuentas,ref){
   return cuentasDelPeriodo(cuentas,ref).filter(c=>/^YA COMISIONADA/i.test(c.estatusPago));
 }
+// ─── Rangos de días sin pagar ───
+// Las cuentas sin pagar se agrupan por lo que llevan esperando, en decenas (el primer rango
+// arranca en 25 porque ahí empieza la ventana). Van de más viejo a más nuevo a propósito: a los 90
+// días la cuenta se sale de la ventana, así que lo que lleva más tiempo es lo que urge cobrar y
+// tiene que leerse primero.
+const RANGOS_SIN_PAGAR=[
+  {min:81,max:90,label:'81 a 90 días',color:'var(--red)'},
+  {min:71,max:80,label:'71 a 80 días',color:'var(--red)'},
+  {min:61,max:70,label:'61 a 70 días',color:'var(--yellow)'},
+  {min:51,max:60,label:'51 a 60 días',color:'var(--yellow)'},
+  {min:41,max:50,label:'41 a 50 días',color:'var(--dim)'},
+  {min:31,max:40,label:'31 a 40 días',color:'var(--dim)'},
+  {min:25,max:30,label:'25 a 30 días',color:'var(--dim)'},
+];
+// Toda cuenta tiene que caer en algún rango: si alguna se quedara fuera, la suma de los rangos ya
+// no cuadraría con el total que dice el título del panel. Las de cuentasSinPagar siempre están
+// entre 25 y 90, pero el resguardo evita que un caso de borde se pierda en silencio.
+function rangoSinPagarDe(dias){
+  for(let i=0;i<RANGOS_SIN_PAGAR.length;i++){
+    const r=RANGOS_SIN_PAGAR[i];
+    if(dias>=r.min&&dias<=r.max)return r;
+  }
+  return dias>90?RANGOS_SIN_PAGAR[0]:RANGOS_SIN_PAGAR[RANGOS_SIN_PAGAR.length-1];
+}
+// Suma una cuenta al rango que le toca, guardando también de qué vendedor es: del mismo corte, el
+// panel necesita el total del rango y el desglose por vendedor dentro de él.
+function acumularRangoSinPagar(destino,rango,m,cuenta){
+  const br=destino[rango.label]=destino[rango.label]||{n:0,importe:0,vend:{}};
+  br.n++;br.importe+=cuenta.importe;
+  const bv=br.vend[m.nombre]=br.vend[m.nombre]||{m,n:0,importe:0};
+  bv.n++;bv.importe+=cuenta.importe;
+}
 // Número de semana ISO: el jueves de la semana decide a qué año y semana pertenece. Es la misma
 // numeración con la que la hoja COMISIONES llena su columna V — verificado contra el calendario
 // del negocio: la semana 36 de 2026 va del 31/08 al 06/09 y la 37 arranca el 07/09.
@@ -1029,6 +1061,71 @@ function Btn({children,onClick,variant='primary',style:s,disabled}){
 }
 function Card({children,title,actions,style:s}){return <div className="anim" style={{background:'var(--card)',borderRadius:12,border:'1px solid var(--border)',padding:18,marginBottom:14,...s}}>{(title||actions)&&<div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>{title&&<h3 style={{margin:0,fontSize:16,fontWeight:700}}>{title}</h3>}{actions}</div>}{children}</div>;}
 // Tarjeta que colapsa/expande todo su contenido al tocar el título.
+// ─── Cuentas sin pagar: las tres vistas del panel ───
+// Selector de arriba del panel. Son las mismas cuentas cortadas de tres maneras, así que los tres
+// totales siempre cuadran entre sí; lo que cambia es qué pregunta contesta cada una.
+function SelectorSinPagar({vista,onCambiar}){
+  const opciones=[['dias','📅 Días'],['vendedor','🧑 Vendedor'],['plan','📦 Plan']];
+  return <div style={{display:'flex',gap:6,marginBottom:10,flexWrap:'wrap'}}>
+    <span style={{fontSize:13,color:'var(--dim)',fontWeight:600,alignSelf:'center'}}>Ver por:</span>
+    {opciones.map(([id,label])=>
+      <button key={id} onClick={()=>onCambiar(id)}
+        style={{fontSize:13,fontWeight:700,padding:'5px 11px',borderRadius:20,cursor:'pointer',
+          border:'1px solid '+(vista===id?'var(--accent)':'var(--border)'),
+          background:vista===id?'var(--accent)':'var(--input)',
+          color:vista===id?'#fff':'var(--dim)'}}>{label}</button>)}
+  </div>;
+}
+// Un renglón "nombre ··· N ctas · $importe". Se repite en las tres vistas, con sangría cuando va
+// dentro de otro renglón (los vendedores de un rango, o los rangos de un vendedor).
+function RenglonSinPagar({etiqueta,n,importe,color,nota,sangria}){
+  return <div style={{padding:'3px 0 3px '+(sangria?12:0)+'px',borderBottom:sangria?'none':'1px solid var(--border)'}}>
+    <div style={{display:'flex',justifyContent:'space-between',gap:8,fontSize:13,color:color||'var(--dim)',fontWeight:sangria?400:600}}>
+      <span style={{minWidth:0,overflow:'hidden',textOverflow:'ellipsis'}}>{etiqueta}</span>
+      <span style={{whiteSpace:'nowrap'}}><b>{n}</b> cta{n!==1?'s':''} · <b style={{color:'var(--red)'}}>{fmtMoney(importe)}</b></span>
+    </div>
+    {nota&&<div style={{fontSize:12,color:'var(--dim)',paddingLeft:sangria?12:0}}>{nota}</div>}
+  </div>;
+}
+// Cuerpo del panel en la vista elegida. Se usa igual en el nivel de arriba (la sesión de un coach)
+// que dentro de cada coach (la de un líder o director), así que recibe ya acotados a quien se esté
+// viendo los tres cortes que arma DashboardTab.
+function CuerpoSinPagar({vista,porRango,porVendedor,porPlan,instaladoPorPlan}){
+  if(vista==='dias'){
+    // En orden de RANGOS_SIN_PAGAR (de lo más viejo a lo más nuevo), no por volumen: aquí lo que
+    // importa es qué tan cerca está de los 90 días. Dentro de cada rango, quién trae más.
+    const rangos=RANGOS_SIN_PAGAR.filter(r=>porRango[r.label]);
+    if(!rangos.length)return <p style={{fontSize:13,color:'var(--dim)'}}>Sin cuentas por cobrar.</p>;
+    return rangos.map(r=>{
+      const b=porRango[r.label];
+      const vend=Object.values(b.vend).sort((x,y)=>y.n-x.n||y.importe-x.importe);
+      return <div key={r.label} style={{marginBottom:6}}>
+        <RenglonSinPagar etiqueta={r.label+(r.min===81?' ⚠️ por vencer':'')} n={b.n} importe={b.importe} color={r.color}
+          nota={r.min>=61?`Le quedan ${90-r.min} días o menos para cobrarse.`:null}/>
+        {vend.map(v=><RenglonSinPagar key={v.m.nombre} etiqueta={nombreCorto(v.m.nombre)} n={v.n} importe={v.importe} sangria/>)}
+      </div>;
+    });
+  }
+  if(vista==='vendedor'){
+    if(!porVendedor.length)return <p style={{fontSize:13,color:'var(--dim)'}}>Sin cuentas por cobrar.</p>;
+    return porVendedor.map(v=>{
+      const rangos=RANGOS_SIN_PAGAR.filter(r=>v.rangos[r.label]);
+      return <div key={v.m.nombre} style={{marginBottom:6}}>
+        <RenglonSinPagar etiqueta={nombreCorto(v.m.nombre)} n={v.n} importe={v.importe} color="var(--text)"/>
+        {rangos.map(r=><RenglonSinPagar key={r.label} etiqueta={r.label+(r.min===81?' ⚠️':'')} n={v.rangos[r.label].n} importe={v.rangos[r.label].importe} color={r.color} sangria/>)}
+      </div>;
+    });
+  }
+  const planes=Object.entries(porPlan).sort((a,b)=>b[1].n-a[1].n);
+  if(!planes.length)return <p style={{fontSize:13,color:'var(--dim)'}}>Sin cuentas por cobrar.</p>;
+  return planes.map(([p,b])=>{
+    // El denominador es del equipo completo, no del coach: es el universo contra el que se
+    // compara ese plan. Si faltara, el % se cae a "todas", que es lo que ya hacía antes.
+    const totalPlan=instaladoPorPlan[p]||b.n;
+    return <RenglonSinPagar key={p} etiqueta={p} n={b.n} importe={b.importe}
+      nota={`${Math.round(b.n/totalPlan*100)}% de ${totalPlan} instaladas de este plan.`}/>;
+  });
+}
 function PanelAcordeon({title,abierto,onToggle,children}){
   return <Card>
     <div onClick={onToggle} style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,cursor:'pointer',marginBottom:abierto?12:0}}>
@@ -2490,6 +2587,9 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
   const pdvTotalN={}; // pdv -> instalaciones
   const pdvPorPlan={}; // pdv -> {plan: n}
   const sinPagarPorPlan={}; // plan -> {n, importe}
+  // Los otros dos cortes de las MISMAS cuentas sin pagar, para las otras dos vistas del panel.
+  const sinPagarPorRango={}; // label de rango -> {n, importe, vend:{nombre -> {m,n,importe}}}
+  const sinPagarPorVendedor=[]; // [{m, n, importe, rangos:{label -> {n,importe}}}]
   const instaladoPorPlan2m={}; // plan -> instalaciones (pagadas o no) entre 25 y 90 días, para el % de sin pagar
   // Ritmo de pago del equipo: de las mismas cuentas de la ventana de 25 a 90 días, las que se
   // pagaron en la semana pasada contra las de la antepasada (ambas cerradas — ver semanaPasadaIni).
@@ -2500,7 +2600,7 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
   const porCoachLider={};
   if(esLider){
     (coaches||[]).forEach(c=>{
-      porCoachLider[c.nombre]={coach:c,rechazos:{},rechazosTotal:0,planes:{},planesTotal:0,pendientes:[],pendientesTotal:0,sinPagarPorPlan:{},sinPagarTotal:0};
+      porCoachLider[c.nombre]={coach:c,rechazos:{},rechazosTotal:0,planes:{},planesTotal:0,pendientes:[],pendientesTotal:0,sinPagarPorPlan:{},sinPagarPorRango:{},sinPagarPorVendedor:[],sinPagarTotal:0};
     });
   }
   const[expandedMotivo,setExpandedMotivo]=useState(null);
@@ -2517,7 +2617,10 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
   const[expandedCoachPlan,setExpandedCoachPlan]=useState(null);
   const[expandedCoachPendiente,setExpandedCoachPendiente]=useState(null);
   const[expandedPendienteVendedorLider,setExpandedPendienteVendedorLider]=useState(null);
-  const[expandedPlanSinPagar,setExpandedPlanSinPagar]=useState(null);
+  const[expandedCoachSinPagar,setExpandedCoachSinPagar]=useState(null);
+  // Las tres maneras de ver las mismas cuentas sin pagar: por días de espera (la de entrada, que
+  // es la que dice qué urge), por vendedor o por plan.
+  const[vistaSinPagar,setVistaSinPagar]=useState('dias');
   const[abrirPagos,setAbrirPagos]=useState(false);
   const[expandedCoachPago,setExpandedCoachPago]=useState(null);
   const[expandedCoachEquipo,setExpandedCoachEquipo]=useState(null);
@@ -2567,16 +2670,31 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
       });
       arpuPorVendedor.push({m,arpu:arpuProm,n:instaladasArpu.length,arpuPorPlan});
     }
-    cuentasSinPagar(m.cuentasCom,now).forEach(c=>{
+    // Las cuentas sin pagar de este vendedor se reparten de una vez en los tres cortes que
+    // alimentan las tres vistas del panel (días, vendedor y plan): son las mismas cuentas vistas
+    // de tres maneras, así que los tres totales cuadran entre sí por construcción.
+    const sinPagarVend=cuentasSinPagar(m.cuentasCom,now);
+    const rangosVend={}; // label -> {n, importe} — los días de ESTE vendedor, para la vista "Vendedor"
+    sinPagarVend.forEach(c=>{
       const p=normalizarPlan(c.plan);
       const b=sinPagarPorPlan[p]=sinPagarPorPlan[p]||{n:0,importe:0};
       b.n++;b.importe+=c.importe;
+      const r=rangoSinPagarDe(diasDesde(c.fechaInstalacion,now));
+      const bv=rangosVend[r.label]=rangosVend[r.label]||{n:0,importe:0};
+      bv.n++;bv.importe+=c.importe;
+      acumularRangoSinPagar(sinPagarPorRango,r,m,c);
       if(cLider){
         const bc=cLider.sinPagarPorPlan[p]=cLider.sinPagarPorPlan[p]||{n:0,importe:0};
         bc.n++;bc.importe+=c.importe;
         cLider.sinPagarTotal++;
+        acumularRangoSinPagar(cLider.sinPagarPorRango,r,m,c);
       }
     });
+    if(sinPagarVend.length){
+      const filaVend={m,n:sinPagarVend.length,importe:sinPagarVend.reduce((s,c)=>s+c.importe,0),rangos:rangosVend};
+      sinPagarPorVendedor.push(filaVend);
+      if(cLider)cLider.sinPagarPorVendedor.push(filaVend);
+    }
     cuentasDelPeriodo(m.cuentasCom,now).forEach(c=>{
       const p=normalizarPlan(c.plan);
       instaladoPorPlan2m[p]=(instaladoPorPlan2m[p]||0)+1;
@@ -2632,7 +2750,10 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
       .map(c=>({...c,arpuProm:c.totalN?c.sumaArpu/c.totalN:0,vendedores:c.vendedores.slice().sort((a,b)=>b.arpu-a.arpu)}))
       .sort((a,b)=>b.arpuProm-a.arpuProm);
   })();
-  const sinPagarPorPlanOrdenado=Object.entries(sinPagarPorPlan).sort((a,b)=>b[1].n-a[1].n);
+  // La vista por vendedor va del que más cuentas trae al que menos; la de días conserva el orden
+  // de RANGOS_SIN_PAGAR (de lo más viejo a lo más nuevo), no el del volumen: ahí lo que ordena es
+  // qué tan cerca está de los 90 días, no cuántas cuentas hay.
+  const sinPagarPorVendedorOrdenado=sinPagarPorVendedor.slice().sort((a,b)=>b.n-a.n||b.importe-a.importe);
   const sinPagarPorPlanTotales=Object.values(sinPagarPorPlan).reduce((acc,b)=>({n:acc.n+b.n,importe:acc.importe+b.importe}),{n:0,importe:0});
   const instaladoPorPlan2mTotal=Object.values(instaladoPorPlan2m).reduce((a,b)=>a+b,0);
   const sinPagarPorPlanPctTotal=instaladoPorPlan2mTotal?Math.round(sinPagarPorPlanTotales.n/instaladoPorPlan2mTotal*100):0;
@@ -3307,40 +3428,35 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
           }
       </div>
       <div style={{order:10}}>
-          {sinPagarPorPlanOrdenado.length>0&&
-            <PanelAcordeon title={`💰 Cuentas sin pagar por plan (${sinPagarPorPlanTotales.n} · ${sinPagarPorPlanPctTotal}% de ${instaladoPorPlan2mTotal} inst. · ${fmtMoney(sinPagarPorPlanTotales.importe)})`} abierto={abrirSinPagarPlan} onToggle={()=>setAbrirSinPagarPlan(!abrirSinPagarPlan)}>
+          {sinPagarPorPlanTotales.n>0&&
+            <PanelAcordeon title={`💰 Cuentas sin pagar (${sinPagarPorPlanTotales.n} · ${sinPagarPorPlanPctTotal}% de ${instaladoPorPlan2mTotal} inst. · ${fmtMoney(sinPagarPorPlanTotales.importe)})`} abierto={abrirSinPagarPlan} onToggle={()=>setAbrirSinPagarPlan(!abrirSinPagarPlan)}>
+              <SelectorSinPagar vista={vistaSinPagar} onCambiar={setVistaSinPagar}/>
+              <p style={{fontSize:12,color:'var(--dim)',marginBottom:8,lineHeight:1.45}}>
+                Instaladas hace 25 a 90 días que todavía no se comisionan. Los días son los que lleva
+                esperando cada cuenta: a los 90 se sale de esta ventana, así que entre más arriba, más urge.
+              </p>
+              {/* Con líder o director se entra primero por coach y adentro va la vista elegida; en la
+                  sesión de un coach, esa vista va directo, sin el nivel de arriba. */}
               {esLider?coachesOrdenadosSinPagar.map(c=>{
                 const key=c.coach.nombre;
-                const isExp=expandedPlanSinPagar===key;
+                const isExp=expandedCoachSinPagar===key;
                 const importeCoach=Object.values(c.sinPagarPorPlan).reduce((s,b)=>s+b.importe,0);
-                const planesCoach=Object.entries(c.sinPagarPorPlan).sort((a,b)=>b[1].n-a[1].n);
                 return <div key={key} style={{marginBottom:isExp?4:0}}>
-                  <div onClick={()=>setExpandedPlanSinPagar(isExp?null:key)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:13,padding:'6px 0',borderBottom:isExp?'none':'1px solid var(--border)',cursor:'pointer'}}>
-                    <span style={{fontWeight:600}}>{c.coach.nombre.split(' ').slice(0,3).join(' ')}</span>
+                  <div onClick={()=>setExpandedCoachSinPagar(isExp?null:key)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:13,padding:'6px 0',borderBottom:isExp?'none':'1px solid var(--border)',cursor:'pointer'}}>
+                    <span style={{fontWeight:600}}>{nombreCorto(c.coach.nombre)}</span>
                     <span style={{display:'flex',alignItems:'center',gap:6}}>
                       <span><b>{c.sinPagarTotal}</b> cta{c.sinPagarTotal!==1?'s':''} · <b style={{color:'var(--red)'}}>{fmtMoney(importeCoach)}</b></span>
                       <span style={{fontSize:13,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
                     </span>
                   </div>
                   {isExp&&<div style={{background:'var(--bg)',borderRadius:6,padding:'6px 8px',marginBottom:6}}>
-                    {planesCoach.map(([p,b])=>{
-                      const totalPlan=instaladoPorPlan2m[p]||b.n;
-                      const pct=Math.round(b.n/totalPlan*100);
-                      return <div key={p} style={{fontSize:13,color:'var(--dim)',display:'flex',justifyContent:'space-between',gap:6,padding:'3px 0',borderBottom:'1px solid var(--border)'}}>
-                        <span>{p}</span>
-                        <span><b>{b.n}</b> cta{b.n!==1?'s':''} · {pct}% de {totalPlan} inst. · <b style={{color:'var(--red)'}}>{fmtMoney(b.importe)}</b></span>
-                      </div>;
-                    })}
+                    <CuerpoSinPagar vista={vistaSinPagar} porRango={c.sinPagarPorRango}
+                      porVendedor={c.sinPagarPorVendedor.slice().sort((a,b)=>b.n-a.n||b.importe-a.importe)}
+                      porPlan={c.sinPagarPorPlan} instaladoPorPlan={instaladoPorPlan2m}/>
                   </div>}
                 </div>;
-              }):sinPagarPorPlanOrdenado.map(([p,b])=>{
-                const totalPlan=instaladoPorPlan2m[p]||b.n;
-                const pct=Math.round(b.n/totalPlan*100);
-                return <div key={p} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:13,padding:'6px 0',borderBottom:'1px solid var(--border)'}}>
-                  <span>{p}</span>
-                  <span><b>{b.n}</b> cta{b.n!==1?'s':''} · {pct}% de {totalPlan} inst. · <b style={{color:'var(--red)'}}>{fmtMoney(b.importe)}</b></span>
-                </div>;
-              })}
+              }):<CuerpoSinPagar vista={vistaSinPagar} porRango={sinPagarPorRango}
+                   porVendedor={sinPagarPorVendedorOrdenado} porPlan={sinPagarPorPlan} instaladoPorPlan={instaladoPorPlan2m}/>}
             </PanelAcordeon>
           }
       </div>
