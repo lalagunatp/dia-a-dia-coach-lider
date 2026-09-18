@@ -533,6 +533,24 @@ function diaZonas(zonas,d){
   if(Array.isArray(v))return{entradas:v,direccion:'',comentarios:''};
   return v||{entradas:[],direccion:'',comentarios:''};
 }
+// ─── Plan editado: gana el más reciente ───
+// El plan se puede corregir el lunes y el martes de su semana, y cada corrección se guarda como un
+// registro nuevo en vez de pisar al anterior — así queda el rastro de lo que decía antes, tanto en
+// el teléfono como en la hoja PLAN. El precio es que de una misma semana puede haber varios: en
+// todos lados manda el último, igual que con el semáforo.
+function masReciente(lista,campoFecha){
+  return(lista||[]).reduce((ganador,x)=>
+    !ganador||String(x?.[campoFecha]||'')>String(ganador[campoFecha]||'')?x:ganador,null);
+}
+// El lunes y el martes de la propia semana del plan. Después de eso la semana ya va corriendo y el
+// compromiso queda firme. Se mide contra la semana del plan, no contra "hace 2 días": un plan
+// capturado tarde no estira su ventana, y uno capturado el lunes no la pierde por el fin de semana.
+const DIAS_EDICION_PLAN=[1,2]; // 0=domingo, 1=lunes, 2=martes
+function sePuedeEditarPlan(plan,ref){
+  if(!plan)return false;
+  if(DIAS_EDICION_PLAN.indexOf(ref.getDay())===-1)return false;
+  return plan.semanaInicio===ymdLocal(startOfWeek(ref));
+}
 // Zonas por día ({lunes:{entradas:[{cluster,colonia}],direccion,comentarios},...}) → texto plano,
 // una línea por día con actividad (zonas y/o punto de reunión y/o comentarios).
 function zonasATexto(zonas){
@@ -2049,12 +2067,24 @@ function PlanTab({data,setData,team,toast,session,refreshKey}){
   const hoyStr=ymdLocal(nowDate);
   const esLunes=nowDate.getDay()===1;
 
-  const planActual=data.records.find(r=>r.type==='plan'&&r.semanaInicio===semanaIniStr);
+  // De esta semana puede haber más de un plan si se editó (ver masReciente): manda el último.
+  const planActual=masReciente(data.records.filter(r=>r.type==='plan'&&r.semanaInicio===semanaIniStr),'savedAt');
   const retraso=!planActual&&hoyStr>semanaIniStr;
+  const puedeEditarPlan=!session.soloLectura&&sePuedeEditarPlan(planActual,nowDate);
 
-  // Semana(s) anteriores con plan pero sin resultado real capturado todavía — se resuelve la más antigua primero.
+  // Semana(s) anteriores con plan pero sin resultado real capturado todavía — se resuelve la más
+  // antigua primero. Se agrupa por semana y no por registro: si esa semana se editó, hay varios
+  // planes y el resultado quedó colgado solo del que estaba vigente al capturarlo; sin agrupar, los
+  // demás se quedarían pidiendo resultado para siempre.
   const planesConResultado=new Set(data.records.filter(r=>r.type==='plan_resultado').map(r=>r.planId));
-  const planPendiente=data.records.filter(r=>r.type==='plan'&&!planesConResultado.has(r.id)&&r.semanaInicio<semanaIniStr).sort((a,b)=>a.semanaInicio.localeCompare(b.semanaInicio))[0]||null;
+  const planPendiente=(()=>{
+    const porSemana={};
+    data.records.filter(r=>r.type==='plan'&&r.semanaInicio<semanaIniStr)
+      .forEach(r=>{(porSemana[r.semanaInicio]=porSemana[r.semanaInicio]||[]).push(r);});
+    const semanaPendiente=Object.keys(porSemana).sort()
+      .find(sem=>!porSemana[sem].some(p=>planesConResultado.has(p.id)));
+    return semanaPendiente?masReciente(porSemana[semanaPendiente],'savedAt'):null;
+  })();
 
   const[zonasData,setZonasData]=useState({clusterToColonias:{},coloniaToCluster:{},clusters:[]});
   useEffect(()=>{if(!esCoachPDV)fetchClustersColonias(session.token).then(list=>setZonasData(buildClusterMap(list)));},[esCoachPDV]);
@@ -2073,7 +2103,9 @@ function PlanTab({data,setData,team,toast,session,refreshKey}){
   // Datos completos (no solo % de completitud) del plan de cada coach — alimenta la tarjeta de
   // estatus, el Objetivo/Prioridades/Acompañamientos agregados, y lo que se guarda al final.
   const coachesPlanDatos=esLider?(session.coaches||[]).map(c=>{
-    const row=planesEquipo.find(r=>r['Registrado por']===c.nombre&&r['Semana inicio']===semanaIniStr);
+    // Si ese coach corrigió su plan, en la hoja quedaron varias filas de la misma semana: manda la
+    // del Timestamp más alto, que es la que él ve como vigente en su propio teléfono.
+    const row=masReciente(planesEquipo.filter(r=>r['Registrado por']===c.nombre&&r['Semana inicio']===semanaIniStr),'Timestamp');
     if(!row)return{coach:c,row:null,estado:'sin',pct:0,objetivos:{oportunidades:0,ventas:0,instalaciones:0,cuentasRecuperadas:0,arpu:0},prioridades:'',acompanamientos:''};
     const pct=completitudPlanFila(row);
     return{
@@ -2102,12 +2134,43 @@ function PlanTab({data,setData,team,toast,session,refreshKey}){
   const acompanamientosEquipoTexto=coachesPlanDatos.map(c=>`${c.coach.nombre.split(' ').slice(0,3).join(' ')}: ${c.acompanamientos||'(sin capturar)'}`).join('\n');
 
   const emptyZonas=()=>Object.fromEntries(DIAS_SEMANA.map(d=>[d,{entradas:[],direccion:'',comentarios:''}]));
-  const[form,setForm]=useState({objetivos:{oportunidades:'',ventas:'',instalaciones:'',cuentasRecuperadas:'',arpu:''},prioridades:'',vendedores_acompanar:'',zonas:emptyZonas(),resultado_esperado:'',notas:''});
+  const formVacio=()=>({objetivos:{oportunidades:'',ventas:'',instalaciones:'',cuentasRecuperadas:'',arpu:''},prioridades:'',vendedores_acompanar:'',zonas:emptyZonas(),resultado_esperado:'',notas:''});
+  const[form,setForm]=useState(formVacio());
   const updObjetivo=(k,v)=>setForm(f=>({...f,objetivos:{...f.objetivos,[k]:v}}));
+
+  // ── Editar el plan ya guardado (solo lunes y martes de su semana) ──
+  // Se vuelve a abrir el mismo formulario de captura con lo que ya se había guardado dentro, para
+  // corregir sobre eso en vez de volver a escribirlo todo.
+  const[editandoPlan,setEditandoPlan]=useState(false);
+  const abrirEdicionPlan=()=>{
+    if(!planActual)return;
+    setForm({
+      objetivos:{
+        oportunidades:planActual.objetivos?.oportunidades??'',
+        ventas:planActual.objetivos?.ventas??'',
+        instalaciones:planActual.objetivos?.instalaciones??'',
+        cuentasRecuperadas:planActual.objetivos?.cuentasRecuperadas??'',
+        arpu:planActual.objetivos?.arpu??'',
+      },
+      prioridades:planActual.prioridades||'',
+      vendedores_acompanar:planActual.vendedores_acompanar||'',
+      zonas:Object.fromEntries(DIAS_SEMANA.map(d=>[d,diaZonas(planActual.zonas,d)])),
+      resultado_esperado:planActual.resultado_esperado||'',
+      notas:planActual.notas||'',
+    });
+    setEditandoPlan(true);
+    window.scrollTo({top:0,behavior:'smooth'});
+  };
+  const cancelarEdicionPlan=()=>{setEditandoPlan(false);setForm(formVacio());};
 
   const guardarPlan=async()=>{
     if(session.soloLectura)return; // vista prestada: solo consulta
+    // Al editar se guarda un registro NUEVO en vez de pisar el anterior: así queda el rastro de lo
+    // que decía antes (en el teléfono y en la hoja PLAN, donde cada versión es su propia fila).
+    // `editaA` encadena las versiones; de la hoja no vuelve, ahí las ordena el Timestamp.
+    const editando=editandoPlan&&planActual;
     const rec={id:uid(),type:'plan',date:today(),
+      ...(editando?{editaA:planActual.id}:{}),
       semanaInicio:semanaIniStr,semanaFin:semanaFinStr,semanaLabel,
       objetivos:esLider?objetivosEquipo:form.objetivos,
       ...(esLider?{objetivosPorCoach:coachesPlanDatos.map(c=>({coach:c.coach.nombre,objetivos:c.objetivos}))}:{}),
@@ -2116,8 +2179,10 @@ function PlanTab({data,setData,team,toast,session,refreshKey}){
       vendedores_acompanar:esLider?acompanamientosEquipoTexto:form.vendedores_acompanar,
       zonas:form.zonas,resultado_esperado:form.resultado_esperado,notas:form.notas,
       registradoPor:session.user.nombre,token:session.token,savedAt:new Date().toISOString()};
-    const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast);toast('✅ Plan guardado');
-    setForm({objetivos:{oportunidades:'',ventas:'',instalaciones:'',cuentasRecuperadas:'',arpu:''},prioridades:'',vendedores_acompanar:'',zonas:emptyZonas(),resultado_esperado:'',notas:''});
+    const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast);
+    toast(editando?'✅ Cambios guardados':'✅ Plan guardado');
+    setEditandoPlan(false);
+    setForm(formVacio());
   };
 
   // Resultado real de la semana pendiente: se precarga del sistema (embudo de esa semana) y es editable.
@@ -2192,9 +2257,11 @@ function PlanTab({data,setData,team,toast,session,refreshKey}){
       </Card>
     }
 
-    {planActual?
+    {planActual&&!editandoPlan?
       <Card title={`✅ Plan de la semana — ${planActual.semanaLabel}`} style={{borderLeft:'4px solid var(--green)'}}>
-        <p style={{fontSize:13,color:'var(--dim)',marginBottom:6}}>Ya se capturó el objetivo de esta semana.</p>
+        <p style={{fontSize:13,color:'var(--dim)',marginBottom:6}}>
+          Ya se capturó el objetivo de esta semana.{planActual.editaA?' Incluye los cambios que se le hicieron.':''}
+        </p>
         {KPIS.map(kpi=><div key={kpi.k} style={{display:'flex',justifyContent:'space-between',fontSize:14,padding:'3px 0'}}>
           <span>{kpi.label}</span>
           <b style={{color:colorVsMeta(planActual.objetivos?.[kpi.k],planActual.metaOficial?.[kpi.k])}}>{planActual.objetivos?.[kpi.k]||0} <span style={{color:'var(--dim)',fontWeight:400}}>/ meta {planActual.metaOficial?.[kpi.k]??'-'}</span></b>
@@ -2218,10 +2285,25 @@ function PlanTab({data,setData,team,toast,session,refreshKey}){
             style={{display:'inline-flex',alignItems:'center',gap:6,padding:'8px 14px',borderRadius:8,background:'#25D366',color:'#fff',fontSize:14,fontWeight:700,textDecoration:'none'}}>
             📲 Enviar plan al líder por WhatsApp
           </a>
+          {puedeEditarPlan&&<Btn variant="secondary" onClick={abrirEdicionPlan} style={{fontSize:14}}>✏️ Editar plan</Btn>}
           <Btn variant="secondary" onClick={()=>window.scrollTo({top:0,behavior:'smooth'})} style={{fontSize:14}}>← Volver al Plan</Btn>
         </div>
+        {/* Por qué se puede o ya no se puede corregir. Sin esto, el botón simplemente no aparece el
+            miércoles y se lee como una falla de la app en vez de como la regla que es. */}
+        {!session.soloLectura&&<p style={{fontSize:12,color:'var(--dim)',margin:'8px 0 0'}}>
+          {puedeEditarPlan
+            ?'✏️ El plan se puede corregir hoy y hasta el martes. De miércoles en adelante queda firme.'
+            :'🔒 Ya no se puede editar: el plan solo se corrige el lunes y el martes de su semana.'}
+        </p>}
       </Card>
     :<>
+      {editandoPlan&&<Card style={{borderLeft:'4px solid var(--yellow)',background:'var(--ybg)'}}>
+        <p style={{fontSize:14,fontWeight:700,color:'var(--yellow)',margin:'0 0 4px'}}>✏️ Estás editando el plan de esta semana</p>
+        <p style={{fontSize:13,color:'var(--dim)',margin:0}}>
+          Abajo está lo que ya habías guardado — corrige lo que haga falta y guarda los cambios. Se
+          registra como una nueva versión: lo anterior no se borra, queda el rastro de lo que decía.
+        </p>
+      </Card>}
       {esLider?<>
         <Card title="🎯 Objetivo de la semana (de tus coaches)">
           <p style={{fontSize:13,color:'var(--dim)',marginBottom:8}}>Semana {semanaLabel}. Se llena solo con lo que cada coach ya capturó en su propio plan.</p>
@@ -2314,7 +2396,10 @@ function PlanTab({data,setData,team,toast,session,refreshKey}){
         <Textarea value={form.resultado_esperado} onChange={e=>setForm({...form,resultado_esperado:e.target.value})} style={{minHeight:50}}/>
       </Card>
       <Card title="Notas"><Textarea value={form.notas} onChange={e=>setForm({...form,notas:e.target.value})} style={{minHeight:50}}/></Card>
-      {session.soloLectura?<AvisoSoloLectura nombre={session.user.nombre}/>:<Btn onClick={guardarPlan} style={{width:'100%'}}>💾 Guardar plan</Btn>}
+      {session.soloLectura?<AvisoSoloLectura nombre={session.user.nombre}/>:<>
+        <Btn onClick={guardarPlan} style={{width:'100%'}}>{editandoPlan?'💾 Guardar cambios':'💾 Guardar plan'}</Btn>
+        {editandoPlan&&<Btn variant="secondary" onClick={cancelarEdicionPlan} style={{width:'100%',marginTop:8}}>Cancelar edición</Btn>}
+      </>}
     </>}
   </div>;
 }
