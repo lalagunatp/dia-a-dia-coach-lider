@@ -1063,8 +1063,10 @@ function buildRow(type, d) {
         }))
         .filter(f => f.url);
       const fotosAusentesTxt = fotosAusentes.map(f => `${f.name}: ${f.url}`).join('; ');
-      // Coach Promovendedor Punto de Venta: una foto (con sello) por cada vendedor, presente o
-      // ausente — evidencia de que se visitó cada punto de venta, aparte de la foto de grupo.
+      // Coach Promovendedor Punto de Venta: una foto por cada vendedor, presente o ausente —
+      // evidencia de su entrada al punto de venta, aparte de la foto de grupo. Estas van SIN
+      // sello: las toma el vendedor y se las manda al coach, así que el sello llevaría el nombre,
+      // la hora y la ubicación del coach, no las de quien de verdad aparece en la foto.
       const fotosVendedores = Object.keys(d.fotosVendedores || {})
         .filter(name => d.fotosVendedores[name])
         .map(name => ({
