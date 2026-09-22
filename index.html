@@ -360,7 +360,7 @@ function partirLista(txt){
     return i===-1?{nombre:s,resto:''}:{nombre:s.slice(0,i).trim(),resto:s.slice(i+1).trim()};
   });
 }
-// Inverso de formatZonas: "Lunes: Colonia (Cluster), Otra (todo) · 📍 dirección · 💬 comentario | Martes: …"
+// Inverso de formatZonas: "Lunes: Colonia (Cluster), Otra (todo) · 📍 dirección · 😴 Descanso: Nombre · 💬 comentario | Martes: …"
 function parsearZonas(txt){
   if(!txt)return null;
   const porLabel={};DIAS_SEMANA.forEach(d=>{porLabel[DIAS_SEMANA_LABEL[d].toLowerCase()]=d;});
@@ -370,10 +370,12 @@ function parsearZonas(txt){
     if(i===-1)return;
     const dia=porLabel[bloque.slice(0,i).trim().toLowerCase()];
     if(!dia)return;
-    const dz={entradas:[],direccion:'',comentarios:''};
+    const dz={entradas:[],direccion:'',comentarios:'',descansos:[]};
     bloque.slice(i+1).split('·').map(p=>p.trim()).filter(Boolean).forEach(parte=>{
       if(parte.startsWith('📍'))dz.direccion=parte.slice(2).trim();
       else if(parte.startsWith('💬'))dz.comentarios=parte.slice(2).trim();
+      // "😴 Descanso: NOMBRE, NOMBRE" — quiénes descansan ese día (coach de punto de venta).
+      else if(parte.startsWith('😴'))dz.descansos=parte.slice(2).replace(/^\s*Descanso\s*:?/i,'').split(',').map(s=>s.trim()).filter(Boolean);
       else{
         // "Colonia (Cluster)" → {cluster,colonia}; "Cluster (todo)" → cluster completo (así se
         // guarda también el coach que prioriza un líder: su nombre en `cluster`, colonia null).
@@ -530,8 +532,10 @@ function textoPendientesInstalar(m,pendientes,ref){
 // viejo (un simple array de entradas) de planes guardados antes de agregar carpa/comentarios.
 function diaZonas(zonas,d){
   const v=zonas?.[d];
-  if(Array.isArray(v))return{entradas:v,direccion:'',comentarios:''};
-  return v||{entradas:[],direccion:'',comentarios:''};
+  if(Array.isArray(v))return{entradas:v,direccion:'',comentarios:'',descansos:[]};
+  // `descansos` (quién descansa ese día) llegó después: los planes ya guardados no lo traen, así
+  // que siempre se regresa como arreglo vacío en vez de undefined.
+  return{entradas:v?.entradas||[],direccion:v?.direccion||'',comentarios:v?.comentarios||'',descansos:v?.descansos||[]};
 }
 // ─── Plan editado: gana el más reciente ───
 // El plan se puede corregir el lunes y el martes de su semana, y cada corrección se guarda como un
@@ -557,12 +561,13 @@ function zonasATexto(zonas){
   if(!zonas)return'';
   return DIAS_SEMANA.filter(d=>{
     const dz=diaZonas(zonas,d);
-    return dz.entradas.length||dz.direccion||dz.comentarios;
+    return dz.entradas.length||dz.direccion||dz.comentarios||dz.descansos.length;
   }).map(d=>{
     const dz=diaZonas(zonas,d);
     const partes=[];
     if(dz.entradas.length)partes.push(dz.entradas.map(e=>e.colonia?`${e.colonia} (${e.cluster})`:`${e.cluster} (todo)`).join(', '));
     if(dz.direccion)partes.push(`📍 ${dz.direccion}`);
+    if(dz.descansos.length)partes.push(`😴 Descanso: ${dz.descansos.join(', ')}`);
     if(dz.comentarios)partes.push(`💬 ${dz.comentarios}`);
     return `${DIAS_SEMANA_LABEL[d]}: ${partes.join(' · ')}`;
   }).join('\n');
@@ -1998,8 +2003,14 @@ function CoachDiaSelector({label,dia,coachesDisponibles,onChange}){
 // va a trabajar ese día (catálogo hoja PDV). Reutiliza la misma forma de dato que ZonaDia
 // ({entradas,direccion,comentarios}) guardando el nombre del PDV en "cluster" — así
 // zonasATexto/reporte/WhatsApp lo leen sin cambios.
-function PDVDia({label,dia,puntosDisponibles,onChange}){
+// Además lleva la lista de sus vendedores para marcar a quién le toca DESCANSO ese día: el rol de
+// punto de venta rola descansos entre semana, y la tarjeta del día es donde se decide. Se guarda
+// en `descansos` (arreglo de nombres) dentro del mismo objeto del día.
+// `descansosSemana` (nombre → días en los que ya quedó marcado) es solo para avisar en la propia
+// tarjeta si a alguien ya se le puso descanso en otro día o si no tiene ninguno.
+function PDVDia({label,dia,puntosDisponibles,vendedores,descansosSemana,onChange}){
   const entradas=dia.entradas||[];
+  const descansos=dia.descansos||[];
   const[pdvSel,setPdvSel]=useState('');
   const agregar=()=>{
     if(!pdvSel||entradas.some(e=>e.cluster===pdvSel))return;
@@ -2007,6 +2018,7 @@ function PDVDia({label,dia,puntosDisponibles,onChange}){
     setPdvSel('');
   };
   const quitar=i=>onChange({...dia,entradas:entradas.filter((_,idx)=>idx!==i)});
+  const toggleDescanso=nombre=>onChange({...dia,descansos:descansos.includes(nombre)?descansos.filter(n=>n!==nombre):[...descansos,nombre]});
   return <div style={{marginBottom:10,padding:8,border:'1px solid var(--border)',borderRadius:8}}>
     <div style={{fontWeight:700,fontSize:13,marginBottom:6}}>{label}</div>
     {entradas.length>0&&<div style={{display:'flex',flexWrap:'wrap',gap:4,marginBottom:6}}>
@@ -2019,6 +2031,21 @@ function PDVDia({label,dia,puntosDisponibles,onChange}){
       <Autocomplete value={pdvSel} onChange={setPdvSel} placeholder="Buscar punto de venta..." options={puntosDisponibles.map(p=>({value:p,label:p}))}/>
     </div>
     <Btn variant="secondary" onClick={agregar} style={{width:'100%',fontSize:13,padding:'6px 10px'}}>+ Agregar</Btn>
+    {(vendedores||[]).length>0&&<div style={{marginTop:8,paddingTop:8,borderTop:'1px dashed var(--border)'}}>
+      <div style={{fontSize:13,fontWeight:700,color:'var(--dim)',marginBottom:4}}>😴 Descanso — ¿a quién le toca este {label.toLowerCase()}?</div>
+      <div style={{border:'1px solid var(--border)',borderRadius:6,padding:6}}>
+        {vendedores.map(v=>{
+          const marcado=descansos.includes(v.nombre);
+          const otrosDias=(descansosSemana?.[v.nombre]||[]).filter(l=>l!==label);
+          return <label key={v.numEmp||v.nombre} style={{display:'flex',alignItems:'center',gap:6,fontSize:13,padding:'3px 0',cursor:'pointer',lineHeight:1.3}}>
+            <input type="checkbox" checked={marcado} onChange={()=>toggleDescanso(v.nombre)}/>
+            <span style={{flex:1,fontWeight:marcado?700:400}}>{nombreCorto(v.nombre)}</span>
+            {otrosDias.length>0&&<span style={{fontSize:12,color:'var(--dim)'}}>descansa {otrosDias.join(', ').toLowerCase()}</span>}
+          </label>;
+        })}
+      </div>
+      {descansos.length>0&&<p style={{fontSize:12,color:'var(--dim)',margin:'4px 0 0'}}>Descansan {descansos.length} de {vendedores.length}: {descansos.map(nombreCorto).join(', ')}</p>}
+    </div>}
     <div style={{marginTop:8,paddingTop:8,borderTop:'1px dashed var(--border)'}}>
       <Field label="💬 Comentarios adicionales">
         <Textarea value={dia.comentarios||''} onChange={e=>onChange({...dia,comentarios:e.target.value})} placeholder="Notas para este día..." style={{minHeight:50,fontSize:14}}/>
@@ -2135,10 +2162,21 @@ function PlanTab({data,setData,team,toast,session,refreshKey}){
   const prioridadesEquipoTexto=coachesPlanDatos.map(c=>`${c.coach.nombre.split(' ').slice(0,3).join(' ')}: ${c.prioridades||'(sin capturar)'}`).join('\n');
   const acompanamientosEquipoTexto=coachesPlanDatos.map(c=>`${c.coach.nombre.split(' ').slice(0,3).join(' ')}: ${c.acompanamientos||'(sin capturar)'}`).join('\n');
 
-  const emptyZonas=()=>Object.fromEntries(DIAS_SEMANA.map(d=>[d,{entradas:[],direccion:'',comentarios:''}]));
+  const emptyZonas=()=>Object.fromEntries(DIAS_SEMANA.map(d=>[d,{entradas:[],direccion:'',comentarios:'',descansos:[]}]));
   const formVacio=()=>({objetivos:{oportunidades:'',ventas:'',instalaciones:'',cuentasRecuperadas:'',arpu:''},prioridades:'',vendedores_acompanar:'',zonas:emptyZonas(),resultado_esperado:'',notas:''});
   const[form,setForm]=useState(formVacio());
   const updObjetivo=(k,v)=>setForm(f=>({...f,objetivos:{...f.objetivos,[k]:v}}));
+
+  // Descansos de la semana que se está capturando (coach de punto de venta): nombre → días en los
+  // que ya quedó marcado, para avisar en cada tarjeta y listar arriba a quién todavía no se le
+  // asigna ninguno. Se recalcula del formulario, así que se mueve conforme se va marcando.
+  const descansosSemana={};
+  DIAS_SEMANA.forEach(d=>{
+    diaZonas(form.zonas,d).descansos.forEach(nombre=>{
+      (descansosSemana[nombre]=descansosSemana[nombre]||[]).push(DIAS_SEMANA_LABEL[d]);
+    });
+  });
+  const sinDescansoSemana=vendedoresPlan.filter(m=>!descansosSemana[m.nombre]).map(m=>m.nombre);
 
   // ── Editar el plan ya guardado (solo lunes y martes de su semana) ──
   // Se vuelve a abrir el mismo formulario de captura con lo que ya se había guardado dentro, para
@@ -2270,14 +2308,15 @@ function PlanTab({data,setData,team,toast,session,refreshKey}){
         </div>)}
         <div style={{display:'flex',justifyContent:'space-between',fontSize:14,padding:'3px 0'}}><span>Cuentas recuperadas NPPF</span><b>{planActual.objetivos?.cuentasRecuperadas||0}</b></div>
         <div style={{display:'flex',justifyContent:'space-between',fontSize:14,padding:'3px 0'}}><span>ARPU</span><b>{fmtMoney(planActual.objetivos?.arpu)}</b></div>
-        {DIAS_SEMANA.some(d=>{const dz=diaZonas(planActual.zonas,d);return dz.entradas.length||dz.direccion||dz.comentarios;})&&<div style={{marginTop:10,paddingTop:10,borderTop:'1px solid var(--border)'}}>
-          <div style={{fontSize:13,fontWeight:700,color:'var(--dim)',marginBottom:4}}>🗺️ Zonas de la semana</div>
-          {DIAS_SEMANA.filter(d=>{const dz=diaZonas(planActual.zonas,d);return dz.entradas.length||dz.direccion||dz.comentarios;}).map(d=>{
+        {DIAS_SEMANA.some(d=>{const dz=diaZonas(planActual.zonas,d);return dz.entradas.length||dz.direccion||dz.comentarios||dz.descansos.length;})&&<div style={{marginTop:10,paddingTop:10,borderTop:'1px solid var(--border)'}}>
+          <div style={{fontSize:13,fontWeight:700,color:'var(--dim)',marginBottom:4}}>{esCoachPDV?'🏬 Puntos de venta de la semana':'🗺️ Zonas de la semana'}</div>
+          {DIAS_SEMANA.filter(d=>{const dz=diaZonas(planActual.zonas,d);return dz.entradas.length||dz.direccion||dz.comentarios||dz.descansos.length;}).map(d=>{
             const dz=diaZonas(planActual.zonas,d);
             return <div key={d} style={{marginBottom:4}}>
               {dz.entradas.length>0&&<p style={{fontSize:13,margin:'2px 0'}}><b>{DIAS_SEMANA_LABEL[d]}:</b> {dz.entradas.map(e=>e.colonia?`${e.colonia} (${e.cluster})`:`${e.cluster} (todo)`).join(', ')}</p>}
               {!dz.entradas.length&&<p style={{fontSize:13,margin:'2px 0'}}><b>{DIAS_SEMANA_LABEL[d]}</b></p>}
               {dz.direccion&&<p style={{fontSize:13,color:'var(--dim)',margin:'0 0 0 10px'}}>📍 {dz.direccion}</p>}
+              {dz.descansos.length>0&&<p style={{fontSize:13,color:'var(--dim)',margin:'0 0 0 10px'}}>😴 Descansa: {dz.descansos.map(nombreCorto).join(', ')}</p>}
               {dz.comentarios&&<p style={{fontSize:13,color:'var(--dim)',margin:'0 0 0 10px'}}>💬 {dz.comentarios}</p>}
             </div>;
           })}
@@ -2384,8 +2423,18 @@ function PlanTab({data,setData,team,toast,session,refreshKey}){
         </Card>
         {esCoachPDV?
         <Card title="🏬 Puntos de Venta a trabajar en la semana">
+          {vendedoresPlan.length>0&&<p style={{fontSize:13,fontWeight:600,marginBottom:8,padding:'8px 10px',borderRadius:8,
+            border:`1.5px solid ${sinDescansoSemana.length?'var(--yellow)':'var(--green)'}`,
+            background:sinDescansoSemana.length?'var(--ybg)':'var(--gbg)',
+            color:sinDescansoSemana.length?'var(--yellow)':'var(--green)'}}>
+            {sinDescansoSemana.length
+              ?`😴 Falta asignarle descanso a: ${sinDescansoSemana.map(nombreCorto).join(', ')} — márcalos en el día que les toca.`
+              :`✓ Los ${vendedoresPlan.length} vendedores ya tienen su día de descanso asignado.`}
+          </p>}
           {puntosVenta.length===0?<p style={{color:'var(--dim)',fontSize:13}}>Cargando puntos de venta…</p>:
-          DIAS_SEMANA.map(d=><PDVDia key={d} label={DIAS_SEMANA_LABEL[d]} dia={form.zonas[d]} puntosDisponibles={puntosVenta} onChange={nuevoDia=>setForm(f=>({...f,zonas:{...f.zonas,[d]:nuevoDia}}))}/>)}
+          DIAS_SEMANA.map(d=><PDVDia key={d} label={DIAS_SEMANA_LABEL[d]} dia={form.zonas[d]} puntosDisponibles={puntosVenta}
+            vendedores={vendedoresPlan} descansosSemana={descansosSemana}
+            onChange={nuevoDia=>setForm(f=>({...f,zonas:{...f.zonas,[d]:nuevoDia}}))}/>)}
         </Card>
         :
         <Card title="🗺️ Zonas a trabajar en la semana">

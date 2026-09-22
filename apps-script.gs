@@ -846,24 +846,29 @@ function nombreSeguro(txt) {
 // Un día de zonas puede venir en dos formatos: el viejo (arreglo simple de entradas) o el nuevo
 // ({entradas, direccion, comentarios}) — se normaliza a lo segundo para leer cualquiera de los dos.
 function normalizaDiaZonas(dia) {
-  if (Array.isArray(dia)) return { entradas: dia, direccion: '', comentarios: '' };
-  return dia || { entradas: [], direccion: '', comentarios: '' };
+  if (Array.isArray(dia)) return { entradas: dia, direccion: '', comentarios: '', descansos: [] };
+  const d = dia || {};
+  // `descansos` (a quién le toca descanso ese día, coach de punto de venta) llegó después: los
+  // planes guardados antes no lo traen, así que siempre sale como arreglo.
+  return { entradas: d.entradas || [], direccion: d.direccion || '', comentarios: d.comentarios || '', descansos: d.descansos || [] };
 }
 
-// Resume las zonas por día ({lunes:{entradas:[{cluster,colonia}],direccion,comentarios}, ...}) en
-// una línea de texto legible para el Sheet, incluyendo punto de reunión/carpa y comentarios:
-// "Lunes: Colonia X (Cluster A) · 📍 Carpa junto a la plaza · 💬 Llevar folletos | Martes: ...".
+// Resume las zonas por día ({lunes:{entradas:[{cluster,colonia}],direccion,comentarios,descansos}, ...})
+// en una línea de texto legible para el Sheet, incluyendo punto de reunión/carpa, quién descansa y
+// comentarios: "Lunes: Colonia X (Cluster A) · 📍 Carpa junto a la plaza · 😴 Descanso: JUAN PÉREZ ·
+// 💬 Llevar folletos | Martes: ...". El cliente lo lee de vuelta con parsearZonas.
 function formatZonas(zonas) {
   if (!zonas) return '';
   const DIAS = ['lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado', 'domingo'];
   const DIAS_LABEL = { lunes: 'Lunes', martes: 'Martes', miercoles: 'Miércoles', jueves: 'Jueves', viernes: 'Viernes', sabado: 'Sábado', domingo: 'Domingo' };
   return DIAS
     .map(d => ({ d: d, dz: normalizaDiaZonas(zonas[d]) }))
-    .filter(({ dz }) => dz.entradas.length || dz.direccion || dz.comentarios)
+    .filter(({ dz }) => dz.entradas.length || dz.direccion || dz.comentarios || dz.descansos.length)
     .map(({ d, dz }) => {
       const partes = [];
       if (dz.entradas.length) partes.push(dz.entradas.map(e => e.colonia ? `${e.colonia} (${e.cluster})` : `${e.cluster} (todo)`).join(', '));
       if (dz.direccion) partes.push('📍 ' + dz.direccion);
+      if (dz.descansos.length) partes.push('😴 Descanso: ' + dz.descansos.join(', '));
       if (dz.comentarios) partes.push('💬 ' + dz.comentarios);
       return `${DIAS_LABEL[d]}: ${partes.join(' · ')}`;
     })
