@@ -1502,8 +1502,10 @@ function ArranqueTab({data,setData,team,toast,session,refreshKey}){
   // (foto de grupo normal), pero además cada vendedor a su cargo tiene que quedar resuelto: o sube
   // la foto de entrada de ese vendedor en su punto de venta, o lo marca ausente con el motivo
   // (falta, descanso, etc.). Ninguno se puede dejar pasar, y hasta que todos estén resueltos se
-  // habilita el botón de guardar. La foto del vendedor es solo de galería (no se toma con cámara:
-  // el vendedor la manda) pero sí lleva sello, porque es la evidencia de la entrada.
+  // habilita el botón de guardar. La foto del vendedor es solo de galería y va SIN sello: el
+  // vendedor la toma en su punto de venta y se la manda al coach, así que el sello (nombre del
+  // coach, hora y ubicación del teléfono del coach) no diría dónde ni cuándo se tomó de verdad —
+  // sería evidencia falseada. Las fotos del propio coach (la de grupo) sí siguen sellándose.
   const esCoachPDV=(session.user.posicion||'').toUpperCase().includes('PROMOVENDEDOR');
   const[form,setForm]=useState({date:today(),time:now(),photo:null,photoSubida:null,presentes:[],ausentes:[],fotosVendedores:{},notas:''});
   useEffect(()=>{setForm(f=>({...f,presentes:team.map(m=>m.nombre),ausentes:[]}));},[team]);
@@ -1625,9 +1627,9 @@ function ArranqueTab({data,setData,team,toast,session,refreshKey}){
               {!esCoachPDV&&<PhotoCapture photo={aus.photo} onCapture={p=>updAus(m.nombre,'photo',p)} label="📷 Agregar evidencia (foto/plática)"/>}
             </div>}
             {esCoachPDV&&<div style={{marginTop:6}}>
-              <PhotoCaptureGeo modo="galeria" photo={fotoVendedor} onCapture={p=>setFotoVendedor(m.nombre,p)} coachName={session.user.nombre} toast={toast}
-                label={present?'🖼️ Subir foto de entrada en el punto de venta (obligatoria)':'🖼️ Subir foto (opcional — ya quedó justificado arriba)'}/>
-              {present&&form.photo&&!fotoVendedor&&<button type="button" onClick={()=>setFotoVendedor(m.nombre,form.photo)} style={{marginTop:4,fontSize:13,background:'none',border:'none',color:'var(--accent)',cursor:'pointer',textDecoration:'underline',padding:0}}>📎 Usar la misma foto del Arranque del día</button>}
+              <PhotoCapture modo="galeria" photo={fotoVendedor} onCapture={p=>setFotoVendedor(m.nombre,p)}
+                onQuitar={()=>setFotoVendedor(m.nombre,null)}
+                label={present?'🖼️ Subir foto de entrada en el punto de venta (obligatoria, sin sello)':'🖼️ Subir foto (opcional — ya quedó justificado arriba)'}/>
             </div>}
           </div>;
         })}
