@@ -935,7 +935,11 @@ const SHEET_CONFIG = {
       'Obj. Ventas', 'Real Ventas', '% Ventas',
       'Obj. Instalaciones', 'Real Instalaciones', '% Instalaciones',
       'Real Cuentas recuperadas NPPF', 'Real ARPU',
-      'Registrado por', 'Timestamp'
+      'Registrado por', 'Timestamp',
+      // Agregadas después: van al final para no desacomodar las filas que ya estaban.
+      'Obj. Cuentas recuperadas NPPF', '% Cuentas recuperadas NPPF',
+      'Obj. ARPU', '% ARPU',
+      'A destiempo'
     ]
   },
   FEEDBACK: {
@@ -1154,7 +1158,11 @@ function buildRow(type, d) {
         obj.ventas || 0, r.ventas || 0, pctCumplimiento(r.ventas, obj.ventas),
         obj.instalaciones || 0, r.instalaciones || 0, pctCumplimiento(r.instalaciones, obj.instalaciones),
         r.cuentasRecuperadas || 0, r.arpu || 0,
-        d.registradoPor || '', ts
+        d.registradoPor || '', ts,
+        obj.cuentasRecuperadas || 0, pctCumplimiento(r.cuentasRecuperadas, obj.cuentasRecuperadas),
+        obj.arpu || 0, pctCumplimiento(r.arpu, obj.arpu),
+        // Capturado el martes en vez del lunes (ver ventanaResultadoPlan en la app).
+        d.aDestiempo ? 'Sí' : 'No'
       ] };
     }
 

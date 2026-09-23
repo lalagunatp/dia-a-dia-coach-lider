@@ -449,8 +449,9 @@ function recordDesdeFila(tipo,f){
         zonas:parsearZonas(f['Zonas']),resultado_esperado:f['Resultado esperado']||'',notas:f['Notas']||''};
     case'plan_resultado':
       return{...base,planId:f['Plan ID']||'',semanaLabel:f['Semana']||'',
-        objetivos:{oportunidades:nNum(f['Obj. Oportunidades']),ventas:nNum(f['Obj. Ventas']),instalaciones:nNum(f['Obj. Instalaciones'])},
-        resultados:{oportunidades:nNum(f['Real Oportunidades']),ventas:nNum(f['Real Ventas']),instalaciones:nNum(f['Real Instalaciones']),cuentasRecuperadas:nNum(f['Real Cuentas recuperadas NPPF']),arpu:nNum(f['Real ARPU'])}};
+        objetivos:{oportunidades:nNum(f['Obj. Oportunidades']),ventas:nNum(f['Obj. Ventas']),instalaciones:nNum(f['Obj. Instalaciones']),cuentasRecuperadas:nNum(f['Obj. Cuentas recuperadas NPPF']),arpu:nNum(f['Obj. ARPU'])},
+        resultados:{oportunidades:nNum(f['Real Oportunidades']),ventas:nNum(f['Real Ventas']),instalaciones:nNum(f['Real Instalaciones']),cuentasRecuperadas:nNum(f['Real Cuentas recuperadas NPPF']),arpu:nNum(f['Real ARPU'])},
+        aDestiempo:String(f['A destiempo']||'').toUpperCase().startsWith('S')};
     case'feedback':{
       // "Evidencia de asignación externa" guarda varias ligas separadas por "; " en la misma
       // columna que la foto única del acompañamiento — se distinguen por el separador.
@@ -598,6 +599,49 @@ function textoPlan(rec){
   const zt=zonasATexto(rec.zonas);
   if(zt)lineas.push('','🗺️ Zonas:',zt);
   if(rec.resultado_esperado)lineas.push('',`✅ Resultado esperado: ${rec.resultado_esperado}`);
+  return lineas.join('\n');
+}
+// ─── Resultado del plan: cuándo se captura ───
+// La semana va de lunes a domingo; su resultado real se captura el lunes siguiente. Si ese lunes
+// se pasó, todavía se puede el martes, pero queda marcado a destiempo (en rojo, en el Plan, en el
+// Historial, en la hoja y en el WhatsApp). Del miércoles en adelante esa semana ya no se captura.
+// Regresa la semana a capturar hoy, o null si hoy no es día de captura.
+function ventanaResultadoPlan(ref){
+  const dia=ref.getDay(); // 0=domingo, 1=lunes, 2=martes
+  if(dia!==1&&dia!==2)return null;
+  const ini=startOfWeek(ref);ini.setDate(ini.getDate()-7);
+  return{semanaInicio:ymdLocal(ini),aDestiempo:dia===2};
+}
+// Los cinco renglones del resultado contra lo que se comprometió en el plan de esa semana.
+const KPIS_RESULTADO=[
+  {k:'oportunidades',label:'Oportunidades'},
+  {k:'ventas',label:'Validaciones'},
+  {k:'instalaciones',label:'Instalaciones'},
+  {k:'cuentasRecuperadas',label:'Cuentas pagadas (NPPF)'},
+  {k:'arpu',label:'ARPU',dinero:true},
+];
+function comparativoResultado(objetivos,resultados){
+  const o=objetivos||{},r=resultados||{};
+  return KPIS_RESULTADO.map(kpi=>{
+    const obj=Number(o[kpi.k])||0,real=Number(r[kpi.k])||0;
+    const pct=obj?Math.round(real/obj*100):null;
+    return{...kpi,obj,real,pct,dif:real-obj,
+      tono:pct==null?null:pct>=95?'verde':pct>=60?'amarillo':'rojo'};
+  });
+}
+const TONO_COLOR={verde:'var(--green)',amarillo:'var(--yellow)',rojo:'var(--red)'};
+const TONO_EMOJI={verde:'✅',amarillo:'🟡',rojo:'🔴'};
+function textoResultadoPlan(rec){
+  const fmtV=(x,v)=>x.dinero?fmtMoney(v):String(v);
+  const lineas=[`🏁 Resultado del plan — Semana ${rec.semanaLabel||''}`];
+  if(rec.registradoPor)lineas.push(`👤 ${rec.registradoPor}`);
+  if(rec.aDestiempo)lineas.push('','⚠️ CAPTURADO A DESTIEMPO: debía quedar el lunes y se llenó el martes.');
+  lineas.push('','📊 Resultado vs compromiso:');
+  comparativoResultado(rec.objetivos,rec.resultados).forEach(x=>{
+    const cumpl=x.pct==null?' (sin compromiso)':` — ${x.pct}%`;
+    const dif=x.pct==null||x.dif===0?'':` (${x.dif>0?'+':'-'}${fmtV(x,Math.abs(x.dif))})`;
+    lineas.push(`${x.tono?TONO_EMOJI[x.tono]:'•'} ${x.label}: ${fmtV(x,x.real)} de ${fmtV(x,x.obj)}${cumpl}${dif}`);
+  });
   return lineas.join('\n');
 }
 function textoCierre(rec){
@@ -2092,6 +2136,32 @@ function completitudPlanFila(row){
   return Math.round(llenos/total*100);
 }
 
+// El comentario en rojo de un resultado de plan capturado el martes en vez del lunes.
+function AvisoDestiempo(){
+  return <p style={{fontSize:13,fontWeight:700,color:'var(--red)',background:'var(--rbg)',border:'1px solid var(--red)',borderRadius:8,padding:'6px 10px',margin:'0 0 8px'}}>
+    ⚠️ Capturado a destiempo: el resultado debía quedar el lunes y se llenó el martes.
+  </p>;
+}
+// Resultado real contra el compromiso de la semana, renglón por renglón.
+function TablaComparativo({objetivos,resultados}){
+  const fmtV=(x,v)=>x.dinero?fmtMoney(v):v;
+  return <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
+    <thead><tr style={{borderBottom:'2px solid var(--border)',color:'var(--dim)'}}>
+      <th style={{textAlign:'left',padding:4}}></th>
+      <th style={{textAlign:'right',padding:4}}>Compromiso</th>
+      <th style={{textAlign:'right',padding:4}}>Real</th>
+      <th style={{textAlign:'right',padding:4}}>%</th>
+    </tr></thead>
+    <tbody>{comparativoResultado(objetivos,resultados).map(x=>
+      <tr key={x.k} style={{borderBottom:'1px solid var(--border)'}}>
+        <td style={{padding:4}}>{x.label}</td>
+        <td style={{textAlign:'right',padding:4}}>{fmtV(x,x.obj)}</td>
+        <td style={{textAlign:'right',padding:4,fontWeight:700}}>{fmtV(x,x.real)}</td>
+        <td style={{textAlign:'right',padding:4,fontWeight:800,color:x.tono?TONO_COLOR[x.tono]:'var(--dim)'}}>{x.pct==null?'—':`${x.pct}%`}</td>
+      </tr>)}
+    </tbody>
+  </table>;
+}
 function PlanTab({data,setData,team,toast,session,refreshKey}){
   const esLider=session.role==='lider';
   // Coach Promovendedor Punto de Venta: "Zonas a trabajar" se reemplaza por "Puntos de Venta a
@@ -2126,19 +2196,17 @@ function PlanTab({data,setData,team,toast,session,refreshKey}){
   const retraso=!planActual&&hoyStr>semanaIniStr;
   const puedeEditarPlan=!session.soloLectura&&sePuedeEditarPlan(planActual,nowDate);
 
-  // Semana(s) anteriores con plan pero sin resultado real capturado todavía — se resuelve la más
-  // antigua primero. Se agrupa por semana y no por registro: si esa semana se editó, hay varios
-  // planes y el resultado quedó colgado solo del que estaba vigente al capturarlo; sin agrupar, los
-  // demás se quedarían pidiendo resultado para siempre.
+  // Resultado real de la semana anterior: se captura el lunes, o el martes a destiempo (ver
+  // ventanaResultadoPlan). Se mira la semana completa y no un registro: si esa semana se editó, hay
+  // varios planes y el resultado quedó colgado solo del que estaba vigente al capturarlo.
   const planesConResultado=new Set(data.records.filter(r=>r.type==='plan_resultado').map(r=>r.planId));
-  const planPendiente=(()=>{
-    const porSemana={};
-    data.records.filter(r=>r.type==='plan'&&r.semanaInicio<semanaIniStr)
-      .forEach(r=>{(porSemana[r.semanaInicio]=porSemana[r.semanaInicio]||[]).push(r);});
-    const semanaPendiente=Object.keys(porSemana).sort()
-      .find(sem=>!porSemana[sem].some(p=>planesConResultado.has(p.id)));
-    return semanaPendiente?masReciente(porSemana[semanaPendiente],'savedAt'):null;
-  })();
+  const semanaAntIni=new Date(semanaIni);semanaAntIni.setDate(semanaAntIni.getDate()-7);
+  const planesSemanaAnt=data.records.filter(r=>r.type==='plan'&&r.semanaInicio===ymdLocal(semanaAntIni));
+  const semanaAntSinResultado=planesSemanaAnt.length>0&&!planesSemanaAnt.some(p=>planesConResultado.has(p.id));
+  const ventanaResultado=ventanaResultadoPlan(nowDate);
+  const planPendiente=ventanaResultado&&semanaAntSinResultado?masReciente(planesSemanaAnt,'savedAt'):null;
+  // Miércoles a domingo sin haberlo capturado: ya no se puede, pero se dice en vez de desaparecer.
+  const resultadoVencido=!ventanaResultado&&semanaAntSinResultado?masReciente(planesSemanaAnt,'savedAt'):null;
 
   const[zonasData,setZonasData]=useState({clusterToColonias:{},coloniaToCluster:{},clusters:[]});
   useEffect(()=>{if(!esCoachPDV)fetchClustersColonias(session.token).then(list=>setZonasData(buildClusterMap(list)));},[esCoachPDV]);
@@ -2266,17 +2334,27 @@ function PlanTab({data,setData,team,toast,session,refreshKey}){
       const f=funnelPeriodo(m.ventas,ini,fin);
       tot.oportunidades+=f.oportunidades;tot.ventas+=f.validadas;tot.instalaciones+=f.instaladas;
     });
-    setResForm({...tot,cuentasRecuperadas:'',arpu:''});
+    // Cuentas pagadas: lo que se fue marcando como "Pagadas hoy" en los cierres de esa semana.
+    const pagadas=data.records.filter(r=>r.type==='cierre'&&r.date>=planPendiente.semanaInicio&&r.date<=planPendiente.semanaFin)
+      .reduce((s,r)=>s+(r.resultados||[]).reduce((s2,x)=>s2+(Number(x.pagadasHoy)||0),0),0);
+    setResForm({...tot,cuentasRecuperadas:pagadas||'',arpu:''});
   },[planPendiente?.id]);
 
+  // Lo último que se guardó: se queda en pantalla con el comparativo y el botón de WhatsApp.
+  const[ultimoResultado,setUltimoResultado]=useState(null);
   const guardarResultado=async()=>{
     if(session.soloLectura)return; // vista prestada: solo consulta
     if(!planPendiente||!resForm)return;
+    const resultados=Object.fromEntries(KPIS_RESULTADO.map(x=>[x.k,Number(resForm[x.k])||0]));
     const rec={id:uid(),type:'plan_resultado',planId:planPendiente.id,date:today(),
       semanaInicio:planPendiente.semanaInicio,semanaFin:planPendiente.semanaFin,semanaLabel:planPendiente.semanaLabel,
-      objetivos:planPendiente.objetivos,resultados:resForm,
+      objetivos:planPendiente.objetivos,resultados,aDestiempo:!!ventanaResultado?.aDestiempo,
       registradoPor:session.user.nombre,token:session.token,savedAt:new Date().toISOString()};
+    // WhatsApp se abre aquí mismo, dentro del clic: después de un await el navegador lo bloquearía.
+    window.open(whatsappUrl(textoResultadoPlan(rec)),'_blank','noopener');
     const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast);toast('✅ Resultado guardado');
+    setUltimoResultado(rec);
+    window.scrollTo({top:0,behavior:'smooth'});
   };
 
   return <div>
@@ -2303,27 +2381,42 @@ function PlanTab({data,setData,team,toast,session,refreshKey}){
       <p style={{fontSize:13,color:'var(--dim)',margin:0}}>{esLunes?'📌 Hoy es lunes — captura el objetivo comprometido para esta semana.':'Plan de la semana aún no capturado.'}</p>
     </Card>}
 
+    {ultimoResultado&&
+      <Card title={`🏁 Resultado guardado — Semana ${ultimoResultado.semanaLabel}`} style={{borderLeft:`4px solid ${ultimoResultado.aDestiempo?'var(--red)':'var(--green)'}`}}>
+        {ultimoResultado.aDestiempo&&<AvisoDestiempo/>}
+        <p style={{fontSize:13,color:'var(--dim)',marginBottom:6}}>Así quedaste contra el compromiso de esa semana:</p>
+        <TablaComparativo objetivos={ultimoResultado.objetivos} resultados={ultimoResultado.resultados}/>
+        <p style={{fontSize:13,color:'var(--dim)',margin:'10px 0 8px'}}>Se abrió WhatsApp con este resultado. Si no se abrió, envíalo desde aquí:</p>
+        <a href={whatsappUrl(textoResultadoPlan(ultimoResultado))} target="_blank" rel="noopener noreferrer"
+          style={{display:'inline-flex',alignItems:'center',gap:6,padding:'8px 14px',borderRadius:8,background:'#25D366',color:'#fff',fontSize:14,fontWeight:700,textDecoration:'none'}}>
+          📲 Enviar resultado por WhatsApp
+        </a>
+      </Card>
+    }
+
+    {resultadoVencido&&
+      <Card style={{borderLeft:'4px solid var(--red)',background:'var(--rbg)'}}>
+        <p style={{fontSize:14,fontWeight:700,color:'var(--red)',margin:'0 0 4px'}}>⚠️ No se capturó el resultado de la semana {resultadoVencido.semanaLabel}</p>
+        <p style={{fontSize:13,color:'var(--red)',margin:0}}>Se captura el lunes, o el martes a destiempo. Del miércoles en adelante ya no se puede.</p>
+      </Card>
+    }
+
     {planPendiente&&resForm&&
-      <Card title={`📌 Resultado pendiente — Semana ${planPendiente.semanaLabel}`} style={{borderLeft:'4px solid var(--yellow)'}}>
-        <p style={{fontSize:13,color:'var(--dim)',marginBottom:8}}>Se precargó de lo que hay en sistema para esa semana — ajústalo si hace falta y guarda el resultado real.</p>
+      <Card title={`🏁 Resultado del plan — Semana ${planPendiente.semanaLabel}`} style={{borderLeft:`4px solid ${ventanaResultado.aDestiempo?'var(--red)':'var(--yellow)'}`}}>
+        {ventanaResultado.aDestiempo?<AvisoDestiempo/>:
+          <p style={{fontSize:13,fontWeight:700,color:'var(--yellow)',marginBottom:6}}>📌 Hoy es lunes: captura cómo cerró la semana. Si no queda hoy, el martes se registra a destiempo.</p>}
+        <p style={{fontSize:13,color:'var(--dim)',marginBottom:8}}>Oportunidades, validaciones e instalaciones se precargaron de lo que hay en sistema, y las cuentas pagadas de los cierres de esa semana. Ajústalo si hace falta. Debajo de cada dato ves cómo vas contra lo que te comprometiste.</p>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
-          {KPIS.map(kpi=>{
-            const obj=Number(planPendiente.objetivos?.[kpi.k])||0;
-            const real=Number(resForm[kpi.k])||0;
-            const p=obj?Math.round(real/obj*100):null;
-            return <Field key={kpi.k} label={`${kpi.label} (obj: ${obj})`}>
-              <Input type="number" value={resForm[kpi.k]} onChange={e=>setResForm(f=>({...f,[kpi.k]:e.target.value}))}/>
-              {p!=null&&<p style={{fontSize:13,fontWeight:700,margin:'2px 0 0',color:p>=95?'var(--green)':p>=60?'var(--yellow)':'var(--red)'}}>{p}%</p>}
-            </Field>;
-          })}
-          <Field label={`Cuentas recuperadas NPPF (obj: ${planPendiente.objetivos?.cuentasRecuperadas||0})`}>
-            <Input type="number" value={resForm.cuentasRecuperadas} onChange={e=>setResForm(f=>({...f,cuentasRecuperadas:e.target.value}))}/>
-          </Field>
-          <Field label={`ARPU (obj: ${fmtMoney(planPendiente.objetivos?.arpu)})`}>
-            <InputMoney value={resForm.arpu} onChange={e=>setResForm(f=>({...f,arpu:e.target.value}))}/>
-          </Field>
+          {comparativoResultado(planPendiente.objetivos,resForm).map(x=>
+            <Field key={x.k} label={`${x.label} (compromiso: ${x.dinero?fmtMoney(x.obj):x.obj})`}>
+              {x.dinero
+                ?<InputMoney value={resForm[x.k]} onChange={e=>setResForm(f=>({...f,[x.k]:e.target.value}))}/>
+                :<Input type="number" value={resForm[x.k]} onChange={e=>setResForm(f=>({...f,[x.k]:e.target.value}))}/>}
+              {x.pct!=null&&<p style={{fontSize:13,fontWeight:700,margin:'2px 0 0',color:TONO_COLOR[x.tono]}}>{x.pct}%</p>}
+            </Field>
+          )}
         </div>
-        {session.soloLectura?<AvisoSoloLectura nombre={session.user.nombre}/>:<Btn onClick={guardarResultado} style={{width:'100%'}}>💾 Guardar resultado real</Btn>}
+        {session.soloLectura?<AvisoSoloLectura nombre={session.user.nombre}/>:<Btn onClick={guardarResultado} style={{width:'100%'}}>💾 Guardar resultado y enviar por WhatsApp</Btn>}
       </Card>
     }
 
@@ -3914,7 +4007,7 @@ function resumenDe(r,vendedor){
     case'plan':return `Semana ${r.semanaLabel||''}${r.objetivos?` · obj. ${n(r.objetivos.instalaciones)} inst`:''}`;
     case'plan_resultado':{
       const o=n(r.objetivos?.instalaciones),v=n(r.resultados?.instalaciones);
-      return `Semana ${r.semanaLabel||''} · ${v}/${o} inst${o?` (${Math.round(v/o*100)}%)`:''}`;
+      return `Semana ${r.semanaLabel||''} · ${v}/${o} inst${o?` (${Math.round(v/o*100)}%)`:''}${r.aDestiempo?' · ⚠️ a destiempo':''}`;
     }
     default:return'';
   }
@@ -4238,15 +4331,12 @@ function FichaRegistro({ev,resaltar,enfoque,onVerFoto,imprimir,conEncabezado,rol
       break;
     }
     case'plan_resultado':{
-      const o=r.objetivos||{},v=r.resultados||{};
-      const kpi=(k,label)=>{
-        const ob=n(o[k]),val=n(v[k]),p=ob?Math.round(val/ob*100):null;
-        return{label,valor:val,sub:ob?`de ${ob} · ${p}%`:null,color:p==null?null:p>=95?'var(--green)':p>=60?'var(--yellow)':'var(--red)'};
-      };
       cuerpo=<>
         {r.semanaLabel&&<div style={{fontSize:15,fontWeight:700,marginTop:4}}>Semana {r.semanaLabel}</div>}
-        <Metricas items={[kpi('oportunidades','Oportunidades'),kpi('ventas','Ventas'),kpi('instalaciones','Instalaciones')]}/>
-        <div style={{fontSize:13,color:'var(--dim)',marginTop:8}}>NPPF recuperadas: <b style={{color:'var(--text)'}}>{n(v.cuentasRecuperadas)}</b> · ARPU: <b style={{color:'var(--text)'}}>{fmtMoney(v.arpu)}</b></div>
+        {r.aDestiempo&&<div style={{marginTop:6}}><AvisoDestiempo/></div>}
+        <Seccion titulo="Resultado vs compromiso">
+          <TablaComparativo objetivos={r.objetivos} resultados={r.resultados}/>
+        </Seccion>
       </>;
       break;
     }
@@ -4636,10 +4726,9 @@ function reporteDetalleHTML(r){
         (r.resultado_esperado?`<p><b>Resultado esperado:</b> ${escapeHtml(r.resultado_esperado)}</p>`:'');
     }
     case'plan_resultado':{
-      const o=r.objetivos||{},res=r.resultados||{};
-      const pct=(v,ob)=>ob?Math.round((Number(v)||0)/Number(ob)*100):null;
-      return['oportunidades','ventas','instalaciones'].map(k=>{const p=pct(res[k],o[k]);return `<p style="margin:2px 0">${k[0].toUpperCase()+k.slice(1)}: ${res[k]||0}${o[k]!=null?` / obj. ${o[k]}`:''}${p!=null?` <b>${p}%</b>`:''}</p>`;}).join('')+
-        `<p>NPPF: ${res.cuentasRecuperadas||0} · ARPU: ${escapeHtml(fmtMoney(res.arpu))}</p>`;
+      const fmtV=(x,v)=>escapeHtml(x.dinero?fmtMoney(v):String(v));
+      return (r.aDestiempo?'<p style="color:#dc2626;font-weight:700">⚠️ Capturado a destiempo: debía quedar el lunes y se llenó el martes.</p>':'')+
+        comparativoResultado(r.objetivos,r.resultados).map(x=>`<p style="margin:2px 0">${escapeHtml(x.label)}: ${fmtV(x,x.real)} / compromiso ${fmtV(x,x.obj)}${x.pct!=null?` <b>${x.pct}%</b>`:''}</p>`).join('');
     }
     case'feedback':
       return `<p><b>${escapeHtml(r.vendedor)}</b> — ${escapeHtml(r.tipo)}${r.semaforo?` (${escapeHtml(STATUS[r.semaforo]?.label||'')})`:''}</p>`+
