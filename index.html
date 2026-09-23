@@ -1779,13 +1779,18 @@ function CierreTab({data,setData,team,toast,session,refreshKey}){
   const guardar=async()=>{
     if(session.soloLectura)return; // vista prestada: solo consulta
     const rec={id:uid(),type:'cierre',...form,registradoPor:session.user.nombre,token:session.token,savedAt:new Date().toISOString()};
+    // Se abre WhatsApp aquí mismo, dentro del clic: si se hiciera después de un await el navegador
+    // lo trataría como popup y lo bloquearía. La tarjeta de arriba queda como respaldo.
+    window.open(whatsappUrl(textoCierre(rec)),'_blank','noopener');
     const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast);toast('✅ Cierre guardado');
     setUltimoGuardado(rec);
+    window.scrollTo({top:0,behavior:'smooth'});
     setForm(f=>({date:today(),time:now(),resultados:f.resultados.map(r=>({...r,oportunidades:0,validadas:0,instaladas:0,pendiente:'',pagadasHoy:0})),incidencias:'',seguimiento:[],notas:''}));
   };
   return <div>
     {ultimoGuardado&&<Card style={{borderLeft:'4px solid var(--green)'}}>
-      <p style={{fontSize:14,fontWeight:700,marginBottom:8}}>✅ Cierre guardado</p>
+      <p style={{fontSize:14,fontWeight:700,marginBottom:4}}>✅ Cierre guardado</p>
+      <p style={{fontSize:13,color:'var(--dim)',marginBottom:8}}>Se abrió WhatsApp con el resultado. Si no se abrió, envíalo desde aquí:</p>
       <a href={whatsappUrl(textoCierre(ultimoGuardado))} target="_blank" rel="noopener noreferrer"
         style={{display:'inline-flex',alignItems:'center',gap:6,padding:'8px 14px',borderRadius:8,background:'#25D366',color:'#fff',fontSize:14,fontWeight:700,textDecoration:'none'}}>
         📲 Enviar cierre por WhatsApp
