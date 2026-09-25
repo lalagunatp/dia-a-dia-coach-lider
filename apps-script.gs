@@ -354,6 +354,9 @@ const CLUSTERS_SHEET = 'Clusters Colonias'; // catálogo de zonas para Plan/Perm
 const PDV_SHEET = 'PDV'; // catálogo de Puntos de Venta para Plan (columna A) — Coach Promovendedor Punto de Venta
 const RANKING_ENT_GID = 1643927631;
 const RANKING_GID = 1495976066;
+// Platino = Oro con al menos 60 instalaciones en los 3 meses anteriores al actual (ver leerRankingMensual)
+const PLATINO_MIN_INST_3M = 60;
+const MESES_RANKING = ['ENERO', 'FEBRERO', 'MARZO', 'ABRIL', 'MAYO', 'JUNIO', 'JULIO', 'AGOSTO', 'SEPTIEMBRE', 'OCTUBRE', 'NOVIEMBRE', 'DICIEMBRE'];
 // Debe coincidir con VENTAS_LOOKBACK_MESES en index.html — ahí solo controla hasta dónde
 // deja "hojear" semanas/meses el panel de Ventas del equipo; aquí es lo que de verdad se lee.
 const VENTAS_LOOKBACK_MESES = 3;
@@ -621,6 +624,20 @@ function leerRankingMensual() {
   const mesCols = [];
   h2.forEach(function (v, i) { if (String(v || '').trim().toUpperCase().indexOf('VENTAS EN EL DISTRITO') === 0) mesCols.push(i); });
 
+  // Platino: un Oro cuyas instalaciones de los 3 meses anteriores al actual suman al menos
+  // PLATINO_MIN_INST_3M (promedio de 20 al mes). La hoja nunca dice "PLATINO" — ahí sale
+  // como ORO —, así que se decide aquí con esas mismas columnas. Traen más de 12 meses (el
+  // mismo mes de dos años), por eso de cada mes se toma la columna más a la derecha, que es
+  // la del año más reciente. Misma regla que el Reporte de seguimiento (pestaña Equipos).
+  const hoyP = new Date();
+  const colsPlatino = [];
+  for (let k = 3; k >= 1; k--) {
+    const nombreMes = MESES_RANKING[(hoyP.getMonth() - k + 12) % 12];
+    let col = -1;
+    mesCols.forEach(function (i) { if (String(h2[i] || '').trim().toUpperCase().replace(/\s+/g, ' ') === 'VENTAS EN EL DISTRITO ' + nombreMes) col = i; });
+    if (col >= 0) colsPlatino.push(col);
+  }
+
   const ventaSanaCols = [];
   h2.forEach(function (v, i) { if (String(v || '').trim().toUpperCase().indexOf('VENTA SANA ') === 0) ventaSanaCols.push(i); });
   const idxVentaSana = ventaSanaCols.length ? ventaSanaCols[ventaSanaCols.length - 1] : null;
@@ -674,10 +691,13 @@ function leerRankingMensual() {
     const relevant = installs.slice(0, lastNonZero + 1);
     const last3 = relevant.slice(-3);
 
-    const badgeOficial = idxRankingActual != null ? String(r[idxRankingActual] || '').trim().toUpperCase() : '';
+    const badgeHoja = idxRankingActual != null ? String(r[idxRankingActual] || '').trim().toUpperCase() : '';
     const obsOficial = idxObs != null ? String(r[idxObs] || '').trim() : '';
+    const inst3m = colsPlatino.reduce(function (s, i) { return s + (Number(r[i]) || 0); }, 0);
+    const badgeOficial = (badgeHoja === 'ORO' && colsPlatino.length === 3 && inst3m >= PLATINO_MIN_INST_3M) ? 'PLATINO' : badgeHoja;
 
-    let certTier = ['BRONCE', 'PLATA', 'ORO', 'ENTRENAMIENTO'].indexOf(badgeOficial) !== -1 ? badgeOficial : null;
+    // las certificaciones siguen siendo las del bloque ORO aunque el vendedor ya sea Platino
+    let certTier = ['BRONCE', 'PLATA', 'ORO', 'ENTRENAMIENTO'].indexOf(badgeHoja) !== -1 ? badgeHoja : null;
     if (!certTier) {
       let best = null, bestTotal = 0;
       Object.keys(blocks).forEach(function (tier) {
