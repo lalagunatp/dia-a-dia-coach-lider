@@ -644,6 +644,55 @@ function textoResultadoPlan(rec){
   });
   return lineas.join('\n');
 }
+// ─── Arranque: evidencia por WhatsApp ───
+// Una liga de wa.me solo lleva texto, así que las fotos se mandan con el menú de compartir del
+// teléfono (Web Share), donde se elige WhatsApp. Donde no se puede compartir archivos se abre
+// WhatsApp solo con el texto, para adjuntar las fotos a mano.
+function textoArranque(rec){
+  const lineas=[`☀️ Arranque del día — ${fmt(rec.date)}${rec.time?' · '+rec.time:''}`];
+  if(rec.registradoPor)lineas.push(`👤 ${rec.registradoPor}`);
+  if(rec.rolRegistro!=='lider'){
+    const aus=rec.ausentes||[];
+    lineas.push('',`✅ Presentes: ${(rec.presentes||[]).length} · ❌ Ausentes: ${aus.length}`);
+    aus.forEach(a=>{
+      const c=a.compromiso||{};
+      const comp=[c.cuentas&&`${c.cuentas} cuentas`,c.ventas&&`${c.ventas} ventas`,c.instalaciones&&`${c.instalaciones} inst`].filter(Boolean).join(' · ');
+      lineas.push(`• ${a.name}: ${a.reason}${a.detail?` — ${a.detail}`:''}${comp?` (compromiso: ${comp}${a.colonia?` en ${a.colonia}`:''})`:''}`);
+    });
+  }
+  if(rec.notas)lineas.push('',`📝 ${rec.notas}`);
+  lineas.push('','📷 Evidencia adjunta.');
+  return lineas.join('\n');
+}
+// Las fotos del arranque que todavía están en el teléfono (data URL), con un nombre de archivo.
+function fotosArranque(rec){
+  const limpio=s=>String(s||'').replace(/[^\w]+/g,'_').replace(/^_|_$/g,'');
+  const fotos=[
+    {src:rec.photo,nombre:`Arranque_${rec.date}_grupo.jpg`},
+    {src:rec.photoSubida,nombre:`Arranque_${rec.date}_adicional.jpg`},
+    ...Object.entries(rec.fotosVendedores||{}).map(([nm,src])=>({src,nombre:`Arranque_${rec.date}_${limpio(nm)}.jpg`})),
+    ...(rec.ausentes||[]).map(a=>({src:a.photo,nombre:`Arranque_${rec.date}_ausente_${limpio(a.name)}.jpg`})),
+  ];
+  return fotos.filter(f=>String(f.src||'').startsWith('data:'));
+}
+function dataUrlAFile(url,nombre){
+  const[cab,b64]=url.split(',');
+  const mime=(cab.match(/:(.*?);/)||[])[1]||'image/jpeg';
+  const bin=atob(b64),arr=new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++)arr[i]=bin.charCodeAt(i);
+  return new File([arr],nombre,{type:mime});
+}
+// Se llama directo desde el clic (sin await antes): el navegador solo deja compartir o abrir otra
+// ventana como respuesta inmediata a un toque.
+function compartirEvidencia(texto,fotos){
+  let files=[];
+  try{files=fotos.map(f=>dataUrlAFile(f.src,f.nombre));}catch(e){console.error('Evidencia:',e);}
+  if(files.length&&navigator.canShare&&navigator.canShare({files})){
+    navigator.share({files,text:texto}).catch(e=>{if(e.name!=='AbortError')console.error('Compartir:',e);});
+    return;
+  }
+  window.open(whatsappUrl(texto),'_blank','noopener');
+}
 function textoCierre(rec){
   const lineas=[`🌙 Cierre del día — ${fmt(rec.date)}${rec.time?' · '+rec.time:''}`,''];
   const resultados=(rec.resultados||[]).filter(x=>x.oportunidades||x.validadas||x.instaladas||x.pagadasHoy||x.pendiente);
@@ -1610,10 +1659,21 @@ function ArranqueTab({data,setData,team,toast,session,refreshKey}){
     if(!form.photo){alert(esLider?'Agrega la foto con el coach prioridad del día para poder guardar el arranque':'Agrega la foto de grupo para poder guardar el arranque');return;}
     if(pendientesPDV.length){alert('Falta resolver a: '+pendientesPDV.map(m=>m.nombre).join(', ')+'. De cada vendedor sube su foto de entrada o márcalo ausente con el motivo (falta, descanso, etc.) para poder guardar el arranque.');return;}
     const rec={id:uid(),type:'arranque',...form,registradoPor:session.user.nombre,rolRegistro:session.role,token:session.token,savedAt:new Date().toISOString()};
+    compartirEvidencia(textoArranque(rec),fotosArranque(rec));
     const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast,setData);toast('✅ Arranque guardado');
+    setUltimoGuardado(rec);
     setForm({date:today(),time:now(),photo:null,photoSubida:null,presentes:team.map(m=>m.nombre),ausentes:[],fotosVendedores:{},notas:''});
+    window.scrollTo({top:0,behavior:'smooth'});
   };
+  // Lo último que se guardó: se queda arriba con el botón para volver a mandar la evidencia.
+  const[ultimoGuardado,setUltimoGuardado]=useState(null);
   return <div>
+    {ultimoGuardado&&<Card style={{borderLeft:'4px solid var(--green)'}}>
+      <p style={{fontSize:14,fontWeight:700,marginBottom:4}}>✅ Arranque guardado</p>
+      <p style={{fontSize:13,color:'var(--dim)',marginBottom:8}}>Se abrió el envío con la evidencia: elige WhatsApp. Si no se abrió, o para mandarlo a alguien más, envíalo desde aquí:</p>
+      <Btn onClick={()=>compartirEvidencia(textoArranque(ultimoGuardado),fotosArranque(ultimoGuardado))}
+        style={{background:'#25D366',color:'#fff',fontSize:14}}>📲 Enviar evidencia por WhatsApp</Btn>
+    </Card>}
     <Card title="☀️ Arranque del día">
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:12}}>
         <Field label="Fecha"><Input type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})}/></Field>
