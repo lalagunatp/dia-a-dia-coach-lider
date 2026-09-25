@@ -205,6 +205,10 @@ const TABS=[
   {id:'feedback',icon:'💬',label:'Hallazgos'},
   {id:'historial',icon:'📁',label:'Historial'},
 ];
+// Reporte comercial (semana en curso, semana cerrada o mes cerrado, por líder): vive en el
+// Reporte de seguimiento, que ya tiene la base, el ranking y las órdenes. Este botón solo lo
+// abre directo en esa vista (#reporte); allá se entra con el mismo número y PIN.
+const REPORTE_COMERCIAL_URL='https://lalagunatp.github.io/informeseguimiento/#reporte';
 // "Trabajo fuera de ruta" y "Actividad especial" no son ausencias: el vendedor sí trabaja, solo que
 // fuera de su ruta. Por eso aparecen tanto aquí (Arranque) como en Permisos, y en los dos lados son
 // los únicos que piden el compromiso del día — el resto de motivos no tiene nada que comprometer.
@@ -5027,6 +5031,10 @@ function MainApp({session,setSession,onLogout,sessionBase,vistas,onAbrirVista,on
         {TABS.map(t=><button key={t.id} onClick={()=>irATab(t.id)} className={tab===t.id?'activa':undefined} aria-current={tab===t.id?'page':undefined}>
           <span className="app-nav-icono">{t.icon}</span><span>{t.label}</span>
         </button>)}
+        {/* Director y líderes (por su propio puesto, aunque estén en vista prestada) */}
+        {(sessionBase.role==='director'||sessionBase.role==='lider')&&<button onClick={()=>window.open(REPORTE_COMERCIAL_URL,'_blank','noopener')} title="Abre el Reporte comercial en el Reporte de seguimiento">
+          <span className="app-nav-icono">🧾</span><span>Reporte</span>
+        </button>}
       </nav>
 
       <main className="app-main">
