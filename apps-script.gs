@@ -240,6 +240,39 @@ function leerRosterCompleto() {
   return roster;
 }
 
+// Vacantes de PLANTILLA por coach ({nombre del coach: cuántas}). No entran al roster — no son
+// personas que usen la app ni a las que se les registre nada —, pero sí cuentan para la meta
+// oficial: igual que el Reporte de seguimiento (pestaña Equipos), cada vacante suma la meta de
+// 3 instalaciones a su coach. Misma caché corta que el roster.
+const VACANTES_CACHE_KEY = 'vacantes_v1';
+function leerVacantesPorJefe() {
+  const cache = CacheService.getScriptCache();
+  try {
+    const cached = cache.get(VACANTES_CACHE_KEY);
+    if (cached) return JSON.parse(cached);
+  } catch (e) { /* se sigue con la lectura normal */ }
+  const sheet = SpreadsheetApp.openById(SPREADSHEET_ID_PLANTILLA).getSheetByName(PLANTILLA_SHEET_NAME);
+  const vacantes = {};
+  if (sheet) {
+    sheet.getDataRange().getValues().forEach(function (r) {
+      const nombre = String(r[4] || '').trim().toUpperCase();
+      const jefe = String(r[10] || '').trim();
+      if (nombre === 'VACANTE' && jefe) vacantes[jefe] = (vacantes[jefe] || 0) + 1;
+    });
+  }
+  try { cache.put(VACANTES_CACHE_KEY, JSON.stringify(vacantes), ROSTER_CACHE_TTL_S); } catch (e) { /* sin caché, igual funciona */ }
+  return vacantes;
+}
+
+// Solo las vacantes de los coaches que le tocan a quien entró (o del propio coach).
+function vacantesDelEquipo(user, built) {
+  const todas = leerVacantesPorJefe();
+  const coaches = built.role === 'coach' ? [user.nombre] : built.coaches.map(function (c) { return c.nombre; });
+  const out = {};
+  coaches.forEach(function (c) { if (todas[c]) out[c] = todas[c]; });
+  return out;
+}
+
 function sinPin(e) {
   if (!e) return e;
   const copia = {};
@@ -303,6 +336,7 @@ function armarSesion(user, all) {
     coaches: built.coaches.map(sinPin),
     lideres: built.lideres.map(sinPin), // solo el Director trae líderes; para el resto va vacío
     role: built.role,
+    vacantes: vacantesDelEquipo(user, built), // {coach: cuántas} — suman a la meta oficial
   };
 }
 
