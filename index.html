@@ -157,15 +157,26 @@ function fetchConTope(url,opts,ms=25000){
 const VENTAS_LOOKBACK_MESES=3;
 // Meta semanal de instalaciones por ranking (misma convención que informeseguimiento/avancecomisiones).
 const META_SEMANAL_RANKING={ENTRENAMIENTO:3,CONDICIONADO:3,BRONCE:3,PLATA:4,ORO:5,PLATINO:6,DIAMANTE:6};
-const metaSemanal=badge=>META_SEMANAL_RANKING[badge]||0;
+// Igual que el Reporte de seguimiento: quien no tiene ranking en la hoja (o uno que no se reconoce)
+// y cada vacante del equipo también cuentan 3 — el puesto existe y la meta del equipo no baja
+// porque falte cargar un ranking o cubrir una vacante.
+const META_SIN_RANKING=3;
+const META_VACANTE=3;
+const tieneRanking=badge=>!!META_SEMANAL_RANKING[badge];
+const metaSemanal=badge=>META_SEMANAL_RANKING[badge]||META_SIN_RANKING;
 const metaMensual=badge=>Math.round(metaSemanal(badge)*4.33);
+const metaMensualVacantes=n=>Math.round(n*META_VACANTE*4.33);
+// Vacantes (las manda el servidor por coach, ver apps-script.gs: vacantesDelEquipo) de una lista
+// de coaches.
+const vacantesDe=(session,coachNombres)=>(coachNombres||[]).reduce((s,c)=>s+((session?.vacantes||{})[c]||0),0);
 // Meta oficial de la semana de un grupo de vendedores: instalaciones = suma de la meta por ranking
-// de cada uno; ventas/validaciones 15% arriba de instalaciones; oportunidades 15% arriba de ventas.
-// Es la misma cuenta para el equipo completo, para un coach o para el equipo de un líder, por eso
-// vive aquí y no dentro del Plan — y como sale del badge, se mueve sola en cuanto cambia el ranking
-// en la hoja (la sesión relee ranking al abrir la app y al tocar "Actualizar información").
-function metaOficialDe(vendedores){
-  const instalaciones=(vendedores||[]).reduce((s,m)=>s+metaSemanal(m.badge),0);
+// de cada uno (más 3 por vacante); ventas/validaciones 15% arriba de instalaciones; oportunidades
+// 15% arriba de ventas. Es la misma cuenta para el equipo completo, para un coach o para el equipo
+// de un líder, por eso vive aquí y no dentro del Plan — y como sale del badge, se mueve sola en
+// cuanto cambia el ranking en la hoja (la sesión relee ranking al abrir la app y al tocar
+// "Actualizar información").
+function metaOficialDe(vendedores,vacantes=0){
+  const instalaciones=(vendedores||[]).reduce((s,m)=>s+metaSemanal(m.badge),0)+vacantes*META_VACANTE;
   const ventas=Math.round(instalaciones*1.15);
   return{instalaciones,ventas,oportunidades:Math.round(ventas*1.15)};
 }
@@ -734,7 +745,7 @@ async function fetchPerfil(token,verComo){
 
 // Ranking, ventas/comisiones y asignaciones ahora también se piden al servidor con el token
 // (ver fetchVentasComisiones/fetchRanking) — comparte el mismo pipeline entre login y refresco.
-async function enriquecerSesion({user,team,coaches,lideres,role},token,verComo){
+async function enriquecerSesion({user,team,coaches,lideres,role,vacantes},token,verComo){
   const[rank,vtas]=await Promise.all([fetchRanking(token,verComo),fetchVentasComisiones(token,verComo)]);
   const{rankEnt,rankMen}=rank;
   const{ventasByVendedor,cuentasByHomologado,asignacionesPorOS}=vtas;
@@ -750,6 +761,7 @@ async function enriquecerSesion({user,team,coaches,lideres,role},token,verComo){
     // Solo el Director trae líderes (nivel arriba de los coaches); para el resto viene vacío.
     lideres:sortByRanking(enrichTeam(lideres||[],rankEnt,rankMen).map(attachVentas)),
     role,
+    vacantes:vacantes||{},
     // Si ventas o ranking no cargaron, la sesión queda marcada: sin esto el Dashboard mostraba
     // ceros que se leen como "el equipo no vendió nada" cuando en realidad la lectura falló.
     avisoDatos:[vtas.error&&('no se pudieron cargar las ventas del equipo ('+vtas.error+')'),
@@ -1560,8 +1572,8 @@ function LoginScreen({onLogin,aviso}){
       // Ventas y comisiones del equipo (semana/mes en curso, rechazos, asignaciones, cuentas sin pagar)
       // Base de Datos y Comisiones no siempre etiqueta "Num Vendedor" con la misma columna de ID
       // (a veces D/numEmp, a veces B/numEmpB según la persona) — se consultan ambas y se cruzan las dos al final.
-      const{user,team,coaches,lideres,role}=await enriquecerSesion(login,login.token);
-      const session={user,team,coaches,lideres,role,token:login.token,loginTime:new Date().toISOString()};
+      const{user,team,coaches,lideres,role,vacantes}=await enriquecerSesion(login,login.token);
+      const session={user,team,coaches,lideres,role,vacantes,token:login.token,loginTime:new Date().toISOString()};
       // localStorage (no sessionStorage): sobrevive a que se cierre por completo el navegador/PWA,
       // para poder seguir trabajando con los últimos datos aunque no haya señal al reabrir la app
       // en campo — el botón "Actualizar información" refresca en cuanto vuelve la conexión.
@@ -2232,15 +2244,17 @@ function PlanTab({data,setData,team,toast,session,refreshKey}){
   // trabajar" (catálogo hoja PDV) en vez de cluster/colonia.
   const esCoachPDV=(session.user.posicion||'').toUpperCase().includes('PROMOVENDEDOR');
   const vendedoresPlan=(team||[]).filter(m=>isVendedor(m.posicion));
-  // Meta oficial del equipo: instalaciones = suma de meta semanal por ranking; ventas/validaciones
-  // 15% mayor que instalaciones; oportunidades 15% mayor que ventas/validaciones.
-  const metaOficial=metaOficialDe(vendedoresPlan);
+  // Meta oficial del equipo: instalaciones = suma de meta semanal por ranking (más 3 por vacante);
+  // ventas/validaciones 15% mayor que instalaciones; oportunidades 15% mayor que ventas/validaciones.
+  const coachesDelPlan=session.role==='coach'?[session.user.nombre]:(session.coaches||[]).map(c=>c.nombre);
+  const vacantesPlan=vacantesDe(session,coachesDelPlan);
+  const metaOficial=metaOficialDe(vendedoresPlan,vacantesPlan);
   const metaInstalOficial=metaOficial.instalaciones;
   const metaVentasOficial=metaOficial.ventas;
   const metaOportOficial=metaOficial.oportunidades;
-  // Vendedores que no suman nada a la meta porque su ranking no está (o no se reconoce) en la hoja:
-  // la meta sale más baja de lo que debería y sin decirlo se lee como si el equipo fuera más chico.
-  const sinMetaRanking=vendedoresPlan.filter(m=>!metaSemanal(m.badge)).map(m=>m.nombre);
+  // Vendedores sin ranking en la hoja (o con uno que no se reconoce): cuentan 3 como en el Reporte
+  // de seguimiento, pero se avisa para que lo carguen — su meta real puede ser mayor.
+  const sinMetaRanking=vendedoresPlan.filter(m=>!tieneRanking(m.badge)).map(m=>m.nombre);
   const[verMeta,setVerMeta]=useState(false);
   const KPIS=[
     {k:'oportunidades',label:'Oportunidades',meta:metaOportOficial},
@@ -2296,7 +2310,7 @@ function PlanTab({data,setData,team,toast,session,refreshKey}){
     // vendedores (los que le reportan) — así el líder ve contra qué se está comparando cada quien
     // en vez de solo el total del equipo. Sale del ranking vigente de cada vendedor, así que se
     // mueve sola cuando el ranking cambia en la hoja.
-    const metaCoach=metaOficialDe(vendedoresPlan.filter(m=>m.reportaA===c.nombre));
+    const metaCoach=metaOficialDe(vendedoresPlan.filter(m=>m.reportaA===c.nombre),vacantesDe(session,[c.nombre]));
     if(!row)return{coach:c,row:null,estado:'sin',pct:0,meta:metaCoach,objetivos:{oportunidades:0,ventas:0,instalaciones:0,cuentasRecuperadas:0,arpu:0},prioridades:'',acompanamientos:''};
     const pct=completitudPlanFila(row);
     return{
@@ -2623,20 +2637,26 @@ function PlanTab({data,setData,team,toast,session,refreshKey}){
             </button>
             {verMeta&&<div style={{marginTop:6,background:'var(--bg)',borderRadius:8,padding:10}}>
               <p style={{fontSize:12,color:'var(--dim)',margin:'0 0 6px'}}>
-                Meta de instalaciones = suma de la meta semanal por ranking de cada vendedor. Ventas/validaciones y
-                oportunidades salen 15% arriba de la anterior. El ranking es el que trae la hoja de ranking en la
-                última actualización — toca 🔄 <b>Actualizar información</b> si acabas de moverlo ahí.
+                Meta de instalaciones = suma de la meta semanal por ranking de cada vendedor (Platino 6, Oro 5,
+                Plata 4, Bronce/Condicionado/Entrenamiento 3; sin ranking 3) más 3 por cada vacante. Ventas/validaciones
+                y oportunidades salen 15% arriba de la anterior. Es la misma meta del Reporte de seguimiento. El ranking
+                es el que trae la hoja de ranking en la última actualización — toca 🔄 <b>Actualizar información</b> si
+                acabas de moverlo ahí.
               </p>
               {vendedoresPlan.map(m=><div key={m.numEmp||m.nombre} style={{display:'flex',justifyContent:'space-between',gap:8,fontSize:13,padding:'2px 0'}}>
                 <span>{nombreCorto(m.nombre)} <span style={{color:'var(--dim)'}}>· {m.badge||'sin ranking en la hoja'}</span></span>
-                <b style={{color:metaSemanal(m.badge)?'var(--text)':'var(--red)'}}>{metaSemanal(m.badge)}</b>
+                <b style={{color:tieneRanking(m.badge)?'var(--text)':'var(--red)'}}>{metaSemanal(m.badge)}</b>
               </div>)}
+              {vacantesPlan>0&&<div style={{display:'flex',justifyContent:'space-between',gap:8,fontSize:13,padding:'2px 0'}}>
+                <span>Vacantes <span style={{color:'var(--dim)'}}>· {vacantesPlan} × {META_VACANTE}</span></span>
+                <b>{vacantesPlan*META_VACANTE}</b>
+              </div>}
               <div style={{display:'flex',justifyContent:'space-between',gap:8,fontSize:13,fontWeight:800,borderTop:'1px solid var(--border)',marginTop:4,paddingTop:4}}>
                 <span>Meta de instalaciones</span><b>{metaInstalOficial}</b>
               </div>
               {sinMetaRanking.length>0&&<p style={{fontSize:12,color:'var(--red)',margin:'6px 0 0'}}>
-                ⚠️ {sinMetaRanking.map(nombreCorto).join(', ')} suma{sinMetaRanking.length===1?'':'n'} 0 a la meta:
-                {sinMetaRanking.length===1?' no tiene':' no tienen'} ranking en la hoja. Repórtalo para que lo carguen.
+                ⚠️ {sinMetaRanking.map(nombreCorto).join(', ')} {sinMetaRanking.length===1?'no tiene':'no tienen'} ranking
+                en la hoja: {sinMetaRanking.length===1?'cuenta':'cuentan'} con la meta de {META_SIN_RANKING}. Repórtalo para que lo carguen.
               </p>}
             </div>}
           </div>}
@@ -2988,6 +3008,10 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
   const[expandedCoachEquipo,setExpandedCoachEquipo]=useState(null);
   const[abrirPDV,setAbrirPDV]=useState(false);
   const[expandedPDV,setExpandedPDV]=useState(null);
+  // Las vacantes de los coaches de estos vendedores también suman a la meta (3 por semana cada
+  // una), igual que en el Plan y en el Reporte de seguimiento.
+  const vacantesDash=vacantesDe(session,[...new Set(vendedores.map(m=>m.reportaA))]);
+  metaInstalTotal+=periodoVentas==='semana'?vacantesDash*META_VACANTE:metaMensualVacantes(vacantesDash);
   vendedores.forEach(m=>{
     const f=funnelPeriodo(m.ventas,rangoIni,rangoFin);
     ventasTotal.oportunidades+=f.oportunidades;
@@ -3920,6 +3944,7 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
               opMes+=fMes.oportunidades;valMes+=fMes.validadas;instMes+=fMes.instaladas;
               metaMesCoach+=metaMensual(m.badge);
             });
+            metaMesCoach+=metaMensualVacantes(vacantesDe(session,[c.nombre]));
             return <div key={key}>
               <div onClick={()=>setExpandedCoachEquipo(isExp?null:key)} style={{
                 display:'flex',alignItems:'center',justifyContent:'space-between',
