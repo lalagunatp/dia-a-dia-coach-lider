@@ -106,11 +106,19 @@ function getSpreadsheet() {
 
 // ─── Autenticación: PIN validado aquí + token firmado (sin sesiones en servidor) ───
 
-const POSITIONS_ALLOWED = ['COACH VENTAS', 'LIDER VENTAS', 'COACH PROMOVENDEDOR PUNTO DE VENTA', 'DIRECTOR DISTRITAL', 'GESTOR DE CAPITAL HUMANO'];
+const POSITIONS_ALLOWED = ['COACH VENTAS', 'LIDER VENTAS', 'COACH PROMOVENDEDOR PUNTO DE VENTA', 'DIRECTOR DISTRITAL', 'GESTOR DE CAPITAL HUMANO', 'AUDITOR GEOGRAFIA OPERATIVO SR'];
+// Puestos de solo consulta: ven a TODO el distrito, pero en la app solo Dashboard e Historial.
+const ROLES_CONSULTA = ['gestor', 'auditor'];
+
+// El puesto tal como viene en PLANTILLA puede traer acentos ("AUDITOR GEOGRAFÍA…"): se compara sin ellos.
+function normPuesto(pos) {
+  return String(pos || '').toUpperCase().trim().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ');
+}
 
 function getRoleType(pos) {
-  const p = (pos || '').toUpperCase().trim();
+  const p = normPuesto(pos);
   if (p === 'GESTOR DE CAPITAL HUMANO') return 'gestor';
+  if (p === 'AUDITOR GEOGRAFIA OPERATIVO SR') return 'auditor';
   if (p.indexOf('DIRECTOR') !== -1) return 'director';
   if (p.indexOf('LIDER') !== -1) return 'lider';
   if (p.indexOf('COACH') !== -1) return 'coach';
@@ -145,15 +153,20 @@ function construirEquipo(user, allEmployees) {
     coaches = activos.filter(function (e) { return liderNames.indexOf(e.reportaA) !== -1 && isCoachPos(e.posicion); });
     const coachNamesDir = coaches.map(function (c) { return c.nombre; });
     team = activos.filter(function (e) { return coachNamesDir.indexOf(e.reportaA) !== -1 && isVendedorPos(e.posicion); });
-  } else if (role === 'gestor') {
-    // Gestor de Capital Humano: visibilidad amplia por diseño (todos los coaches, para Historial).
+  } else if (ROLES_CONSULTA.indexOf(role) !== -1) {
+    // Gestor de Capital Humano y Auditor Geografía Operativo Sr: solo consulta, pero de TODO el
+    // distrito — todos los líderes de ventas, todos los coaches y los vendedores de esos coaches.
+    // Los líderes van aparte (como en el Director) para que el Dashboard agrupe por líder.
+    lideres = activos.filter(function (e) { return isLiderPos(e.posicion) && normPuesto(e.posicion).indexOf('VENTAS') !== -1; });
     coaches = activos.filter(function (e) { return isCoachPos(e.posicion); });
     const coachNames = coaches.map(function (c) { return c.nombre; });
     team = activos.filter(function (e) { return coachNames.indexOf(e.reportaA) !== -1 && isVendedorPos(e.posicion); });
-    activos.filter(function (e) { return e.reportaA === user.nombre; }).forEach(function (p) {
-      if (isCoachPos(p.posicion)) { if (!coaches.some(function (c) { return c.nombre === p.nombre; })) coaches.push(p); }
-      else if (!team.some(function (t) { return t.nombre === p.nombre; })) team.push(p);
-    });
+    if (role === 'gestor') {
+      activos.filter(function (e) { return e.reportaA === user.nombre; }).forEach(function (p) {
+        if (isCoachPos(p.posicion)) { if (!coaches.some(function (c) { return c.nombre === p.nombre; })) coaches.push(p); }
+        else if (!team.some(function (t) { return t.nombre === p.nombre; })) team.push(p);
+      });
+    }
   }
   return { team: team, coaches: coaches, lideres: lideres, role: role };
 }
@@ -352,8 +365,8 @@ function iniciarSesion(params) {
     const user = all.find(function (e) { return e.numEmp === numEmp; });
     if (!user) return { ok: false, error: 'Número de empleado no encontrado' };
     if (String(user.pin) !== pin) return { ok: false, error: 'PIN incorrecto' };
-    if (POSITIONS_ALLOWED.indexOf((user.posicion || '').trim().toUpperCase()) === -1) {
-      return { ok: false, error: 'Acceso solo para Coach Ventas, Líder Ventas, Coach Promovendedor Punto de Venta, Director Distrital o Gestor de Capital Humano' };
+    if (POSITIONS_ALLOWED.indexOf(normPuesto(user.posicion)) === -1) {
+      return { ok: false, error: 'Acceso solo para Coach Ventas, Líder Ventas, Coach Promovendedor Punto de Venta, Director Distrital, Gestor de Capital Humano o Auditor Geografía Operativo Sr' };
     }
     const sesion = armarSesion(user, all);
     sesion.token = emitirToken(numEmp);
@@ -949,7 +962,7 @@ const SHEET_CONFIG = {
       'Presentes', 'Ausentes', 'Detalle ausentes', 'Notas',
       'Con foto', 'Foto grupo', 'Fotos evidencia ausentes', 'Fotos por vendedor',
       'Timestamp',
-      'Compromisos del día', 'Foto grupo subida'
+      'Compromisos del día', 'Foto grupo subida', 'Nombres presentes'
     ]
   },
   PERMISO: {
@@ -1152,7 +1165,10 @@ function buildRow(type, d) {
         // Columnas nuevas: van DESPUÉS de Timestamp a propósito. Insertarlas en medio recorrería
         // todas las filas ya guardadas y el histórico quedaría leído de columnas equivocadas.
         compromisosTxt,
-        fotoGrupoSubidaUrl
+        fotoGrupoSubidaUrl,
+        // Quiénes estuvieron presentes (antes solo se guardaba cuántos): con esto el Historial de
+        // cualquier teléfono puede contar la asistencia al buscar a una persona.
+        (d.presentes || []).join('; ')
       ];
       // Se regresan las ligas para que la app las use en vez de la foto local.
       return { row: row, extra: { fotoGrupoUrl: fotoGrupoUrl, fotoGrupoSubidaUrl: fotoGrupoSubidaUrl, fotosAusentes: fotosAusentes, fotosVendedores: fotosVendedores } };
@@ -1311,6 +1327,8 @@ function obtenerHistorial(params) {
     built.coaches.forEach(function (m) { nombresPermitidos[m.nombre] = true; });
     // El Director también ve lo que capturan sus líderes (antes venían dentro de `coaches`).
     (built.lideres || []).forEach(function (m) { nombresPermitidos[m.nombre] = true; });
+    // Gestor CH y Auditor: consulta de todo el distrito, capture quien capture (Director incluido).
+    const veTodo = ROLES_CONSULTA.indexOf(built.role) !== -1;
 
     const hojaNombre = ((params && params.hoja) || 'ARRANQUE').toUpperCase();
     const cfg = SHEET_CONFIG[hojaNombre];
@@ -1332,7 +1350,7 @@ function obtenerHistorial(params) {
         obj[h] = (v instanceof Date) ? Utilities.formatDate(v, Session.getScriptTimeZone(), 'yyyy-MM-dd') : v;
       });
       return obj;
-    }).filter(function (r) { return nombresPermitidos[r['Registrado por']]; }).reverse();
+    }).filter(function (r) { return veTodo || nombresPermitidos[r['Registrado por']]; }).reverse();
 
     return { ok: true, registros: registros };
   } catch (err) {
