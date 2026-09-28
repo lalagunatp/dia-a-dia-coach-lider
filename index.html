@@ -220,6 +220,11 @@ const TABS=[
 // Reporte de seguimiento, que ya tiene la base, el ranking y las órdenes. Este botón solo lo
 // abre directo en esa vista (#reporte); allá se entra con el mismo número y PIN.
 const REPORTE_COMERCIAL_URL='https://lalagunatp.github.io/informeseguimiento/#reporte';
+// Gestor de Capital Humano y Auditor Geografía Operativo Sr: consulta de todo el distrito (el
+// servidor les arma el equipo completo), sin capturar nada — solo Dashboard e Historial.
+const ROLES_CONSULTA=['gestor','auditor'];
+const esRolConsulta=role=>ROLES_CONSULTA.includes(role);
+const TABS_CONSULTA=['dashboard','historial'];
 // "Trabajo fuera de ruta" y "Actividad especial" no son ausencias: el vendedor sí trabaja, solo que
 // fuera de su ruta. Por eso aparecen tanto aquí (Arranque) como en Permisos, y en los dos lados son
 // los únicos que piden el compromiso del día — el resto de motivos no tiene nada que comprometer.
@@ -428,7 +433,10 @@ function recordDesdeFila(tipo,f){
       const fotosVendedores={};
       parseFotosAusentes(f['Fotos por vendedor']).forEach(x=>{fotosVendedores[x.nombre]=x.url;});
       return{...base,time:f['Hora']||'',rolRegistro:f['Rol']||'',
-        presentes:new Array(nNum(f['Presentes'])).fill(''), // el Sheet guarda cuántos, no quiénes
+        // Desde que existe la columna "Nombres presentes" el Sheet guarda quiénes; antes solo cuántos.
+        presentes:String(f['Nombres presentes']||'').trim()
+          ?String(f['Nombres presentes']).split(';').map(s=>s.trim()).filter(Boolean)
+          :new Array(nNum(f['Presentes'])).fill(''),
         ausentes:partirLista(f['Detalle ausentes']).map(({nombre,resto})=>{
           const partes=resto.split('—');
           return{name:nombre,reason:(partes[0]||'').trim(),detail:(partes[1]||'').trim(),
@@ -2903,7 +2911,9 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
   // El Director usa exactamente el mismo agrupado, solo que con TODOS los coaches de TODOS sus
   // líderes: cada tarjeta trae además de qué líder es ese coach, y los totales de arriba
   // (ventas, metas, semáforo) terminan siendo los del distrito completo.
-  const esDirector=role==='director';
+  // Gestor CH y Auditor ven el mismo tablero del Director (todo el distrito), sin capturar nada.
+  const soloConsulta=esRolConsulta(role);
+  const esDirector=role==='director'||soloConsulta;
   const esLider=role==='lider'||esDirector;
   const vendedoresPorCoach={};
   if(esLider){
@@ -3902,7 +3912,7 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
             </Card>
           }
       </div>
-      <div style={{order:15}}>
+      {!soloConsulta&&<div style={{order:15}}>
           <Card title="⚡ Acciones rápidas">
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
               <Btn onClick={()=>setTab('arranque')} variant="secondary" style={{fontSize:14}}>☀️ Arranque</Btn>
@@ -3911,7 +3921,7 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
               <Btn onClick={()=>setTab('plan')} variant="secondary" style={{fontSize:14}}>📊 Plan</Btn>
             </div>
           </Card>
-      </div>
+      </div>}
     </div>
     <div className="dash-completo" style={{order:13}}>
         <Card title={esDirector?`👥 Distrito por Coach (${(coaches||[]).length} coaches · ${vendedores.length} vendedores)`
@@ -4045,6 +4055,19 @@ function fechaEfectiva(r){
 }
 // Vendedores de los que habla un registro. Es lo que arma el expediente de una persona: sus
 // ausencias, permisos, hallazgos, semáforos y sus resultados en los cierres.
+// ¿Esta persona estuvo presente en este arranque? Solo se usa al buscar a una persona: en la vista
+// general el arranque sigue hablando solo de los ausentes. Con la lista de nombres (arranques de este
+// teléfono, o del Sheet desde que guarda "Nombres presentes") es exacto; en los arranques viejos del
+// Sheet solo hay el número, así que cuenta como presente si lo capturó su coach y no aparece entre
+// los ausentes. Regresa 'si', 'coach' (presente según el arranque de su coach) o ''.
+function presenciaEn(r,nombre,coachDe){
+  if(!r||r.type!=='arranque'||!nombre)return'';
+  if((r.ausentes||[]).some(a=>a.name===nombre))return'';
+  const pres=r.presentes||[];
+  if(pres.includes(nombre))return'si';
+  if(!pres.some(Boolean)&&coachDe&&coachDe(nombre)&&coachDe(nombre)===r.registradoPor)return'coach';
+  return'';
+}
 function sujetosDe(r){
   const lista=[];
   const add=(nombre,papel)=>{const nm=String(nombre||'').trim();if(nm&&!lista.some(x=>x.nombre===nm))lista.push({nombre:nm,papel});};
@@ -4160,6 +4183,7 @@ function resumirEventos(eventos,vendedor){
     res.porTipo[e.tipo]=(res.porTipo[e.tipo]||0)+1;
     if(e.pendiente)res.pendientes++;
     if(e.tipo==='feedback'&&STATUS[r.semaforo])res.colores[r.semaforo]++;
+    if(vendedor&&e.presencia)res.asistencias=(res.asistencias||0)+1;
     if(e.tipo==='arranque')(r.ausentes||[]).filter(a=>!vendedor||a.name===vendedor).forEach(a=>{
       if(esFueraDeRuta(a.reason)){res.fueraRuta++;return;}
       const m=a.reason||'Sin motivo';
@@ -4232,14 +4256,30 @@ function Metricas({items}){
     </div>)}
   </div>;
 }
-// Foto de evidencia: si todavía es la imagen embebida (no ha subido) se muestra; si ya es liga de
-// Drive, no carga como <img> (es una página del visor), así que se ofrece como botón para abrirla.
+// Foto de evidencia: si todavía es la imagen embebida (no ha subido) se muestra tal cual. Si ya es
+// liga de Drive, la liga es una página del visor y no carga como <img>; pero Drive da una miniatura
+// de cualquier archivo compartido "con el enlace" (así se suben todas, ver subirFotoADrive), así que
+// se muestra esa — en pantalla y en el informe PDF — y al tocarla se abre la foto completa en Drive.
+// Si la miniatura no carga (archivo borrado, sin permiso), queda el botón de siempre.
+const idDrive=url=>{const m=/\/d\/([\w-]{20,})|[?&]id=([\w-]{20,})/.exec(String(url||''));return m?(m[1]||m[2]):'';};
+const miniaturaDrive=(url,ancho)=>{const id=idDrive(url);return id?`https://drive.google.com/thumbnail?id=${id}&sz=w${ancho}`:'';};
 function EvidenciaFoto({src,onVer,imprimir,etiqueta}){
+  const[falla,setFalla]=useState(false);
   if(!src)return null;
-  if(!String(src).startsWith('data:'))
-    return <a href={src} target="_blank" rel="noopener noreferrer" style={{display:'inline-flex',alignItems:'center',gap:6,padding:'6px 10px',borderRadius:8,background:'var(--accent-light)',color:'var(--accent)',fontSize:13,fontWeight:700,textDecoration:'none'}}>📷 {etiqueta||'Ver evidencia'}</a>;
-  return <img src={src} alt={etiqueta||'Evidencia'} onClick={imprimir?undefined:()=>onVer&&onVer(src)}
-    style={{width:imprimir?150:96,height:imprimir?150:96,objectFit:'cover',borderRadius:8,cursor:imprimir?'default':'pointer',border:'1px solid var(--border)'}}/>;
+  const lado=imprimir?110:96;
+  const estilo={width:lado,height:lado,objectFit:'cover',borderRadius:8,border:'1px solid var(--border)',display:'inline-block',verticalAlign:'top',marginRight:4};
+  const conPie=img=>imprimir&&etiqueta
+    ?<figure style={{margin:0,display:'inline-flex',flexDirection:'column',alignItems:'center',gap:2,breakInside:'avoid'}}>{img}<figcaption style={{fontSize:10,color:'#555',maxWidth:lado,textAlign:'center',lineHeight:1.2}}>{etiqueta}</figcaption></figure>
+    :img;
+  if(!String(src).startsWith('data:')){
+    const mini=miniaturaDrive(src,imprimir?300:200);
+    if(!mini||falla)
+      return <a href={src} target="_blank" rel="noopener noreferrer" style={{display:'inline-flex',alignItems:'center',gap:6,padding:'6px 10px',borderRadius:8,background:'var(--accent-light)',color:'var(--accent)',fontSize:13,fontWeight:700,textDecoration:'none'}}>📷 {etiqueta||'Ver evidencia'}</a>;
+    const img=<img src={mini} alt={etiqueta||'Evidencia'} referrerPolicy="no-referrer" onError={()=>setFalla(true)} style={estilo}/>;
+    return conPie(imprimir?img:<a href={src} target="_blank" rel="noopener noreferrer" title={etiqueta||'Ver evidencia'} style={{display:'inline-block'}}>{img}</a>);
+  }
+  return conPie(<img src={src} alt={etiqueta||'Evidencia'} onClick={imprimir?undefined:()=>onVer&&onVer(src)}
+    style={{...estilo,cursor:imprimir?'default':'pointer'}}/>);
 }
 function Transcripcion({texto,imprimir}){
   const[abierta,setAbierta]=useState(false);
@@ -4295,7 +4335,11 @@ function FichaRegistro({ev,resaltar,enfoque,onVerFoto,imprimir,conEncabezado,rol
       };
       cuerpo=enfoque
         ?<>
-          {!aus.length&&!fuera.length&&<div style={{...HS.texto,marginTop:4}}>✅ Presente en el arranque</div>}
+          {!aus.length&&!fuera.length&&<div style={{...HS.texto,marginTop:4}}>✅ Presente en el arranque{ev.presencia==='coach'&&<span style={{color:'var(--dim)'}}> · según el arranque de su coach (ese día solo se guardaba cuántos presentes, no quiénes)</span>}</div>}
+          {!aus.length&&!fuera.length&&(r.photo||r.photoSubida)&&<Seccion titulo="Evidencia del arranque"><div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+            <EvidenciaFoto src={r.photo} onVer={onVerFoto} imprimir={imprimir} etiqueta="Foto de grupo"/>
+            <EvidenciaFoto src={r.photoSubida} onVer={onVerFoto} imprimir={imprimir} etiqueta="Foto subida"/>
+          </div></Seccion>}
           {aus.length>0&&<Seccion titulo="Ausencia">{aus.map(renglonAusencia)}</Seccion>}
           {fuera.length>0&&<Seccion titulo="Fuera de ruta / actividad especial">{fuera.map(renglonFuera)}</Seccion>}
           {fotosVend.length>0&&<Seccion titulo="Foto de entrada">{fotosVend.map(([nm,u])=><EvidenciaFoto key={nm} src={u} onVer={onVerFoto} imprimir={imprimir} etiqueta="Foto de entrada"/>)}</Seccion>}
@@ -4502,7 +4546,8 @@ function ResumenHistorial({res,vendedor,tipoActivo,onTipo,imprimir}){
   const pt=tp=>res.porTipo[tp]||0;
   const c=(tipo,icon,valor,label,color)=>({tipo,icon,valor,label,color});
   const chips=(vendedor
-    ?[c('arranque','🚫',res.ausencias,'Ausencias',res.ausencias?'var(--red)':null),
+    ?[c('arranque','✅',res.asistencias||0,'Asistencias'),
+      c('arranque','🚫',res.ausencias,'Ausencias',res.ausencias?'var(--red)':null),
       res.fueraRuta?c('arranque','🧭',res.fueraRuta,'Fuera de ruta'):null,
       c('permiso','📋',pt('permiso'),'Permisos'),
       c('feedback','💬',pt('feedback'),'Hallazgos'),
@@ -4627,7 +4672,9 @@ function HistorialTab({data,session}){
   const nombresCoach=new Set((session?.coaches||[]).map(c=>c.nombre));
   const nombresLider=new Set((session?.lideres||[]).map(c=>c.nombre));
   const tieneEquipoDeCoaches=nombresCoach.size>0;
-  const ROL_LABEL={coach:'Coach',lider:'Líder',director:'Director',gestor:'Gestor CH'};
+  // coach de cada vendedor, para contar su asistencia en arranques viejos (ver presenciaEn)
+  const coachDe=useMemo(()=>{const m=new Map((session?.team||[]).map(x=>[x.nombre,x.reportaA]));return nm=>m.get(nm)||'';},[session?.team]);
+  const ROL_LABEL={coach:'Coach',lider:'Líder',director:'Director',gestor:'Gestor CH',auditor:'Auditor'};
   const rolDe=nombre=>!nombre?'':nombre===user.nombre?(ROL_LABEL[session?.role]||''):nombresLider.has(nombre)?'Líder':nombresCoach.has(nombre)?'Coach':'';
 
   // Las 7 hojas se leen una vez al abrir (y con 🔄). Mientras llegan, ya se ve lo del teléfono.
@@ -4676,9 +4723,12 @@ function HistorialTab({data,session}){
   const vendedorFoco=modoPersona==='sujeto'?nombrePersona:'';
   // El resumen se saca sin el filtro de tipo, para que sus cuadros sigan diciendo cuántos hay de
   // cada cosa mientras la lista muestra solo el tipo elegido.
+  // En el expediente de una persona entran también los arranques en los que estuvo presente (no
+  // solo donde la mencionan); `presencia` le dice a la ficha si salió de la lista o se dedujo.
   const base=eventos
     .filter(e=>e.fecha>=per.desde&&e.fecha<=per.hasta)
-    .filter(e=>!persona||(modoPersona==='autor'?e.autor===nombrePersona:e.sujetos.some(s=>s.nombre===nombrePersona)));
+    .map(e=>modoPersona==='sujeto'&&e.tipo==='arranque'?{...e,presencia:presenciaEn(e.r,nombrePersona,coachDe)}:e)
+    .filter(e=>!persona||(modoPersona==='autor'?e.autor===nombrePersona:(e.sujetos.some(s=>s.nombre===nombrePersona)||!!e.presencia)));
   const lista=tipo==='todos'?base:base.filter(e=>e.tipo===tipo);
   const res=resumirEventos(base,vendedorFoco);
   const grupos=agruparEventos(lista,agrupar,vendedorFoco);
@@ -4686,7 +4736,7 @@ function HistorialTab({data,session}){
   const alcance=modoPersona==='sujeto'?`Expediente de ${nombrePersona}`
     :modoPersona==='autor'?`Actividad de ${nombrePersona}`
     :session?.role==='director'?`Distrito de ${user.nombre||''}`
-    :session?.role==='gestor'?'Coaches y vendedores (Capital Humano)'
+    :esRolConsulta(session?.role)?'Todo el distrito (consulta)'
     :`Equipo de ${user.nombre||''}`;
   const etiquetaAgrupar={dia:'Día',vendedor:'Vendedor',coach:'Coach',tipo:'Tipo'};
   const opcionesAgrupar=['dia','vendedor',tieneEquipoDeCoaches?'coach':null,'tipo'].filter(Boolean);
@@ -4925,7 +4975,10 @@ function BarraVistaPrestada({sessionBase,vistas,onAbrir,onRegresar,onSalir,abrie
   </>;
 }
 
-function MainApp({session,setSession,onLogout,sessionBase,vistas,onAbrirVista,onRegresarVista,onSalirVista}){
+function MainApp({session:sesionRecibida,setSession,onLogout,sessionBase,vistas,onAbrirVista,onRegresarVista,onSalirVista}){
+  // Gestor CH y Auditor: todo lo que captura queda bloqueado con la misma marca que la vista
+  // prestada (soloLectura), así el semáforo del Dashboard tampoco se puede tocar.
+  const session=useMemo(()=>esRolConsulta(sesionRecibida.role)&&!sesionRecibida.soloLectura?{...sesionRecibida,soloLectura:true}:sesionRecibida,[sesionRecibida]);
   const[datosLocales,setDatosLocales]=useState(loadData());
   const[tab,setTab]=useState('dashboard');
   const[toastMsg,setToastMsg]=useState('');
@@ -4944,12 +4997,14 @@ function MainApp({session,setSession,onLogout,sessionBase,vistas,onAbrirVista,on
   const setData=enVista?(()=>{}):setDatosLocales;
   const allTeam=[...(coaches||[]),...team];
   // Líder y Director supervisan a través de coaches (el director, los de todos sus líderes).
-  const supervisaCoaches=role==='lider'||role==='director';
-  const chipsEquipo=role==='director'?(session.lideres||[]):role==='lider'?(coaches||[]):[];
+  const supervisaCoaches=role==='lider'||role==='director'||esRolConsulta(role);
+  const chipsEquipo=role==='director'||esRolConsulta(role)?(session.lideres||[]):role==='lider'?(coaches||[]):[];
   const todayRecs=data.records.filter(r=>r.date===today());
   const hasArr=todayRecs.some(r=>r.type==='arranque');
   const hasCie=todayRecs.some(r=>r.type==='cierre');
-  const roleLabels={coach:'🏅 Coach',lider:'⭐ Líder',director:'👔 Director',gestor:'🧑‍💼 Gestor CH'};
+  const roleLabels={coach:'🏅 Coach',lider:'⭐ Líder',director:'👔 Director',gestor:'🧑‍💼 Gestor CH',auditor:'🔎 Auditor'};
+  // Solo consulta: Dashboard e Historial
+  const tabsVisibles=esRolConsulta(role)?TABS.filter(t=>TABS_CONSULTA.includes(t.id)):TABS;
 
   // Botón flotante "Actualizar información" (todos los roles): re-trae ranking/ventas/cuentas del
   // equipo y fuerza a Arranque/Plan/Permisos a releer el historial del Sheet sin recargar la app.
@@ -5053,7 +5108,7 @@ function MainApp({session,setSession,onLogout,sessionBase,vistas,onAbrirVista,on
 
     <div className="app-cuerpo">
       <nav className="app-nav" aria-label="Secciones">
-        {TABS.map(t=><button key={t.id} onClick={()=>irATab(t.id)} className={tab===t.id?'activa':undefined} aria-current={tab===t.id?'page':undefined}>
+        {tabsVisibles.map(t=><button key={t.id} onClick={()=>irATab(t.id)} className={tab===t.id?'activa':undefined} aria-current={tab===t.id?'page':undefined}>
           <span className="app-nav-icono">{t.icon}</span><span>{t.label}</span>
         </button>)}
         {/* Director y líderes (por su propio puesto, aunque estén en vista prestada) */}
