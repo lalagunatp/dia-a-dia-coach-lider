@@ -823,6 +823,11 @@ async function refrescarYPersistirSesion(sesionBase,setSession){
   // traerlos) — no se vuelven a persistir.
   delete nuevaSesion.allEmployees;
   if(nuevaSesion.user)delete nuevaSesion.user.pin;
+  // Ya trae ventas/ranking (o su error en avisoDatos): fuera las marcas de la sesión mínima del
+  // login rápido. Sin esto, tocar 🔄 mientras cargaba (o reabrir la app antes de que terminara)
+  // dejaba el aviso azul de "cargando" pegado para siempre.
+  delete nuevaSesion.cargandoDatos;
+  delete nuevaSesion.sinVentasGuardadas;
   guardarSesionLocal(nuevaSesion);
   setSession(nuevaSesion);
   return nuevaSesion;
@@ -832,6 +837,10 @@ async function refrescarYPersistirSesion(sesionBase,setSession){
 // una simple falla de red para poder mandar a la persona de vuelta al login en vez de dejarla
 // viendo datos viejos para siempre sin explicación.
 const esSesionExpirada=e=>/expirada|inválida/i.test(e?.message||'');
+// Token del último login con PIN, mientras siga adentro. La carga de ventas/ranking de fondo que
+// arranca handleLogin lo revisa antes de aplicar su resultado: si en ese rato la persona tocó
+// "Salir", logout lo borra y la respuesta tardía se descarta en vez de volver a meterla.
+let tokenLoginVigente=null;
 
 // ═══ VISTA PRESTADA (Director y Líder) ═══
 // Trae la sesión COMPLETA de alguien de su equipo (para el Director, uno de sus líderes o un
@@ -1614,13 +1623,25 @@ function LoginScreen({onLogin,aviso}){
       // para poder seguir trabajando con los últimos datos aunque no haya señal al reabrir la app
       // en campo — el botón "Actualizar información" refresca en cuanto vuelve la conexión.
       guardarSesionLocal(base);
+      tokenLoginVigente=login.token;
       onLogin(base);
       // Ventas/ranking del equipo de fondo: Base de Datos y Comisiones no siempre etiqueta "Num
       // Vendedor" con la misma columna de ID (a veces D/numEmp, a veces B/numEmpB según la persona)
       // — se consultan ambas y se cruzan al final. En cuanto llegan, se completa la sesión y se
-      // re-guarda; si algo falla, el aviso se queda y el botón 🔄 reintenta (no vale la pena mandar
-      // de vuelta al login por esto).
-      enriquecerSesion(login,login.token).then(datos=>{
+      // re-guarda. Si falla, se reintenta una vez sola a los pocos segundos (la persona ya está
+      // trabajando, así que esperar no le cuesta nada) y solo si vuelve a fallar aparece el aviso
+      // rojo; desde ahí reintentan el botón 🔄 y el auto-refresco al recuperar señal (MainApp).
+      const cargarDatos=async intento=>{
+        const datos=await enriquecerSesion(login,login.token);
+        if(datos.avisoDatos&&intento<2){
+          await new Promise(r=>setTimeout(r,4000));
+          return cargarDatos(intento+1);
+        }
+        return datos;
+      };
+      cargarDatos(1).then(datos=>{
+        // Salió (o entró alguien más) mientras cargaba: no revivir esa sesión.
+        if(tokenLoginVigente!==login.token)return;
         const plena={...base,...datos,token:login.token,loginTime:base.loginTime};
         delete plena.sinVentasGuardadas;
         delete plena.cargandoDatos;
@@ -5062,9 +5083,25 @@ function MainApp({session:sesionRecibida,setSession,onLogout,sessionBase,vistas,
   // que se guardó sin señal, aparece solo, sin tener que cerrar y abrir la app ni recargar. El
   // refresco por volver a la app se limita a una vez cada 30s (en el celular el foco cambia a cada
   // rato) para no golpear al servidor de más; recuperar señal siempre refresca.
+  // Si además las ventas/ranking de la sesión propia quedaron en error (aviso rojo), también se
+  // reintentan solas en ese momento. Refs porque el efecto se monta una sola vez y tiene que ver la
+  // sesión y el setter de AHORA, no los del primer render.
   const ultimoAutoRefresco=useRef(0);
+  const sesionActualRef=useRef(session);sesionActualRef.current=session;
+  const setSessionRef=useRef(setSession);setSessionRef.current=setSession;
+  const reintentandoDatos=useRef(false);
   useEffect(()=>{
-    const refrescar=()=>{retryPending(toast,setDatosLocales);setRefreshKey(k=>k+1);};
+    const refrescar=()=>{
+      retryPending(toast,setDatosLocales);
+      setRefreshKey(k=>k+1);
+      const s=sesionActualRef.current;
+      if(s.avisoDatos&&!s.verComo&&!reintentandoDatos.current){
+        reintentandoDatos.current=true;
+        refrescarYPersistirSesion(s,setSessionRef.current)
+          .catch(e=>console.error('Reintento automático de ventas/ranking:',e))
+          .finally(()=>{reintentandoDatos.current=false;});
+      }
+    };
     const alVolver=()=>{
       if(document.visibilityState!=='visible')return;
       const ahora=Date.now();
@@ -5304,7 +5341,7 @@ function App(){
       }else localStorage.removeItem('sv2-session');
     }catch{localStorage.removeItem('sv2-session');}
   },[]);
-  const logout=()=>{localStorage.removeItem('sv2-session');setVistas([]);setSession(null);};
+  const logout=()=>{tokenLoginVigente=null;localStorage.removeItem('sv2-session');setVistas([]);setSession(null);};
   if(!session)return <LoginScreen onLogin={setSession} aviso={avisoSesion}/>;
   return <MainApp session={vistaActiva||session} setSession={setSessionActiva} onLogout={logout}
     sessionBase={session} vistas={vistas} onAbrirVista={abrirVista}
