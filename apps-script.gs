@@ -471,18 +471,11 @@ function idsPermitidos(user, built) {
   return ids;
 }
 
-// accion=ventas: oportunidades (BASE DE DATOS), cuentas/comisiones (COMISIONES) y
-// asignaciones (OS POR INSTALAR), las tres en un solo viaje — ya filtradas al equipo del token.
-// Las fechas viajan como ISO (JSON no tiene tipo Date); el cliente las reconstruye al recibirlas.
-function obtenerVentasComisiones(params) {
-  try {
-    const all = leerRosterCompleto();
-    const vista = resolverUsuarioVista(params, all);
-    if (vista.error) return { ok: false, error: vista.error };
-    const user = vista.user;
-    const built = construirEquipo(user, all);
-    const permitidos = idsPermitidos(user, built);
-
+// Oportunidades (BASE DE DATOS), cuentas/comisiones (COMISIONES) y asignaciones (OS POR
+// INSTALAR) de TODO el distrito, sin filtrar por persona. Es la lectura pesada: ya NO corre en
+// cada entrada a la app, sino en el activador de cada 30 minutos (actualizarSnapshotVentas), y
+// cada accion=ventas solo recorta de esa foto lo que le toca al token (ver obtenerVentasComisiones).
+function calcularVentasDistrito() {
     const cutoff = new Date();
     cutoff.setDate(1); cutoff.setHours(0, 0, 0, 0);
     cutoff.setMonth(cutoff.getMonth() - VENTAS_LOOKBACK_MESES);
@@ -517,7 +510,7 @@ function obtenerVentasComisiones(params) {
       const values = primera === -1 ? [] : hojaVentas.getRange(2 + primera, 1, ultima - primera + 1, 22).getValues();
       values.forEach(function (r) {
         const numVendedor = String(r[21] || '').trim(); // V
-        if (!numVendedor || !permitidos[numVendedor]) return;
+        if (!numVendedor) return;
         const creacion = aFecha(r[3]), activacion = aFecha(r[5]); // D,F
         let validacion = aFecha(r[4]); // E
         if (validacion && validacion > hoySinHora) validacion = null;
@@ -567,7 +560,7 @@ function obtenerVentasComisiones(params) {
       const values = primeraCom === -1 ? [] : hojaCom.getRange(2 + primeraCom, 1, ultimaCom - primeraCom + 1, 25).getValues();
       values.forEach(function (r) {
         const numHom = String(r[2] || '').trim(); // C
-        if (!numHom || !permitidos[numHom]) return;
+        if (!numHom) return;
         (cuentasByHomologado[numHom] = cuentasByHomologado[numHom] || []).push({
           cuenta: String(r[1] || '').trim(), // B
           cliente: String(r[7] || '').trim(), // H
@@ -607,7 +600,141 @@ function obtenerVentasComisiones(params) {
       }
     }
 
-    return { ok: true, ventasByVendedor: ventasByVendedor, cuentasByHomologado: cuentasByHomologado, asignacionesPorOS: asignacionesPorOS };
+    return { generado: Date.now(), ventasByVendedor: ventasByVendedor, cuentasByHomologado: cuentasByHomologado, asignacionesPorOS: asignacionesPorOS };
+}
+
+// ─── Foto de ventas del distrito (se prepara cada 30 minutos, no en cada entrada) ───
+// Leer en vivo BASE DE DATOS + COMISIONES + OS POR INSTALAR para el Director (distrito completo)
+// llegó a pasar de 90 segundos: el navegador cortaba la lectura y el Dashboard se quedaba en
+// ceros. Ahora el activador de tiempo (instalarActualizacionVentas) arma la foto de todo el
+// distrito y la guarda en dos lugares: CacheService (rápido, pero puede vaciarse solo) y un
+// archivo privado en el Drive de la cuenta del script (respaldo durable; NO en la carpeta de
+// evidencias, que se comparte por liga). Cada accion=ventas lee esa foto y recorta al equipo
+// del token: segundos, en vez de minutos, y lo mismo para un coach que para el Director.
+const SNAP_VENTAS_CACHE_PTR = 'snapVentas_ptr_v1';
+const SNAP_VENTAS_PROP_FILE = 'SNAP_VENTAS_FILE_ID';
+const SNAP_VENTAS_ARCHIVO = 'Supervisión 2.0 - foto de ventas (no borrar).json';
+// Si el activador dejó de correr, una foto más vieja que esto ya no se usa: se lee en vivo.
+const SNAP_VENTAS_MAX_EDAD_MS = 24 * 60 * 60 * 1000;
+// CacheService admite 100KB por clave; 45,000 caracteres deja margen aunque cada uno ocupe 2 bytes (acentos).
+const SNAP_VENTAS_TROZO = 45000;
+const SNAP_VENTAS_CACHE_TTL_S = 21600; // 6h, el máximo de CacheService
+
+// La foto se parte en trozos con un prefijo propio de cada versión y AL FINAL se escribe el
+// apuntador: así quien lee a media escritura sigue viendo la versión anterior completa.
+function guardarSnapshotVentasCache(texto, version) {
+  const cache = CacheService.getScriptCache();
+  const prefijo = 'snapVentas_' + version + '_';
+  const n = Math.ceil(texto.length / SNAP_VENTAS_TROZO);
+  const trozos = {};
+  for (let i = 0; i < n; i++) trozos[prefijo + i] = texto.substr(i * SNAP_VENTAS_TROZO, SNAP_VENTAS_TROZO);
+  cache.putAll(trozos, SNAP_VENTAS_CACHE_TTL_S);
+  cache.put(SNAP_VENTAS_CACHE_PTR, prefijo + '|' + n, SNAP_VENTAS_CACHE_TTL_S);
+}
+function leerSnapshotVentasCache() {
+  const cache = CacheService.getScriptCache();
+  const ptr = cache.get(SNAP_VENTAS_CACHE_PTR);
+  if (!ptr) return null;
+  const partes = ptr.split('|');
+  const prefijo = partes[0], n = Number(partes[1]);
+  if (!n) return null;
+  const claves = [];
+  for (let i = 0; i < n; i++) claves.push(prefijo + i);
+  const trozos = cache.getAll(claves);
+  let texto = '';
+  for (let i = 0; i < n; i++) {
+    const t = trozos[claves[i]];
+    if (t == null) return null; // se vació un trozo: mejor ir al respaldo en Drive
+    texto += t;
+  }
+  return texto;
+}
+
+function guardarSnapshotVentasDrive(texto) {
+  const props = PropertiesService.getScriptProperties();
+  const id = props.getProperty(SNAP_VENTAS_PROP_FILE);
+  if (id) {
+    try { DriveApp.getFileById(id).setContent(texto); return; } catch (e) { /* lo borraron: se crea de nuevo abajo */ }
+  }
+  const archivo = DriveApp.createFile(SNAP_VENTAS_ARCHIVO, texto, MimeType.PLAIN_TEXT);
+  props.setProperty(SNAP_VENTAS_PROP_FILE, archivo.getId());
+}
+function leerSnapshotVentasDrive() {
+  const id = PropertiesService.getScriptProperties().getProperty(SNAP_VENTAS_PROP_FILE);
+  if (!id) return null;
+  return DriveApp.getFileById(id).getBlob().getDataAsString();
+}
+
+// Arma la foto y la guarda — la corre el activador de tiempo; también se usa como respaldo si
+// una entrada no encuentra ninguna foto vigente.
+function actualizarSnapshotVentas() {
+  const snap = calcularVentasDistrito();
+  const texto = JSON.stringify(snap);
+  try { guardarSnapshotVentasCache(texto, snap.generado); } catch (e) { console.error('Foto de ventas → caché: ' + e.message); }
+  try { guardarSnapshotVentasDrive(texto); } catch (e) { console.error('Foto de ventas → Drive: ' + e.message); }
+  return snap;
+}
+
+// Activador: cada 30 minutos entre las 6:00 y las 22:00 (de noche no se captura nada y así el
+// activador no se come la cuota diaria de ejecución de Apps Script).
+function actualizarSnapshotVentasProgramado() {
+  const h = Number(Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'H'));
+  if (h < 6 || h >= 22) return;
+  actualizarSnapshotVentas();
+}
+
+// EJECUTAR UNA SOLA VEZ desde el editor (menú de funciones → instalarActualizacionVentas →
+// Ejecutar) y aceptar los permisos que pida. Deja programado el activador de cada 30 minutos
+// (si ya existía, lo reemplaza, no lo duplica) y arma la primera foto en ese momento.
+function instalarActualizacionVentas() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'actualizarSnapshotVentasProgramado') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('actualizarSnapshotVentasProgramado').timeBased().everyMinutes(30).create();
+  const snap = actualizarSnapshotVentas();
+  console.log('Listo: activador instalado y foto de ventas armada (' + Object.keys(snap.ventasByVendedor).length + ' vendedores con oportunidades).');
+}
+
+function leerSnapshotVentas() {
+  let texto = null, deDrive = false;
+  try { texto = leerSnapshotVentasCache(); } catch (e) { texto = null; }
+  if (!texto) {
+    try { texto = leerSnapshotVentasDrive(); deDrive = true; } catch (e) { texto = null; }
+  }
+  if (!texto) return null;
+  let snap;
+  try { snap = JSON.parse(texto); } catch (e) { return null; }
+  if (!snap || !snap.generado || Date.now() - snap.generado > SNAP_VENTAS_MAX_EDAD_MS) return null;
+  // Se leyó del respaldo porque la caché se vació: se vuelve a llenar para las siguientes entradas.
+  if (deDrive) { try { guardarSnapshotVentasCache(texto, snap.generado); } catch (e) { /* sin caché, igual funciona */ } }
+  return snap;
+}
+
+// accion=ventas: la foto del distrito recortada al equipo del token (el propio usuario, su equipo,
+// sus coaches y líderes — idsPermitidos). Mismo shape de siempre para el cliente, más `generado`
+// (cuándo se armó la foto). Las fechas viajan como ISO (JSON no tiene tipo Date); el cliente las
+// reconstruye al recibirlas.
+function obtenerVentasComisiones(params) {
+  try {
+    const all = leerRosterCompleto();
+    const vista = resolverUsuarioVista(params, all);
+    if (vista.error) return { ok: false, error: vista.error };
+    const user = vista.user;
+    const built = construirEquipo(user, all);
+    const permitidos = idsPermitidos(user, built);
+
+    const snap = leerSnapshotVentas() || actualizarSnapshotVentas();
+    const ventasByVendedor = {}, cuentasByHomologado = {}, asignacionesPorOS = {};
+    Object.keys(permitidos).forEach(function (id) {
+      if (snap.ventasByVendedor[id]) ventasByVendedor[id] = snap.ventasByVendedor[id];
+      if (snap.cuentasByHomologado[id]) cuentasByHomologado[id] = snap.cuentasByHomologado[id];
+    });
+    Object.keys(ventasByVendedor).forEach(function (id) {
+      ventasByVendedor[id].forEach(function (v) {
+        if (v.os && snap.asignacionesPorOS[v.os]) asignacionesPorOS[v.os] = snap.asignacionesPorOS[v.os];
+      });
+    });
+    return { ok: true, ventasByVendedor: ventasByVendedor, cuentasByHomologado: cuentasByHomologado, asignacionesPorOS: asignacionesPorOS, generado: snap.generado };
   } catch (err) {
     return { ok: false, error: err.message };
   }
