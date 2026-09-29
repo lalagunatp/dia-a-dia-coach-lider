@@ -777,6 +777,32 @@ async function enriquecerSesion({user,team,coaches,lideres,role,vacantes},token,
   };
 }
 
+// Sesión MÍNIMA con la que la app ya puede abrir apenas responde el login: el equipo, los coaches
+// y los líderes tal como llegan de fetchLogin, pero SIN esperar la lectura pesada de ventas/ranking
+// (esa se carga de fondo, ver handleLogin). El equipo se enriquece con ranking/ventas vacíos —
+// exactamente el mismo shape de la sesión "ligera" que ya se guarda en localStorage y revive sin
+// problemas (guardarSesionLocal/revivirFechasSesion). Va marcada `cargandoDatos` para avisar (en
+// tono tranquilo) que los números están en camino, y que un Dashboard en ceros no se lea como
+// "el equipo no vendió nada".
+function sesionBaseDeLogin(login){
+  const vacio=lista=>sortByRanking(enrichTeam(lista||[],{},{}).map(m=>({...m,ventas:[],cuentasCom:[],asignacionesPorOS:{}})));
+  return{
+    user:login.user,
+    team:vacio(login.team),
+    coaches:vacio(login.coaches),
+    lideres:vacio(login.lideres),
+    role:login.role,
+    vacantes:login.vacantes||{},
+    token:login.token,
+    loginTime:new Date().toISOString(),
+    // `cargandoDatos` (aviso tranquilo, azul) es distinto de `avisoDatos` (rojo, para cuando la
+    // lectura FALLA): aquí los datos vienen en camino, no hubo error. Se limpia en cuanto llegan
+    // (ver handleLogin). `sinVentasGuardadas` marca la sesión como "ligera" para guardarSesionLocal.
+    cargandoDatos:true,
+    sinVentasGuardadas:true,
+  };
+}
+
 // Re-ejecuta el pipeline de datos (ranking/ventas/cuentas/asignaciones) para la sesión ya
 // autenticada — usado por el botón flotante "Actualizar información".
 async function refrescarDatosSesion(token,verComo){
@@ -1577,16 +1603,30 @@ function LoginScreen({onLogin,aviso}){
       // el roster completo ni el PIN de nadie a este navegador, solo lo que le toca ver a este usuario.
       const login=await fetchLogin(numEmp.trim(),pin.trim());
       if(!login.ok){setError(login.error||'No se pudo iniciar sesión');setLoading(false);return;}
-      // Ventas y comisiones del equipo (semana/mes en curso, rechazos, asignaciones, cuentas sin pagar)
-      // Base de Datos y Comisiones no siempre etiqueta "Num Vendedor" con la misma columna de ID
-      // (a veces D/numEmp, a veces B/numEmpB según la persona) — se consultan ambas y se cruzan las dos al final.
-      const{user,team,coaches,lideres,role,vacantes}=await enriquecerSesion(login,login.token);
-      const session={user,team,coaches,lideres,role,vacantes,token:login.token,loginTime:new Date().toISOString()};
+      // ENTRAR YA: apenas responde el login (que es rápido — el roster va cacheado en el servidor)
+      // se abre la app con el equipo/coaches/líderes, SIN esperar la lectura pesada de ventas y
+      // comisiones (BASE DE DATOS pasa de 37,000 filas y puede tardar decenas de segundos con señal
+      // lenta). Antes el login se quedaba bloqueado en esa lectura hasta 90s y por eso "no entraba a
+      // la primera". Es el mismo trato que ya recibe el reingreso con sesión guardada: abre al
+      // instante y refresca de fondo.
+      const base=sesionBaseDeLogin(login);
       // localStorage (no sessionStorage): sobrevive a que se cierre por completo el navegador/PWA,
       // para poder seguir trabajando con los últimos datos aunque no haya señal al reabrir la app
       // en campo — el botón "Actualizar información" refresca en cuanto vuelve la conexión.
-      guardarSesionLocal(session);
-      onLogin(session);
+      guardarSesionLocal(base);
+      onLogin(base);
+      // Ventas/ranking del equipo de fondo: Base de Datos y Comisiones no siempre etiqueta "Num
+      // Vendedor" con la misma columna de ID (a veces D/numEmp, a veces B/numEmpB según la persona)
+      // — se consultan ambas y se cruzan al final. En cuanto llegan, se completa la sesión y se
+      // re-guarda; si algo falla, el aviso se queda y el botón 🔄 reintenta (no vale la pena mandar
+      // de vuelta al login por esto).
+      enriquecerSesion(login,login.token).then(datos=>{
+        const plena={...base,...datos,token:login.token,loginTime:base.loginTime};
+        delete plena.sinVentasGuardadas;
+        delete plena.cargandoDatos;
+        guardarSesionLocal(plena);
+        onLogin(plena);
+      }).catch(e=>console.error('Carga de ventas/ranking tras el login:',e));
     }catch(e){
       console.error(e);
       setError('Error al conectar con la base de datos. Verifica tu conexión.');
@@ -4655,7 +4695,7 @@ function InformeImprimible({nombreArchivo,alcance,periodo,filtros,generadoPor,re
     document.body);
 }
 
-function HistorialTab({data,session}){
+function HistorialTab({data,session,refreshKey}){
   const[periodo,setPeriodo]=useState('semana');
   const[offset,setOffset]=useState(0);
   const[rango,setRango]=useState({desde:'',hasta:''});
@@ -4677,7 +4717,9 @@ function HistorialTab({data,session}){
   const ROL_LABEL={coach:'Coach',lider:'Líder',director:'Director',gestor:'Gestor CH',auditor:'Auditor'};
   const rolDe=nombre=>!nombre?'':nombre===user.nombre?(ROL_LABEL[session?.role]||''):nombresLider.has(nombre)?'Líder':nombresCoach.has(nombre)?'Coach':'';
 
-  // Las 7 hojas se leen una vez al abrir (y con 🔄). Mientras llegan, ya se ve lo del teléfono.
+  // Las 7 hojas se leen al abrir, con 🔄, y también cuando la app se auto-actualiza (al recuperar
+  // señal o al volver a ella tras el segundo plano — refreshKey lo dispara desde MainApp). Mientras
+  // llegan, ya se ve lo del teléfono.
   useEffect(()=>{
     let vivo=true;
     setSheet(s=>({...s,estado:'cargando'}));
@@ -4692,7 +4734,7 @@ function HistorialTab({data,session}){
         setSheet({estado:fallas===lista.length?'error':fallas?'parcial':'listo',registros,actualizado:new Date()});
       });
     return()=>{vivo=false;};
-  },[session?.token,session?.verComo,recarga]);
+  },[session?.token,session?.verComo,recarga,refreshKey]);
 
   // Lo del Sheet y lo del teléfono, sin repetir: el mismo registro trae el mismo ID en los dos lados.
   // Si está en ambos gana el del teléfono, que es más completo (el Sheet guarda cuántos presentes
@@ -5013,6 +5055,32 @@ function MainApp({session:sesionRecibida,setSession,onLogout,sessionBase,vistas,
   const[refreshKey,setRefreshKey]=useState(0);
   const[refreshing,setRefreshing]=useState(false);
 
+  // Mantener todo al día SIN recargar la página: cuando el teléfono recupera señal (evento 'online')
+  // o la persona vuelve a la app tras dejarla en segundo plano ('visibilitychange' a visible), se
+  // reintenta la cola de pendientes y se bumpea refreshKey — eso hace que el Historial y las
+  // secciones de captura relean el Sheet solitas. Así lo que alguien más del equipo capturó, o lo
+  // que se guardó sin señal, aparece solo, sin tener que cerrar y abrir la app ni recargar. El
+  // refresco por volver a la app se limita a una vez cada 30s (en el celular el foco cambia a cada
+  // rato) para no golpear al servidor de más; recuperar señal siempre refresca.
+  const ultimoAutoRefresco=useRef(0);
+  useEffect(()=>{
+    const refrescar=()=>{retryPending(toast,setDatosLocales);setRefreshKey(k=>k+1);};
+    const alVolver=()=>{
+      if(document.visibilityState!=='visible')return;
+      const ahora=Date.now();
+      if(ahora-ultimoAutoRefresco.current<30000)return;
+      ultimoAutoRefresco.current=ahora;
+      refrescar();
+    };
+    const alConectar=()=>{ultimoAutoRefresco.current=Date.now();refrescar();};
+    document.addEventListener('visibilitychange',alVolver);
+    window.addEventListener('online',alConectar);
+    return()=>{
+      document.removeEventListener('visibilitychange',alVolver);
+      window.removeEventListener('online',alConectar);
+    };
+  },[]);
+
   // Vista prestada: traer del Sheet los registros de esa persona (al entrar, al cambiar de
   // persona y al tocar "Actualizar información"). `cancelado` evita que una respuesta lenta de
   // la vista anterior pise a la nueva si se cambia de persona antes de que llegue.
@@ -5133,6 +5201,14 @@ function MainApp({session:sesionRecibida,setSession,onLogout,sessionBase,vistas,
             </div>
           }
 
+          {/* Login rápido: se entró al instante y las ventas/ranking del equipo vienen en camino.
+              Aviso tranquilo (azul), NO error — no hubo falla, solo todavía no llegan. Se quita solo
+              en cuanto cargan. Si en cambio la lectura falla, se limpia cargandoDatos y toma su lugar
+              el banner rojo de abajo. */}
+          {session.cargandoDatos&&!session.avisoDatos&&<p style={{margin:'0 0 10px',fontSize:13,fontWeight:600,color:'var(--accent)',background:'var(--accent-light)',border:'1.5px solid var(--accent2)',borderRadius:8,padding:'9px 11px'}}>
+            ⏳ Ya entraste. Cargando las ventas y el ranking del equipo — los números de oportunidades, validadas e instaladas aparecen en un momento, sin que tengas que hacer nada.
+          </p>}
+
           {/* Ventas/ranking no cargaron: hay que decirlo con todas sus letras. Un Dashboard en ceros
               por una lectura fallida se ve idéntico a uno en ceros porque no hubo ventas, y así se
               han perdido horas buscando el problema del lado equivocado. */}
@@ -5159,7 +5235,7 @@ function MainApp({session:sesionRecibida,setSession,onLogout,sessionBase,vistas,
           {tab==='cierre'&&<CierreTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
           {tab==='plan'&&<PlanTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
           {tab==='feedback'&&<FeedbackTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
-          {tab==='historial'&&<HistorialTab data={data} session={session}/>}
+          {tab==='historial'&&<HistorialTab data={data} session={session} refreshKey={refreshKey}/>}
         </div></div>
       </main>
     </div>
