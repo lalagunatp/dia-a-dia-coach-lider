@@ -1076,6 +1076,15 @@ function pctCumplimiento(real, objetivo) {
   return Math.round((Number(real) || 0) / o * 100);
 }
 
+// Un coach dentro del resultado del líder, en una línea: "NOMBRE: 20/25 inst (80%) — su porqué".
+// La app lee de vuelta estas líneas tal cual para el Historial (ver recordDesdeFila).
+function lineaCoachResultado(c) {
+  const o = Number(c.objetivos && c.objetivos.instalaciones) || 0;
+  const v = Number(c.resultados && c.resultados.instalaciones) || 0;
+  const pct = pctCumplimiento(v, o);
+  return `${c.coach || ''}: ${v}/${o} inst${pct !== '' ? ` (${pct}%)` : ''}${c.comentario ? ' — ' + c.comentario : ''}`;
+}
+
 // ─── Configuración de pestañas y columnas ───
 // OJO: la CLAVE de cada entrada debe ser exactamente data.type.toUpperCase() tal como lo manda
 // la app (arranque, permiso, cierre, plan, plan_resultado, feedback) — el nombre de pestaña
@@ -1133,7 +1142,9 @@ const SHEET_CONFIG = {
       // Agregadas después: van al final para no desacomodar las filas que ya estaban.
       'Obj. Cuentas recuperadas NPPF', '% Cuentas recuperadas NPPF',
       'Obj. ARPU', '% ARPU',
-      'A destiempo'
+      'A destiempo',
+      // El porqué del resultado (obligatorio) y, del líder, un coach por línea con su resultado.
+      'Comentario', 'Detalle por coach'
     ]
   },
   FEEDBACK: {
@@ -1359,7 +1370,9 @@ function buildRow(type, d) {
         obj.cuentasRecuperadas || 0, pctCumplimiento(r.cuentasRecuperadas, obj.cuentasRecuperadas),
         obj.arpu || 0, pctCumplimiento(r.arpu, obj.arpu),
         // Capturado el martes en vez del lunes (ver ventanaResultadoPlan en la app).
-        d.aDestiempo ? 'Sí' : 'No'
+        d.aDestiempo ? 'Sí' : 'No',
+        d.comentario || '',
+        (d.porCoach || []).map(lineaCoachResultado).join('\n')
       ] };
     }
 
