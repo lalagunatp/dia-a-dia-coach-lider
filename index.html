@@ -56,6 +56,10 @@ textarea{resize:vertical}
 .app-nav button{flex:0 0 auto;padding:10px 12px;border:none;border-bottom:3px solid transparent;background:transparent;color:var(--dim);font-size:13px;font-weight:600;white-space:nowrap;cursor:pointer}
 .app-nav button.activa{color:var(--accent);border-bottom-color:var(--accent)}
 .app-nav-icono{display:block;font-size:16px}
+/* Punto de "algo pendiente aquí" (el resultado del plan, lunes y martes): arriba a la derecha del
+   ícono en la barra de arriba, y al final del renglón en la barra lateral. */
+.app-nav button{position:relative}
+.app-nav-punto{position:absolute;top:7px;right:7px;width:8px;height:8px;border-radius:50%}
 .app-contenido{order:3;padding:14px 14px 30px;min-width:0}
 .ancho-angosto{max-width:860px;margin:0 auto}
 .ancho-amplio{max-width:1320px;margin:0 auto}
@@ -70,6 +74,7 @@ textarea{resize:vertical}
   .app-nav button{display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:none;border-radius:10px;font-size:14px;text-align:left}
   .app-nav button.activa{background:var(--accent-light)}
   .app-nav-icono{display:inline;font-size:19px}
+  .app-nav-punto{position:static;margin-left:auto}
   .app-resumen{padding:14px 20px 0}
   .app-contenido{padding:14px 20px 40px}
 }
@@ -82,6 +87,7 @@ textarea{resize:vertical}
   .app-nav{width:auto;padding:4px}
   .app-nav button{flex-direction:column;gap:0;min-width:72px;padding:3px 6px;font-size:11px;line-height:1.2;text-align:center}
   .app-nav-icono{display:block;font-size:16px;line-height:1.25}
+  .app-nav-punto{position:absolute;top:4px;right:10px;margin:0}
   .app-resumen{padding:8px 12px 0}
   .app-contenido{padding:10px 12px 30px}
   .app-stats{margin-bottom:8px}
@@ -474,7 +480,9 @@ function recordDesdeFila(tipo,f){
       return{...base,planId:f['Plan ID']||'',semanaLabel:f['Semana']||'',
         objetivos:{oportunidades:nNum(f['Obj. Oportunidades']),ventas:nNum(f['Obj. Ventas']),instalaciones:nNum(f['Obj. Instalaciones']),cuentasRecuperadas:nNum(f['Obj. Cuentas recuperadas NPPF']),arpu:nNum(f['Obj. ARPU'])},
         resultados:{oportunidades:nNum(f['Real Oportunidades']),ventas:nNum(f['Real Ventas']),instalaciones:nNum(f['Real Instalaciones']),cuentasRecuperadas:nNum(f['Real Cuentas recuperadas NPPF']),arpu:nNum(f['Real ARPU'])},
-        aDestiempo:String(f['A destiempo']||'').toUpperCase().startsWith('S')};
+        aDestiempo:String(f['A destiempo']||'').toUpperCase().startsWith('S'),
+        // El desglose por coach del líder llega como texto, un coach por línea (ver buildRow).
+        comentario:String(f['Comentario']||'').trim(),porCoachTexto:String(f['Detalle por coach']||'').trim()};
     case'feedback':{
       // "Evidencia de asignación externa" guarda varias ligas separadas por "; " en la misma
       // columna que la foto única del acompañamiento — se distinguen por el separador.
@@ -635,6 +643,45 @@ function ventanaResultadoPlan(ref){
   const ini=startOfWeek(ref);ini.setDate(ini.getDate()-7);
   return{semanaInicio:ymdLocal(ini),aDestiempo:dia===2};
 }
+// Resultado de la semana anterior visto desde los registros propios. Se mira la semana completa y
+// no un registro: si esa semana se editó, hay varios planes y el resultado quedó colgado solo del
+// que estaba vigente al capturarlo. Lo usan el Plan (formulario), el punto del menú y el Dashboard.
+//   pendiente: el plan cuyo resultado toca capturar hoy (lunes, o martes a destiempo).
+//   vencido:   miércoles a domingo sin haberlo capturado — ya no se puede, pero se dice.
+function estadoResultadoPlan(records,ref){
+  const semanaAnt=startOfWeek(ref);semanaAnt.setDate(semanaAnt.getDate()-7);
+  const planesAnt=records.filter(r=>r.type==='plan'&&r.semanaInicio===ymdLocal(semanaAnt));
+  const conResultado=new Set(records.filter(r=>r.type==='plan_resultado').map(r=>r.planId));
+  const sinResultado=planesAnt.length>0&&!planesAnt.some(p=>conResultado.has(p.id));
+  const plan=sinResultado?masReciente(planesAnt,'savedAt'):null;
+  const ventana=ventanaResultadoPlan(ref);
+  return{ventana,pendiente:ventana?plan:null,vencido:ventana?null:plan};
+}
+// "21 – 27 Sep": la semana de un plan, corta, para el renglón de pendiente.
+function etiquetaSemanaPlan(plan){
+  const ini=new Date(plan.semanaInicio+'T00:00:00');
+  return etiquetaSemana(ini,endOfWeek(ini),new Date().getFullYear());
+}
+// Resultado real de una semana, todo del sistema y sin captura a mano: oportunidades, validaciones
+// e instalaciones del embudo (BASE DE DATOS), ARPU sin IVA de lo instalado esa semana, y cuentas
+// pagadas esa semana (COMISIONES), contadas igual que el "Ritmo de pago" del Dashboard para que
+// cuadren. Sirve para un coach (sus vendedores), el líder (todos) o cada coach dentro del líder.
+function resultadoRealSemana(vendedores,semanaInicio,ref){
+  const ini=new Date(semanaInicio+'T00:00:00'),fin=endOfWeek(ini);
+  // La columna V de COMISIONES va una semana adelante de la semana en que se pagó la cuenta.
+  const sig=new Date(ini);sig.setDate(sig.getDate()+7);
+  const semanaV=semanaISO(sig);
+  const r={oportunidades:0,ventas:0,instalaciones:0,cuentasRecuperadas:0,arpu:0};
+  let sumaArpu=0,nArpu=0;
+  (vendedores||[]).forEach(m=>{
+    const f=funnelPeriodo(m.ventas,ini,fin);
+    r.oportunidades+=f.oportunidades;r.ventas+=f.validadas;r.instalaciones+=f.instaladas;
+    (m.ventas||[]).forEach(v=>{if(v.activacion&&enRango(v.activacion,ini,fin)){sumaArpu+=Number(v.arpu)||0;nArpu++;}});
+    r.cuentasRecuperadas+=pagadasEnSemana(cuentasPagadas(m.cuentasCom,ref),semanaV);
+  });
+  r.arpu=nArpu?Math.round(sumaArpu/nArpu/1.16*100)/100:0;
+  return r;
+}
 // Los cinco renglones del resultado contra lo que se comprometió en el plan de esa semana.
 const KPIS_RESULTADO=[
   {k:'oportunidades',label:'Oportunidades'},
@@ -665,7 +712,17 @@ function textoResultadoPlan(rec){
     const dif=x.pct==null||x.dif===0?'':` (${x.dif>0?'+':'-'}${fmtV(x,Math.abs(x.dif))})`;
     lineas.push(`${x.tono?TONO_EMOJI[x.tono]:'•'} ${x.label}: ${fmtV(x,x.real)} de ${fmtV(x,x.obj)}${cumpl}${dif}`);
   });
+  if(rec.comentario)lineas.push('',`💬 ${rec.comentario}`);
+  if(rec.porCoach?.length){
+    lineas.push('','👥 Por coach:');
+    rec.porCoach.forEach(c=>lineas.push(`• ${lineaCoachResultado(c)}`));
+  }
   return lineas.join('\n');
+}
+// Instalaciones como resumen de un coach dentro del resultado del líder (WhatsApp y hoja).
+function lineaCoachResultado(c){
+  const o=Number(c.objetivos?.instalaciones)||0,v=Number(c.resultados?.instalaciones)||0;
+  return `${nombreCorto(c.coach)}: ${v}/${o} inst${o?` (${Math.round(v/o*100)}%)`:''}${c.comentario?` — ${c.comentario}`:''}`;
 }
 // ─── Arranque: evidencia por WhatsApp ───
 // Una liga de wa.me solo lleva texto, así que las fotos se mandan con el menú de compartir del
@@ -2307,7 +2364,48 @@ function TablaComparativo({objetivos,resultados}){
     </tbody>
   </table>;
 }
-function PlanTab({data,setData,team,toast,session,refreshKey}){
+// El resultado pendiente como un solo renglón que se toca: en el Dashboard lleva al Plan, y en el
+// Plan abre o cierra el formulario. Solo existe mientras hay algo que capturar.
+function RenglonResultadoPendiente({plan,aDestiempo,abierto,onClick}){
+  const color=aDestiempo?'var(--red)':'var(--yellow)';
+  return <button onClick={onClick} className="anim" style={{width:'100%',display:'flex',alignItems:'center',gap:12,textAlign:'left',
+    background:'var(--card)',border:'1px solid var(--border)',borderLeft:`3px solid ${color}`,borderRadius:12,
+    padding:'12px 14px',marginBottom:14,cursor:'pointer',color:'var(--text)',fontFamily:'inherit'}}>
+    <span style={{fontSize:20}}>🏁</span>
+    <span style={{flex:1,minWidth:0}}>
+      <span style={{display:'block',fontSize:15,fontWeight:700}}>Cierra tu semana {etiquetaSemanaPlan(plan)}</span>
+      <span style={{display:'block',fontSize:13,color:aDestiempo?'var(--red)':'var(--dim)',marginTop:2}}>
+        {aDestiempo?'A destiempo · hoy es el último día':'Vence hoy'} · ya viene lleno, solo falta tu comentario
+      </span>
+    </span>
+    <span style={{fontSize:14,fontWeight:700,color:'var(--accent)',whiteSpace:'nowrap'}}>{abierto?'Cerrar ˄':'Capturar ›'}</span>
+  </button>;
+}
+// Un coach dentro del resultado del líder: su compromiso contra su real en una línea, y al tocarlo
+// el detalle y el porqué que escribió él en su propio resultado.
+function RenglonCoachResultado({c}){
+  const[abierto,setAbierto]=useState(false);
+  const o=Number(c.objetivos?.instalaciones)||0,v=Number(c.resultados?.instalaciones)||0;
+  const pct=o?Math.round(v/o*100):null;
+  const tono=pct==null?null:pct>=95?'verde':pct>=60?'amarillo':'rojo';
+  return <div style={{borderBottom:'1px solid var(--border)'}}>
+    <button onClick={()=>setAbierto(a=>!a)} style={{width:'100%',display:'flex',alignItems:'center',gap:10,padding:'9px 2px',
+      background:'transparent',border:'none',cursor:'pointer',color:'var(--text)',fontFamily:'inherit',textAlign:'left'}}>
+      <span style={{flex:1,minWidth:0,fontSize:14,fontWeight:600,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{nombreCorto(c.coach)}</span>
+      <span style={{fontSize:13,color:'var(--dim)'}}>{v}/{o} inst</span>
+      <span style={{fontSize:13,fontWeight:800,minWidth:40,textAlign:'right',color:tono?TONO_COLOR[tono]:'var(--dim)'}}>{pct==null?'—':`${pct}%`}</span>
+      <span title={c.comentario?'Ya explicó su resultado':'Aún no captura su resultado'} style={{fontSize:13,opacity:c.comentario?1:.35}}>💬</span>
+      <span style={{fontSize:13,color:'var(--dim)'}}>{abierto?'˄':'˅'}</span>
+    </button>
+    {abierto&&<div style={{padding:'0 2px 12px'}}>
+      <TablaComparativo objetivos={c.objetivos} resultados={c.resultados}/>
+      <p style={{fontSize:13,margin:'8px 0 0',color:c.comentario?'var(--text)':'var(--dim)',fontStyle:c.comentario?'normal':'italic'}}>
+        {c.comentario?`💬 ${c.comentario}`:'Aún no captura su resultado de esa semana.'}
+      </p>
+    </div>}
+  </div>;
+}
+function PlanTab({data,setData,team,toast,session,refreshKey,abrirResultado}){
   const esLider=session.role==='lider';
   // Coach Promovendedor Punto de Venta: "Zonas a trabajar" se reemplaza por "Puntos de Venta a
   // trabajar" (catálogo hoja PDV) en vez de cluster/colonia.
@@ -2344,16 +2442,8 @@ function PlanTab({data,setData,team,toast,session,refreshKey}){
   const puedeEditarPlan=!session.soloLectura&&sePuedeEditarPlan(planActual,nowDate);
 
   // Resultado real de la semana anterior: se captura el lunes, o el martes a destiempo (ver
-  // ventanaResultadoPlan). Se mira la semana completa y no un registro: si esa semana se editó, hay
-  // varios planes y el resultado quedó colgado solo del que estaba vigente al capturarlo.
-  const planesConResultado=new Set(data.records.filter(r=>r.type==='plan_resultado').map(r=>r.planId));
-  const semanaAntIni=new Date(semanaIni);semanaAntIni.setDate(semanaAntIni.getDate()-7);
-  const planesSemanaAnt=data.records.filter(r=>r.type==='plan'&&r.semanaInicio===ymdLocal(semanaAntIni));
-  const semanaAntSinResultado=planesSemanaAnt.length>0&&!planesSemanaAnt.some(p=>planesConResultado.has(p.id));
-  const ventanaResultado=ventanaResultadoPlan(nowDate);
-  const planPendiente=ventanaResultado&&semanaAntSinResultado?masReciente(planesSemanaAnt,'savedAt'):null;
-  // Miércoles a domingo sin haberlo capturado: ya no se puede, pero se dice en vez de desaparecer.
-  const resultadoVencido=!ventanaResultado&&semanaAntSinResultado?masReciente(planesSemanaAnt,'savedAt'):null;
+  // ventanaResultadoPlan y estadoResultadoPlan).
+  const{ventana:ventanaResultado,pendiente:planPendiente,vencido:resultadoVencido}=estadoResultadoPlan(data.records,nowDate);
 
   const[zonasData,setZonasData]=useState({clusterToColonias:{},coloniaToCluster:{},clusters:[]});
   useEffect(()=>{if(!esCoachPDV)fetchClustersColonias(session.token).then(list=>setZonasData(buildClusterMap(list)));},[esCoachPDV]);
@@ -2470,41 +2560,110 @@ function PlanTab({data,setData,team,toast,session,refreshKey}){
     setForm(formVacio());
   };
 
-  // Resultado real de la semana pendiente: se precarga del sistema (embudo de esa semana) y es editable.
-  const[resForm,setResForm]=useState(null);
+  // ── Resultado de la semana pendiente ──
+  // Nada se captura a mano: el compromiso sale del plan de esa semana y el real del sistema (ver
+  // resultadoRealSemana). Se calcula en cada render, así que si las ventas terminan de cargar con
+  // el formulario abierto, los números se acomodan solos. Lo único que se escribe es el porqué.
+  const[resultadoAbierto,setResultadoAbierto]=useState(!!abrirResultado);
+  const[comentarioRes,setComentarioRes]=useState('');
+  const datosListos=!session.cargandoDatos&&!session.avisoDatos;
+  const realPendiente=planPendiente?resultadoRealSemana(vendedoresPlan,planPendiente.semanaInicio,nowDate):null;
+  // Líder: lo que cada coach capturó como su resultado de esa semana, para mostrar su porqué.
+  const[resultadosEquipo,setResultadosEquipo]=useState([]);
   useEffect(()=>{
-    if(!planPendiente){setResForm(null);return;}
-    const ini=new Date(planPendiente.semanaInicio+'T00:00:00');
-    const fin=new Date(planPendiente.semanaFin+'T23:59:59');
-    const tot={oportunidades:0,ventas:0,instalaciones:0};
-    vendedoresPlan.forEach(m=>{
-      const f=funnelPeriodo(m.ventas,ini,fin);
-      tot.oportunidades+=f.oportunidades;tot.ventas+=f.validadas;tot.instalaciones+=f.instaladas;
-    });
-    // Cuentas pagadas: lo que se fue marcando como "Pagadas hoy" en los cierres de esa semana.
-    const pagadas=data.records.filter(r=>r.type==='cierre'&&r.date>=planPendiente.semanaInicio&&r.date<=planPendiente.semanaFin)
-      .reduce((s,r)=>s+(r.resultados||[]).reduce((s2,x)=>s2+(Number(x.pagadasHoy)||0),0),0);
-    setResForm({...tot,cuentasRecuperadas:pagadas||'',arpu:''});
-  },[planPendiente?.id]);
+    if(!esLider||!planPendiente)return;
+    fetchHistorialEquipo('PLAN_RESULTADO',session.token,session.verComo).then(setResultadosEquipo);
+  },[esLider,planPendiente?.id,refreshKey]);
+  // Líder: un renglón por coach con su compromiso (el que quedó en el plan del líder; si ese plan
+  // se leyó del Sheet y no lo trae, el plan del propio coach) contra el real de sus vendedores.
+  const porCoachPendiente=esLider&&planPendiente?(session.coaches||[]).map(c=>{
+    const delLider=(planPendiente.objetivosPorCoach||[]).find(x=>x.coach===c.nombre);
+    const fila=masReciente(planesEquipo.filter(r=>r['Registrado por']===c.nombre&&r['Semana inicio']===planPendiente.semanaInicio),'Timestamp');
+    const objetivos=delLider?delLider.objetivos:{
+      oportunidades:Number(fila?.['Obj. Oportunidades'])||0,ventas:Number(fila?.['Obj. Ventas'])||0,
+      instalaciones:Number(fila?.['Obj. Instalaciones'])||0,cuentasRecuperadas:Number(fila?.['Obj. Cuentas recuperadas NPPF'])||0,
+      arpu:Number(fila?.['Obj. ARPU'])||0};
+    const suyo=masReciente(resultadosEquipo.filter(r=>r['Registrado por']===c.nombre&&r['Semana']===planPendiente.semanaLabel),'Timestamp');
+    return{coach:c.nombre,objetivos,
+      resultados:resultadoRealSemana(vendedoresPlan.filter(m=>m.reportaA===c.nombre),planPendiente.semanaInicio,nowDate),
+      comentario:String(suyo?.['Comentario']||'').trim()};
+  }):[];
+  const cumplioTodo=realPendiente&&comparativoResultado(planPendiente.objetivos,realPendiente).every(x=>x.tono==null||x.tono==='verde');
 
   // Lo último que se guardó: se queda en pantalla con el comparativo y el botón de WhatsApp.
   const[ultimoResultado,setUltimoResultado]=useState(null);
   const guardarResultado=async()=>{
     if(session.soloLectura)return; // vista prestada: solo consulta
-    if(!planPendiente||!resForm)return;
-    const resultados=Object.fromEntries(KPIS_RESULTADO.map(x=>[x.k,Number(resForm[x.k])||0]));
+    if(!planPendiente||!realPendiente||!datosListos||!comentarioRes.trim())return;
     const rec={id:uid(),type:'plan_resultado',planId:planPendiente.id,date:today(),
       semanaInicio:planPendiente.semanaInicio,semanaFin:planPendiente.semanaFin,semanaLabel:planPendiente.semanaLabel,
-      objetivos:planPendiente.objetivos,resultados,aDestiempo:!!ventanaResultado?.aDestiempo,
+      objetivos:planPendiente.objetivos,resultados:realPendiente,aDestiempo:!!ventanaResultado?.aDestiempo,
+      comentario:comentarioRes.trim(),...(esLider?{porCoach:porCoachPendiente}:{}),
       registradoPor:session.user.nombre,token:session.token,savedAt:new Date().toISOString()};
     // WhatsApp se abre aquí mismo, dentro del clic: después de un await el navegador lo bloquearía.
     window.open(whatsappUrl(textoResultadoPlan(rec)),'_blank','noopener');
     const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast);toast('✅ Resultado guardado');
-    setUltimoResultado(rec);
+    setUltimoResultado(rec);setComentarioRes('');setResultadoAbierto(false);
     window.scrollTo({top:0,behavior:'smooth'});
   };
 
   return <div>
+    {/* El cierre de la semana anterior va primero: es lo único con fecha de vencimiento en esta
+        pantalla. Cerrado es un solo renglón; al tocarlo se abre el resultado ya lleno. */}
+    {ultimoResultado&&
+      <Card title={`🏁 Semana ${etiquetaSemanaPlan(ultimoResultado)} cerrada`} style={{borderLeft:`3px solid ${ultimoResultado.aDestiempo?'var(--red)':'var(--green)'}`}}>
+        {ultimoResultado.aDestiempo&&<AvisoDestiempo/>}
+        <TablaComparativo objetivos={ultimoResultado.objetivos} resultados={ultimoResultado.resultados}/>
+        {ultimoResultado.comentario&&<p style={{fontSize:14,margin:'10px 0 0'}}>💬 {ultimoResultado.comentario}</p>}
+        <p style={{fontSize:13,color:'var(--dim)',margin:'12px 0 8px'}}>Se abrió WhatsApp con este resultado. Si no se abrió, envíalo desde aquí:</p>
+        <a href={whatsappUrl(textoResultadoPlan(ultimoResultado))} target="_blank" rel="noopener noreferrer"
+          style={{display:'inline-flex',alignItems:'center',gap:6,padding:'8px 14px',borderRadius:8,background:'#25D366',color:'#fff',fontSize:14,fontWeight:700,textDecoration:'none'}}>
+          📲 Enviar resultado por WhatsApp
+        </a>
+      </Card>
+    }
+
+    {resultadoVencido&&
+      <Card style={{borderLeft:'3px solid var(--red)'}}>
+        <p style={{fontSize:14,fontWeight:700,color:'var(--red)',margin:'0 0 4px'}}>No se capturó el resultado de la semana {etiquetaSemanaPlan(resultadoVencido)}</p>
+        <p style={{fontSize:13,color:'var(--dim)',margin:0}}>Se captura el lunes, o el martes a destiempo. Del miércoles en adelante ya no se puede.</p>
+      </Card>
+    }
+
+    {planPendiente&&<RenglonResultadoPendiente plan={planPendiente} aDestiempo={ventanaResultado.aDestiempo}
+      abierto={resultadoAbierto} onClick={()=>setResultadoAbierto(a=>!a)}/>}
+    {planPendiente&&resultadoAbierto&&
+      <Card style={{marginTop:-8,borderLeft:`3px solid ${ventanaResultado.aDestiempo?'var(--red)':'var(--yellow)'}`}}>
+        {ventanaResultado.aDestiempo&&<AvisoDestiempo/>}
+        {!datosListos
+          ?<p style={{fontSize:13,color:'var(--dim)',margin:'0 0 12px'}}>
+            {session.cargandoDatos?'⏳ Cargando las ventas de esa semana… el resultado se llena solo en un momento.':'⚠️ Las ventas no cargaron, así que el resultado saldría en cero. Toca 🔄 para reintentar.'}
+          </p>
+          :<>
+            <TablaComparativo objetivos={planPendiente.objetivos} resultados={realPendiente}/>
+            <p style={{fontSize:12,color:'var(--dim)',margin:'6px 0 0'}}>Compromiso de tu plan; real del sistema (ventas, ARPU sin IVA y cuentas pagadas esa semana).</p>
+          </>}
+
+        {esLider&&porCoachPendiente.length>0&&<div style={{marginTop:16}}>
+          <div style={{fontSize:13,fontWeight:700,color:'var(--dim)',textTransform:'uppercase',letterSpacing:'.5px',marginBottom:2}}>Por coach</div>
+          {porCoachPendiente.map(c=><RenglonCoachResultado key={c.coach} c={c}/>)}
+        </div>}
+
+        <div style={{marginTop:16}}>
+          <Field label={cumplioTodo?'¿Qué funcionó?':'¿Por qué quedó así?'}>
+            <Textarea value={comentarioRes} onChange={e=>setComentarioRes(e.target.value)} disabled={session.soloLectura}
+              placeholder={cumplioTodo
+                ?'Lo que hizo que se cumpliera y cómo sostenerlo.'
+                :esLider?'Lectura del equipo: qué pasó y qué se va a hacer diferente esta semana.':'Qué pasó y qué vas a hacer diferente esta semana.'}/>
+          </Field>
+        </div>
+        {session.soloLectura?<AvisoSoloLectura nombre={session.user.nombre}/>:
+          <Btn onClick={guardarResultado} disabled={!datosListos||!comentarioRes.trim()} style={{width:'100%'}}>
+            {comentarioRes.trim()?'Guardar y enviar por WhatsApp':'Escribe el porqué para guardar'}
+          </Btn>}
+      </Card>
+    }
+
     {esLider&&
       <Card title={`📊 Planes del equipo — Semana ${semanaLabel}`}>
         {cargandoPlanesEquipo?<div style={{textAlign:'center',padding:20}}><Spinner/></div>:
@@ -2527,45 +2686,6 @@ function PlanTab({data,setData,team,toast,session,refreshKey}){
     {!planActual&&!retraso&&<Card style={{borderLeft:`4px solid ${esLunes?'var(--yellow)':'var(--border)'}`}}>
       <p style={{fontSize:13,color:'var(--dim)',margin:0}}>{esLunes?'📌 Hoy es lunes — captura el objetivo comprometido para esta semana.':'Plan de la semana aún no capturado.'}</p>
     </Card>}
-
-    {ultimoResultado&&
-      <Card title={`🏁 Resultado guardado — Semana ${ultimoResultado.semanaLabel}`} style={{borderLeft:`4px solid ${ultimoResultado.aDestiempo?'var(--red)':'var(--green)'}`}}>
-        {ultimoResultado.aDestiempo&&<AvisoDestiempo/>}
-        <p style={{fontSize:13,color:'var(--dim)',marginBottom:6}}>Así quedaste contra el compromiso de esa semana:</p>
-        <TablaComparativo objetivos={ultimoResultado.objetivos} resultados={ultimoResultado.resultados}/>
-        <p style={{fontSize:13,color:'var(--dim)',margin:'10px 0 8px'}}>Se abrió WhatsApp con este resultado. Si no se abrió, envíalo desde aquí:</p>
-        <a href={whatsappUrl(textoResultadoPlan(ultimoResultado))} target="_blank" rel="noopener noreferrer"
-          style={{display:'inline-flex',alignItems:'center',gap:6,padding:'8px 14px',borderRadius:8,background:'#25D366',color:'#fff',fontSize:14,fontWeight:700,textDecoration:'none'}}>
-          📲 Enviar resultado por WhatsApp
-        </a>
-      </Card>
-    }
-
-    {resultadoVencido&&
-      <Card style={{borderLeft:'4px solid var(--red)',background:'var(--rbg)'}}>
-        <p style={{fontSize:14,fontWeight:700,color:'var(--red)',margin:'0 0 4px'}}>⚠️ No se capturó el resultado de la semana {resultadoVencido.semanaLabel}</p>
-        <p style={{fontSize:13,color:'var(--red)',margin:0}}>Se captura el lunes, o el martes a destiempo. Del miércoles en adelante ya no se puede.</p>
-      </Card>
-    }
-
-    {planPendiente&&resForm&&
-      <Card title={`🏁 Resultado del plan — Semana ${planPendiente.semanaLabel}`} style={{borderLeft:`4px solid ${ventanaResultado.aDestiempo?'var(--red)':'var(--yellow)'}`}}>
-        {ventanaResultado.aDestiempo?<AvisoDestiempo/>:
-          <p style={{fontSize:13,fontWeight:700,color:'var(--yellow)',marginBottom:6}}>📌 Hoy es lunes: captura cómo cerró la semana. Si no queda hoy, el martes se registra a destiempo.</p>}
-        <p style={{fontSize:13,color:'var(--dim)',marginBottom:8}}>Oportunidades, validaciones e instalaciones se precargaron de lo que hay en sistema, y las cuentas pagadas de los cierres de esa semana. Ajústalo si hace falta. Debajo de cada dato ves cómo vas contra lo que te comprometiste.</p>
-        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
-          {comparativoResultado(planPendiente.objetivos,resForm).map(x=>
-            <Field key={x.k} label={`${x.label} (compromiso: ${x.dinero?fmtMoney(x.obj):x.obj})`}>
-              {x.dinero
-                ?<InputMoney value={resForm[x.k]} onChange={e=>setResForm(f=>({...f,[x.k]:e.target.value}))}/>
-                :<Input type="number" value={resForm[x.k]} onChange={e=>setResForm(f=>({...f,[x.k]:e.target.value}))}/>}
-              {x.pct!=null&&<p style={{fontSize:13,fontWeight:700,margin:'2px 0 0',color:TONO_COLOR[x.tono]}}>{x.pct}%</p>}
-            </Field>
-          )}
-        </div>
-        {session.soloLectura?<AvisoSoloLectura nombre={session.user.nombre}/>:<Btn onClick={guardarResultado} style={{width:'100%'}}>💾 Guardar resultado y enviar por WhatsApp</Btn>}
-      </Card>
-    }
 
     {planActual&&!editandoPlan?
       <Card title={`✅ Plan de la semana — ${planActual.semanaLabel}`} style={{borderLeft:'4px solid var(--green)'}}>
@@ -4531,6 +4651,10 @@ function FichaRegistro({ev,resaltar,enfoque,onVerFoto,imprimir,conEncabezado,rol
         <Seccion titulo="Resultado vs compromiso">
           <TablaComparativo objetivos={r.objetivos} resultados={r.resultados}/>
         </Seccion>
+        {texto('Por qué',r.comentario)}
+        {r.porCoach?.length
+          ?<Seccion titulo="Por coach">{r.porCoach.map(c=><div key={c.coach} style={{fontSize:14,padding:'3px 0'}}>• {lineaCoachResultado(c)}</div>)}</Seccion>
+          :r.porCoachTexto?<Seccion titulo="Por coach">{r.porCoachTexto.split('\n').filter(Boolean).map((l,i)=><div key={i} style={{fontSize:14,padding:'3px 0'}}>• {l}</div>)}</Seccion>:null}
       </>;
       break;
     }
@@ -4930,7 +5054,9 @@ function reporteDetalleHTML(r){
     case'plan_resultado':{
       const fmtV=(x,v)=>escapeHtml(x.dinero?fmtMoney(v):String(v));
       return (r.aDestiempo?'<p style="color:#dc2626;font-weight:700">⚠️ Capturado a destiempo: debía quedar el lunes y se llenó el martes.</p>':'')+
-        comparativoResultado(r.objetivos,r.resultados).map(x=>`<p style="margin:2px 0">${escapeHtml(x.label)}: ${fmtV(x,x.real)} / compromiso ${fmtV(x,x.obj)}${x.pct!=null?` <b>${x.pct}%</b>`:''}</p>`).join('');
+        comparativoResultado(r.objetivos,r.resultados).map(x=>`<p style="margin:2px 0">${escapeHtml(x.label)}: ${fmtV(x,x.real)} / compromiso ${fmtV(x,x.obj)}${x.pct!=null?` <b>${x.pct}%</b>`:''}</p>`).join('')+
+        (r.comentario?`<p><b>Por qué:</b> ${escapeHtml(r.comentario)}</p>`:'')+
+        (r.porCoach?.length?`<p><b>Por coach:</b><br>${r.porCoach.map(c=>escapeHtml(lineaCoachResultado(c))).join('<br>')}</p>`:'');
     }
     case'feedback':
       return `<p><b>${escapeHtml(r.vendedor)}</b> — ${escapeHtml(r.tipo)}${r.semaforo?` (${escapeHtml(STATUS[r.semaforo]?.label||'')})`:''}</p>`+
@@ -5185,7 +5311,13 @@ function MainApp({session:sesionRecibida,setSession,onLogout,sessionBase,vistas,
   // Con la barra fija se puede cambiar de sección estando a media página: la nueva sección se
   // abre desde su inicio, no a la altura en que iba la anterior.
   const contenidoRef=useRef(null);
-  const irATab=id=>{
+  // Resultado de la semana anterior por capturar hoy: prende el punto del menú en Plan y el renglón
+  // del Dashboard. Llegar al Plan desde ese renglón lo abre ya desplegado.
+  const estadoResultado=estadoResultadoPlan(data.records,new Date());
+  const colorPendienteResultado=estadoResultado.pendiente?(estadoResultado.ventana.aDestiempo?'var(--red)':'var(--yellow)'):null;
+  const[abrirResultado,setAbrirResultado]=useState(false);
+  const irATab=(id,opciones)=>{
+    setAbrirResultado(!!opciones?.abrirResultado);
     setTab(id);
     const arriba=contenidoRef.current?contenidoRef.current.getBoundingClientRect().top:0;
     if(arriba<0)window.scrollTo({top:0});
@@ -5215,6 +5347,7 @@ function MainApp({session:sesionRecibida,setSession,onLogout,sessionBase,vistas,
       <nav className="app-nav" aria-label="Secciones">
         {tabsVisibles.map(t=><button key={t.id} onClick={()=>irATab(t.id)} className={tab===t.id?'activa':undefined} aria-current={tab===t.id?'page':undefined}>
           <span className="app-nav-icono">{t.icon}</span><span>{t.label}</span>
+          {t.id==='plan'&&colorPendienteResultado&&<span className="app-nav-punto" style={{background:colorPendienteResultado}} title="Falta cerrar la semana anterior"/>}
         </button>)}
         {/* Director y líderes (por su propio puesto, aunque estén en vista prestada) */}
         {(sessionBase.role==='director'||sessionBase.role==='lider')&&<button onClick={()=>window.open(REPORTE_COMERCIAL_URL,'_blank','noopener')} title="Abre el Reporte comercial en el Reporte de seguimiento">
@@ -5266,11 +5399,13 @@ function MainApp({session:sesionRecibida,setSession,onLogout,sessionBase,vistas,
             se vuelvan a montar de cero y no arrastren el formulario a medio llenar ni los paneles
             ya cargados de la persona anterior. */}
         <div key={session.verComo||'propia'} ref={contenidoRef} className="app-contenido"><div className={anchoContenido}>
+          {tab==='dashboard'&&estadoResultado.pendiente&&<RenglonResultadoPendiente plan={estadoResultado.pendiente}
+            aDestiempo={estadoResultado.ventana.aDestiempo} onClick={()=>irATab('plan',{abrirResultado:true})}/>}
           {tab==='dashboard'&&<DashboardTab data={data} setData={setData} team={allTeam} coaches={coaches} session={session} setTab={irATab} toast={toast}/>}
           {tab==='arranque'&&<ArranqueTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
           {tab==='permisos'&&<PermisosTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
           {tab==='cierre'&&<CierreTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
-          {tab==='plan'&&<PlanTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
+          {tab==='plan'&&<PlanTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey} abrirResultado={abrirResultado}/>}
           {tab==='feedback'&&<FeedbackTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
           {tab==='historial'&&<HistorialTab data={data} session={session} refreshKey={refreshKey}/>}
         </div></div>
