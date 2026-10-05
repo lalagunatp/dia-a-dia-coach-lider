@@ -455,6 +455,10 @@ function aSemanaPago(v) {
   const n = m ? Number(m[1]) : (/^\d{1,2}$/.test(s) ? Number(s) : NaN);
   return (n >= 1 && n <= 53) ? n : null;
 }
+// Columna J de BASE DE DATOS: solo "ganada" (sin importar mayúsculas/espacios) es venta validada.
+function esGanada(v) {
+  return String(v || '').trim().toLowerCase() === 'ganada';
+}
 // Igual que parseGviz del lado del cliente: una celda de fecha se manda como texto simple.
 function normalizarCelda(v) {
   return (v instanceof Date) ? Utilities.formatDate(v, Session.getScriptTimeZone(), 'dd/MM/yyyy') : v;
@@ -512,7 +516,9 @@ function calcularVentasDistrito() {
         const numVendedor = String(r[21] || '').trim(); // V
         if (!numVendedor) return;
         const creacion = aFecha(r[3]), activacion = aFecha(r[5]); // D,F
-        let validacion = aFecha(r[4]); // E
+        // Validada = columna J dice "ganada"; el día en que cae es la fecha de la columna E.
+        // Sin "ganada" en J no cuenta como validada aunque traiga fecha en E.
+        let validacion = esGanada(r[9]) ? aFecha(r[4]) : null; // J, E
         if (validacion && validacion > hoySinHora) validacion = null;
         const enVentana = (creacion && creacion >= cutoff) || (validacion && validacion >= cutoff) || (activacion && activacion >= cutoff);
         if (!enVentana) return;
