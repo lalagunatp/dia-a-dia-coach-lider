@@ -1074,6 +1074,8 @@ function funnelPeriodo(ventas,inicio,fin){
   return f;
 }
 // ARPU promedio (columna S de BASE DE DATOS, sin IVA ÷1.16) de las ventas activadas/instaladas de
+// `validacion` ya viene del servidor solo para las que en BASE DE DATOS columna J dicen "ganada"
+// (fecha = columna E); las demás llegan sin fecha de validación.
 // un vendedor en un periodo.
 function arpuPromedioPeriodo(ventas,inicio,fin){
   const activadas=(ventas||[]).filter(v=>v.activacion&&enRango(v.activacion,inicio,fin));
