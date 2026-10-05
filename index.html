@@ -4867,6 +4867,11 @@ function HistorialTab({data,session,refreshKey}){
   const[offset,setOffset]=useState(0);
   const[rango,setRango]=useState({desde:'',hasta:''});
   const[tipo,setTipo]=useState('todos');
+  // Hallazgos: hasta 3 subtipos (FEEDBACK_TIPOS) a la vez; vacío = todos. Se limpian al cambiar de tipo.
+  const[subtipos,setSubtipos]=useState([]);
+  useEffect(()=>{if(tipo!=='feedback')setSubtipos([]);},[tipo]);
+  const MAX_SUBTIPOS=3;
+  const toggleSubtipo=st=>setSubtipos(prev=>prev.includes(st)?prev.filter(x=>x!==st):prev.length<MAX_SUBTIPOS?[...prev,st]:prev);
   const[persona,setPersona]=useState('');
   const[agrupar,setAgrupar]=useState('dia');
   const[abiertos,setAbiertos]=useState(()=>new Set());
@@ -4938,7 +4943,11 @@ function HistorialTab({data,session,refreshKey}){
     .filter(e=>e.fecha>=per.desde&&e.fecha<=per.hasta)
     .map(e=>modoPersona==='sujeto'&&e.tipo==='arranque'?{...e,presencia:presenciaEn(e.r,nombrePersona,coachDe)}:e)
     .filter(e=>!persona||(modoPersona==='autor'?e.autor===nombrePersona:(e.sujetos.some(s=>s.nombre===nombrePersona)||!!e.presencia)));
-  const lista=tipo==='todos'?base:base.filter(e=>e.tipo===tipo);
+  const delTipo=tipo==='todos'?base:base.filter(e=>e.tipo===tipo);
+  const lista=tipo==='feedback'&&subtipos.length?delTipo.filter(e=>subtipos.includes(e.r.tipo)):delTipo;
+  // Cuántos hallazgos hay de cada subtipo en el periodo/persona, para el cuadro de subtipos.
+  const conteoSubtipo={};
+  if(tipo==='feedback')delTipo.forEach(e=>{conteoSubtipo[e.r.tipo]=(conteoSubtipo[e.r.tipo]||0)+1;});
   const res=resumirEventos(base,vendedorFoco);
   const grupos=agruparEventos(lista,agrupar,vendedorFoco);
 
@@ -4962,7 +4971,7 @@ function HistorialTab({data,session,refreshKey}){
     sheet.estado==='error'?'ATENCIÓN: al generar este informe no hubo conexión con el Sheet. Incluye solo lo guardado en este dispositivo y puede estar incompleto.':'',
     sheet.estado==='parcial'?'ATENCIÓN: algunas secciones no se pudieron leer del Sheet al generar este informe; puede estar incompleto.':'',
   ].filter(Boolean);
-  const filtrosTexto=`Periodo: ${per.desde===per.hasta?fmt(per.desde):`${fmt(per.desde)} al ${fmt(per.hasta)}`} · Tipo: ${tipo==='todos'?'Todos':TIPOS_HIST[tipo].label} · Agrupado por: ${etiquetaAgrupar[agrupar]}`;
+  const filtrosTexto=`Periodo: ${per.desde===per.hasta?fmt(per.desde):`${fmt(per.desde)} al ${fmt(per.hasta)}`} · Tipo: ${tipo==='todos'?'Todos':TIPOS_HIST[tipo].label}${tipo==='feedback'&&subtipos.length?` (${subtipos.join(', ')})`:''} · Agrupado por: ${etiquetaAgrupar[agrupar]}`;
 
   const chipBtn=activo=>({padding:'7px 13px',borderRadius:999,border:`1.5px solid ${activo?'var(--accent)':'var(--border)'}`,background:activo?'var(--accent)':'var(--card)',color:activo?'#fff':'var(--text)',fontSize:13,fontWeight:700,cursor:'pointer',whiteSpace:'nowrap'});
   const botonCuadro=deshabilitado=>({width:38,height:38,borderRadius:8,border:'1.5px solid var(--border)',background:'var(--card)',fontSize:18,lineHeight:1,color:deshabilitado?'var(--border)':'var(--text)',cursor:deshabilitado?'default':'pointer',flexShrink:0});
@@ -4995,6 +5004,24 @@ function HistorialTab({data,session,refreshKey}){
           {persona&&<button onClick={()=>irAPersona('')} style={botonCuadro(false)} aria-label="Quitar persona">✕</button>}
         </div>
       </div>
+      {tipo==='feedback'&&<div style={{marginTop:10,padding:'10px 10px 8px',border:'1.5px solid var(--border)',borderRadius:8,background:'var(--input)'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',gap:8,marginBottom:8}}>
+          <span style={{fontSize:12,fontWeight:700,color:'var(--dim)',textTransform:'uppercase',letterSpacing:'.5px'}}>Subtipos</span>
+          <span style={{fontSize:12,color:'var(--dim)'}}>
+            {subtipos.length?`${subtipos.length} de ${MAX_SUBTIPOS}`:`Todos · elige hasta ${MAX_SUBTIPOS}`}
+            {subtipos.length>0&&<button onClick={()=>setSubtipos([])} style={{marginLeft:8,background:'none',border:'none',padding:0,color:'var(--accent)',fontSize:12,fontWeight:700,cursor:'pointer'}}>Quitar</button>}
+          </span>
+        </div>
+        <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+          {FEEDBACK_TIPOS.map(st=>{
+            const activo=subtipos.includes(st),lleno=!activo&&subtipos.length>=MAX_SUBTIPOS;
+            return <button key={st} onClick={()=>toggleSubtipo(st)} disabled={lleno} aria-pressed={activo}
+              style={{...chipBtn(activo),fontSize:12,padding:'6px 11px',opacity:lleno?.45:1,cursor:lleno?'default':'pointer'}}>
+              {st} <span style={{opacity:.75,fontWeight:600}}>{conteoSubtipo[st]||0}</span>
+            </button>;
+          })}
+        </div>
+      </div>}
       <p style={{fontSize:12,color:sheet.estado==='error'||sheet.estado==='parcial'?'var(--yellow)':'var(--dim)',marginTop:8}}>{estadoFuente}</p>
     </Card>
 
