@@ -511,11 +511,12 @@ function construirSemaforoMap(records){
     .forEach(r=>{map[r.vendedor]={valor:r.semaforo,fecha:r.date||'',porQuien:r.registradoPor||'',desde:r.type};});
   return map;
 }
-// Los registros que capturó ESA persona (los suyos, no los de su equipo), de las 6 hojas.
-async function fetchRegistrosPropiosDelSheet(session){
+// Los registros que capturó ESA persona (los suyos, no los de su equipo), de todas las hojas o
+// solo de las de `tipos` (p.ej. ['plan','plan_resultado']).
+async function fetchRegistrosPropiosDelSheet(session,tipos){
   const nombre=session?.user?.nombre;
   if(!nombre||!session?.token)return[];
-  const listas=await Promise.all(Object.entries(HOJA_POR_TIPO).map(([tipo,hoja])=>
+  const listas=await Promise.all(Object.entries(HOJA_POR_TIPO).filter(([tipo])=>!tipos||tipos.includes(tipo)).map(([tipo,hoja])=>
     fetchHistorialEquipo(hoja,session.token,session.verComo)
       .then(filas=>filas.filter(f=>f['Registrado por']===nombre).map(f=>recordDesdeFila(tipo,f)).filter(Boolean))
       .catch(e=>{console.error('Registros del Sheet:',hoja,e);return[];})));
@@ -656,6 +657,15 @@ function estadoResultadoPlan(records,ref){
   const plan=sinResultado?masReciente(planesAnt,'savedAt'):null;
   const ventana=ventanaResultadoPlan(ref);
   return{ventana,pendiente:ventana?plan:null,vencido:ventana?null:plan};
+}
+// Planes y resultados vistos desde cualquier teléfono: los de este teléfono más los propios que
+// están en el Sheet (capturados en otro teléfono, o antes de reinstalar). Sin esto, el cierre de
+// la semana solo aparecía en el mismo teléfono donde se capturó el plan. El ID es el mismo en los
+// dos lados (el Sheet guarda el id local), así que lo que ya está aquí no se duplica.
+function juntarPlanesDelSheet(records,delSheet){
+  if(!delSheet?.length)return records;
+  const ids=new Set(records.map(r=>r.id));
+  return[...records,...delSheet.filter(r=>!ids.has(r.id))];
 }
 // "21 – 27 Sep": la semana de un plan, corta, para el renglón de pendiente.
 function etiquetaSemanaPlan(plan){
@@ -1064,6 +1074,8 @@ function pendientesInstalar30d(ventas,ref){
 }
 
 // Funnel de oportunidades de un vendedor en un periodo (semana o mes): creadas / validadas / instaladas.
+// `validacion` ya viene del servidor solo para las que en BASE DE DATOS columna J dicen "ganada"
+// (fecha = columna E); las demás llegan sin fecha de validación.
 function funnelPeriodo(ventas,inicio,fin){
   const f={oportunidades:0,validadas:0,instaladas:0};
   (ventas||[]).forEach(v=>{
@@ -1074,8 +1086,6 @@ function funnelPeriodo(ventas,inicio,fin){
   return f;
 }
 // ARPU promedio (columna S de BASE DE DATOS, sin IVA ÷1.16) de las ventas activadas/instaladas de
-// `validacion` ya viene del servidor solo para las que en BASE DE DATOS columna J dicen "ganada"
-// (fecha = columna E); las demás llegan sin fecha de validación.
 // un vendedor en un periodo.
 function arpuPromedioPeriodo(ventas,inicio,fin){
   const activadas=(ventas||[]).filter(v=>v.activacion&&enRango(v.activacion,inicio,fin));
@@ -2407,7 +2417,7 @@ function RenglonCoachResultado({c}){
     </div>}
   </div>;
 }
-function PlanTab({data,setData,team,toast,session,refreshKey,abrirResultado}){
+function PlanTab({data,setData,team,toast,session,refreshKey,abrirResultado,recordsPlan=data.records,planesListos=true}){
   const esLider=session.role==='lider';
   // Coach Promovendedor Punto de Venta: "Zonas a trabajar" se reemplaza por "Puntos de Venta a
   // trabajar" (catálogo hoja PDV) en vez de cluster/colonia.
@@ -2439,13 +2449,17 @@ function PlanTab({data,setData,team,toast,session,refreshKey,abrirResultado}){
   const esLunes=nowDate.getDay()===1;
 
   // De esta semana puede haber más de un plan si se editó (ver masReciente): manda el último.
-  const planActual=masReciente(data.records.filter(r=>r.type==='plan'&&r.semanaInicio===semanaIniStr),'savedAt');
+  const planActual=masReciente(recordsPlan.filter(r=>r.type==='plan'&&r.semanaInicio===semanaIniStr),'savedAt');
   const retraso=!planActual&&hoyStr>semanaIniStr;
   const puedeEditarPlan=!session.soloLectura&&sePuedeEditarPlan(planActual,nowDate);
 
   // Resultado real de la semana anterior: se captura el lunes, o el martes a destiempo (ver
   // ventanaResultadoPlan y estadoResultadoPlan).
-  const{ventana:ventanaResultado,pendiente:planPendiente,vencido:resultadoVencido}=estadoResultadoPlan(data.records,nowDate);
+  const{ventana:ventanaResultado,pendiente:planPendiente,vencido:resultadoVencido}=estadoResultadoPlan(recordsPlan,nowDate);
+  // Día de cierre sin plan de la semana anterior (ni aquí ni en el Sheet): se dice, para que no
+  // parezca que el cierre falta. Se espera a que lleguen los del Sheet para no avisar de más.
+  const semanaAntStr=(()=>{const d=startOfWeek(nowDate);d.setDate(d.getDate()-7);return ymdLocal(d);})();
+  const sinPlanAnterior=!!ventanaResultado&&planesListos&&!recordsPlan.some(r=>r.type==='plan'&&r.semanaInicio===semanaAntStr);
 
   const[zonasData,setZonasData]=useState({clusterToColonias:{},coloniaToCluster:{},clusters:[]});
   useEffect(()=>{if(!esCoachPDV)fetchClustersColonias(session.token).then(list=>setZonasData(buildClusterMap(list)));},[esCoachPDV]);
@@ -2629,6 +2643,12 @@ function PlanTab({data,setData,team,toast,session,refreshKey,abrirResultado}){
       <Card style={{borderLeft:'3px solid var(--red)'}}>
         <p style={{fontSize:14,fontWeight:700,color:'var(--red)',margin:'0 0 4px'}}>No se capturó el resultado de la semana {etiquetaSemanaPlan(resultadoVencido)}</p>
         <p style={{fontSize:13,color:'var(--dim)',margin:0}}>Se captura el lunes, o el martes a destiempo. Del miércoles en adelante ya no se puede.</p>
+      </Card>
+    }
+
+    {sinPlanAnterior&&
+      <Card style={{borderLeft:'3px solid var(--border)'}}>
+        <p style={{fontSize:13,color:'var(--dim)',margin:0}}>🏁 La semana {etiquetaSemanaPlan({semanaInicio:semanaAntStr})} no tuvo plan capturado, así que no hay resultado que cerrar.</p>
       </Card>
     }
 
@@ -5186,6 +5206,12 @@ function MainApp({session:sesionRecibida,setSession,onLogout,sessionBase,vistas,
   // En vista prestada nada se guarda (los botones de captura ya están bloqueados) — este setter
   // vacío evita además que algo escriba en localStorage los registros de otra persona.
   const setData=enVista?(()=>{}):setDatosLocales;
+  // Sesión propia: los planes y resultados propios que están en el Sheet, para que el Plan y el
+  // cierre de la semana no dependan de haber capturado en este mismo teléfono (ver
+  // juntarPlanesDelSheet). En vista prestada ya vienen dentro de registrosVista.
+  const[planesSheet,setPlanesSheet]=useState(null); // null = todavía no llegan
+  const recordsPlan=useMemo(()=>enVista?data.records:juntarPlanesDelSheet(data.records,planesSheet),[enVista,data.records,planesSheet]);
+  const planesListos=enVista?registrosVista!==null:planesSheet!==null;
   const allTeam=[...(coaches||[]),...team];
   // Líder y Director supervisan a través de coaches (el director, los de todos sus líderes).
   const supervisaCoaches=role==='lider'||role==='director'||esRolConsulta(role);
@@ -5256,6 +5282,12 @@ function MainApp({session:sesionRecibida,setSession,onLogout,sessionBase,vistas,
     fetchRegistrosPropiosDelSheet(session).then(recs=>{if(!cancelado)setRegistrosVista(recs);});
     return()=>{cancelado=true;};
   },[session.verComo,refreshKey]);
+  useEffect(()=>{
+    if(enVista)return;
+    let cancelado=false;
+    fetchRegistrosPropiosDelSheet(session,['plan','plan_resultado']).then(recs=>{if(!cancelado)setPlanesSheet(recs);});
+    return()=>{cancelado=true;};
+  },[session.verComo,refreshKey]);
   const actualizarInfo=async()=>{
     if(refreshing)return;
     setRefreshing(true);
@@ -5315,7 +5347,7 @@ function MainApp({session:sesionRecibida,setSession,onLogout,sessionBase,vistas,
   const contenidoRef=useRef(null);
   // Resultado de la semana anterior por capturar hoy: prende el punto del menú en Plan y el renglón
   // del Dashboard. Llegar al Plan desde ese renglón lo abre ya desplegado.
-  const estadoResultado=estadoResultadoPlan(data.records,new Date());
+  const estadoResultado=estadoResultadoPlan(recordsPlan,new Date());
   const colorPendienteResultado=estadoResultado.pendiente?(estadoResultado.ventana.aDestiempo?'var(--red)':'var(--yellow)'):null;
   const[abrirResultado,setAbrirResultado]=useState(false);
   const irATab=(id,opciones)=>{
@@ -5407,7 +5439,7 @@ function MainApp({session:sesionRecibida,setSession,onLogout,sessionBase,vistas,
           {tab==='arranque'&&<ArranqueTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
           {tab==='permisos'&&<PermisosTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
           {tab==='cierre'&&<CierreTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
-          {tab==='plan'&&<PlanTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey} abrirResultado={abrirResultado}/>}
+          {tab==='plan'&&<PlanTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey} abrirResultado={abrirResultado} recordsPlan={recordsPlan} planesListos={planesListos}/>}
           {tab==='feedback'&&<FeedbackTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
           {tab==='historial'&&<HistorialTab data={data} session={session} refreshKey={refreshKey}/>}
         </div></div>
