@@ -149,33 +149,38 @@ const{useState,useEffect,useRef,useCallback,useMemo}=React;
 const DOPOST_URL='https://script.google.com/macros/s/AKfycbx7DYc01sJV7QJsA9kVdtgW0JOZdyySjLqqHzszA9qsDE3xt8kpr7SfrdF2KqseVTr0/exec';
 // Con datos móviles inestables, un fetch a Apps Script puede quedarse colgado (ni resuelve ni
 // truena) en vez de fallar rápido — sin este tope, eso dejaba el login (u otros fetch) esperando
-// para siempre con el spinner puesto, sin ningún mensaje de error. 25s es holgado (Apps Script
-// puede tardar varios segundos leyendo hojas grandes), pero acotado.
+// para siempre con el spinner puesto, sin ningún mensaje de error.
 // Pide y lee la respuesta como JSON, con el tope cubriendo también la lectura del cuerpo. Cuando
-// Apps Script se satura (muchas ejecuciones a la vez), Google no responde con JSON sino con una
-// página HTML de error — típicamente un 404 de script.googleusercontent.com/macros/echo. Antes
-// eso se iba directo a res.json() y salía como "Unexpected token '<'"; ahora se reconoce y se
-// marca como reintentable.
-function pedirJSON(url,opts,ms=25000){
+// Google se traba, no responde con JSON sino con una página HTML de error — típicamente un 404 de
+// script.googleusercontent.com/macros/echo. Antes eso se iba directo a res.json() y salía como
+// "Unexpected token '<'"; ahora se reconoce y se marca como reintentable. Pasarse del tope también
+// es reintentable: diagnosticoTiempos (diagnostico.gs) mide cada lectura del Director en menos de
+// 1.5s del lado del servidor, así que una que no llega en 15s está atorada en Google, no
+// calculando — y repetirla suele llegar al instante. El AbortController corta de verdad la
+// petición atorada para que no siga ocupando la conexión.
+function pedirJSON(url,opts,ms=15000){
+  const ctrl=new AbortController();
+  const reintentable=msg=>Object.assign(new Error(msg),{reintentable:true});
+  let timer;
   return Promise.race([
     (async()=>{
-      const res=await fetch(url,opts);
+      const res=await fetch(url,{...opts,signal:ctrl.signal});
       const texto=await res.text();
-      const reintentable=msg=>Object.assign(new Error(msg),{reintentable:true});
       if(!res.ok||/^\s*</.test(texto))throw reintentable(`Google no respondió bien (error ${res.status}), intenta de nuevo`);
       try{return JSON.parse(texto);}catch{throw reintentable('Respuesta incompleta del servidor, intenta de nuevo');}
     })(),
-    new Promise((_,rej)=>setTimeout(()=>rej(new Error('La conexión está tardando demasiado, intenta de nuevo')),ms)),
-  ]);
+    new Promise((_,rej)=>{timer=setTimeout(()=>{ctrl.abort();rej(reintentable('La conexión está tardando demasiado, intenta de nuevo'));},ms);}),
+  ]).finally(()=>clearTimeout(timer));
 }
 // Al abrir, el Director disparaba ~12 lecturas pesadas al mismo tiempo (las 7 hojas del Historial,
 // PLAN y PLAN RESULTADO repetidos para sus planes, ventas, ranking, perfil...) — cada una lee el
 // roster y hojas completas. Sumadas a las de los demás usuarios, saturaban Apps Script: unas
 // regresaban la página 404 y otras se colgaban hasta el tope. Ahora las lecturas pasan por una
 // cola de pocas a la vez (el tope de tiempo corre desde que le toca su turno, no mientras espera),
-// las idénticas en vuelo se comparten, y un 404/HTML se reintenta solo con espera creciente.
+// las idénticas en vuelo se comparten, y un 404/HTML o una lectura atorada se reintentan solas con
+// espera creciente (hasta 2 veces; `reintentos` lo baja para ventas, que es la más pesada).
 const MAX_LECTURAS_SIMULTANEAS=3;
-const ESPERAS_REINTENTO_MS=[2000,6000];
+const ESPERAS_REINTENTO_MS=[1500,4000];
 let lecturasActivas=0;
 const colaLecturas=[];
 function conTurno(fn){
@@ -187,11 +192,11 @@ function conTurno(fn){
     if(lecturasActivas<MAX_LECTURAS_SIMULTANEAS)correr();else colaLecturas.push(correr);
   });
 }
-async function pedirJSONConReintento(url,ms){
+async function pedirJSONConReintento(url,ms,reintentos=ESPERAS_REINTENTO_MS.length){
   for(let i=0;;i++){
     try{return await conTurno(()=>pedirJSON(url,undefined,ms));}
     catch(e){
-      if(!e.reintentable||i>=ESPERAS_REINTENTO_MS.length)throw e;
+      if(!e.reintentable||i>=reintentos)throw e;
       await new Promise(r=>setTimeout(r,ESPERAS_REINTENTO_MS[i]));
     }
   }
@@ -202,11 +207,11 @@ async function pedirJSONConReintento(url,ms){
 const VIGENCIA_LECTURA_MS=60000;
 const lecturasEnCurso=new Map();
 const lecturasRecientes=new Map();
-function leerServidor(url,{ms=25000,cache=false}={}){
+function leerServidor(url,{ms=15000,cache=false,reintentos}={}){
   const hit=cache&&lecturasRecientes.get(url);
   if(hit&&Date.now()-hit.t<VIGENCIA_LECTURA_MS)return Promise.resolve(hit.json);
   if(lecturasEnCurso.has(url))return lecturasEnCurso.get(url);
-  const p=pedirJSONConReintento(url,ms)
+  const p=pedirJSONConReintento(url,ms,reintentos)
     .then(json=>{if(cache&&json&&json.ok)lecturasRecientes.set(url,{t:Date.now(),json});return json;})
     .finally(()=>lecturasEnCurso.delete(url));
   lecturasEnCurso.set(url,p);
@@ -314,7 +319,9 @@ async function sendToSheet(record){
   try{
     // Las fotos SÍ se envían: el Apps Script las sube a Drive y guarda la liga en el Sheet.
     const payload={...record};
-    const json=await pedirJSON(DOPOST_URL,{method:'POST',body:JSON.stringify(payload),headers:{'Content-Type':'text/plain'}});
+    // Sin reintento y con tope amplio: el servidor sube las fotos a Drive antes de responder, y un
+    // envío repetido podría duplicar el registro. Si falla, queda en la cola de pendientes.
+    const json=await pedirJSON(DOPOST_URL,{method:'POST',body:JSON.stringify(payload),headers:{'Content-Type':'text/plain'}},45000);
     // Ya hay un registro nuevo en el Sheet: las lecturas guardadas del Historial quedaron viejas.
     if(json&&json.ok)olvidarLecturas();
     return json;
@@ -417,9 +424,9 @@ const qsVerComo=verComo=>verComo?`&verComo=${encodeURIComponent(verComo)}`:'';
 async function fetchHistorialHoja(hoja,token,verComo){
   if(!DOPOST_URL||!token)return{ok:false,registros:[],error:'Sin sesión'};
   try{
-    // 60s: para el Director cada hoja trae los registros de todo el distrito y, en horas pico, el
-    // servidor llegó a pasar de los 25s normales — cortarla ahí dejaba el Historial incompleto.
-    const json=await leerServidor(`${DOPOST_URL}?accion=historial&hoja=${encodeURIComponent(hoja||'ARRANQUE')}&token=${encodeURIComponent(token)}${qsVerComo(verComo)}`,{cache:true,ms:60000});
+    // 25s por intento: para el Director la hoja de ARRANQUE pesa ~700KB, que con datos móviles
+    // tarda en bajar aunque el servidor la arme en un segundo.
+    const json=await leerServidor(`${DOPOST_URL}?accion=historial&hoja=${encodeURIComponent(hoja||'ARRANQUE')}&token=${encodeURIComponent(token)}${qsVerComo(verComo)}`,{cache:true,ms:25000});
     if(!json.ok)return{ok:false,registros:[],error:json.error||'El servidor no pudo leer la hoja'};
     return{ok:true,registros:json.registros||[]};
   }catch(e){console.error('Historial equipo fetch error:',e);return{ok:false,registros:[],error:e.message};}
@@ -1058,7 +1065,7 @@ async function fetchVentasComisiones(token,verComo){
   const vacio={ventasByVendedor:{},cuentasByHomologado:{},asignacionesPorOS:{}};
   if(!token)return vacio;
   try{
-    const json=await leerServidor(`${DOPOST_URL}?accion=ventas&token=${encodeURIComponent(token)}${qsVerComo(verComo)}`,{ms:TOPE_VENTAS_MS});
+    const json=await leerServidor(`${DOPOST_URL}?accion=ventas&token=${encodeURIComponent(token)}${qsVerComo(verComo)}`,{ms:TOPE_VENTAS_MS,reintentos:1});
     if(!json.ok){console.error('Ventas fetch error:',json.error);return{...vacio,error:json.error||'el servidor no pudo leerlas'};}
     const ventasByVendedor={};
     Object.entries(json.ventasByVendedor||{}).forEach(([k,lista])=>{
