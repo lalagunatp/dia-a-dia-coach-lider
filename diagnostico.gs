@@ -30,7 +30,7 @@ function letraColumna(i) {
 
 // ─── Diagnóstico de "la conexión está tardando demasiado" ───
 // Mide, con el usuario que se indique (por defecto el primer Director activo), cuánto tarda cada
-// lectura que la app hace al abrir. El navegador corta en 25s (60s el historial, 90s ventas): lo
+// lectura que la app hace al abrir. El navegador corta cada intento en 15s (25s el historial, 90s ventas): lo
 // que salga cerca o arriba de eso es lo que hay que aligerar.
 // Uso: diagnosticoTiempos() o diagnosticoTiempos('12345678') → ▶ Ejecutar → Registro de ejecución.
 function diagnosticoTiempos(numEmpArg) {
@@ -54,11 +54,11 @@ function diagnosticoTiempos(numEmpArg) {
       linea((ms > tope ? '★ ' : '  ') + nombre + ': ' + (res.ok ? 'ok' : 'ERROR → ' + res.error) + ' en ' + ms + ' ms, ' + Math.round(tam / 1024) + ' KB' + (ms > tope ? ' (pasa el tope de ' + tope / 1000 + 's del navegador)' : ''));
     };
     linea('');
-    medir('ranking (con foto)', function () { return obtenerRanking({ token: token }); }, 25000);
+    medir('ranking (con foto)', function () { return obtenerRanking({ token: token }); }, 15000);
     medir('ventas (con foto)', function () { return obtenerVentasComisiones({ token: token }); }, 90000);
-    medir('perfil', function () { return refrescarPerfil({ token: token }); }, 25000);
+    medir('perfil', function () { return refrescarPerfil({ token: token }); }, 15000);
     Object.keys(SHEET_CONFIG).forEach(function (h) {
-      medir('historial ' + h, function () { return obtenerHistorial({ token: token, hoja: h }); }, 60000);
+      medir('historial ' + h, function () { return obtenerHistorial({ token: token, hoja: h }); }, 25000);
     });
     linea('');
     const t0 = Date.now();
