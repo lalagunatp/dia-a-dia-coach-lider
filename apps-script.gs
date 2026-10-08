@@ -617,9 +617,11 @@ function calcularVentasDistrito() {
 // archivo privado en el Drive de la cuenta del script (respaldo durable; NO en la carpeta de
 // evidencias, que se comparte por liga). Cada accion=ventas lee esa foto y recorta al equipo
 // del token: segundos, en vez de minutos, y lo mismo para un coach que para el Director.
-const SNAP_VENTAS_CACHE_PTR = 'snapVentas_ptr_v1';
-const SNAP_VENTAS_PROP_FILE = 'SNAP_VENTAS_FILE_ID';
-const SNAP_VENTAS_ARCHIVO = 'Supervisión 2.0 - foto de ventas (no borrar).json';
+// El ranking (dos pestañas completas de BASE LA LAGUNA 2026) tenía el mismo problema: cada entrada
+// de cada usuario lo releía entero y con varios a la vez pasaba de los 25s del navegador. Va en la
+// misma foto de cada 30 minutos, con su propia clave y su propio archivo de respaldo.
+const FOTO_VENTAS = { base: 'snapVentas', prop: 'SNAP_VENTAS_FILE_ID', archivo: 'Supervisión 2.0 - foto de ventas (no borrar).json' };
+const FOTO_RANKING = { base: 'snapRanking', prop: 'SNAP_RANKING_FILE_ID', archivo: 'Supervisión 2.0 - foto de ranking (no borrar).json' };
 // Si el activador dejó de correr, una foto más vieja que esto ya no se usa: se lee en vivo.
 const SNAP_VENTAS_MAX_EDAD_MS = 24 * 60 * 60 * 1000;
 // CacheService admite 100KB por clave; 45,000 caracteres deja margen aunque cada uno ocupe 2 bytes (acentos).
@@ -628,18 +630,18 @@ const SNAP_VENTAS_CACHE_TTL_S = 21600; // 6h, el máximo de CacheService
 
 // La foto se parte en trozos con un prefijo propio de cada versión y AL FINAL se escribe el
 // apuntador: así quien lee a media escritura sigue viendo la versión anterior completa.
-function guardarSnapshotVentasCache(texto, version) {
+function guardarFotoCache(foto, texto, version) {
   const cache = CacheService.getScriptCache();
-  const prefijo = 'snapVentas_' + version + '_';
+  const prefijo = foto.base + '_' + version + '_';
   const n = Math.ceil(texto.length / SNAP_VENTAS_TROZO);
   const trozos = {};
   for (let i = 0; i < n; i++) trozos[prefijo + i] = texto.substr(i * SNAP_VENTAS_TROZO, SNAP_VENTAS_TROZO);
   cache.putAll(trozos, SNAP_VENTAS_CACHE_TTL_S);
-  cache.put(SNAP_VENTAS_CACHE_PTR, prefijo + '|' + n, SNAP_VENTAS_CACHE_TTL_S);
+  cache.put(foto.base + '_ptr_v1', prefijo + '|' + n, SNAP_VENTAS_CACHE_TTL_S);
 }
-function leerSnapshotVentasCache() {
+function leerFotoCache(foto) {
   const cache = CacheService.getScriptCache();
-  const ptr = cache.get(SNAP_VENTAS_CACHE_PTR);
+  const ptr = cache.get(foto.base + '_ptr_v1');
   if (!ptr) return null;
   const partes = ptr.split('|');
   const prefijo = partes[0], n = Number(partes[1]);
@@ -656,37 +658,45 @@ function leerSnapshotVentasCache() {
   return texto;
 }
 
-function guardarSnapshotVentasDrive(texto) {
+function guardarFotoDrive(foto, texto) {
   const props = PropertiesService.getScriptProperties();
-  const id = props.getProperty(SNAP_VENTAS_PROP_FILE);
+  const id = props.getProperty(foto.prop);
   if (id) {
     try { DriveApp.getFileById(id).setContent(texto); return; } catch (e) { /* lo borraron: se crea de nuevo abajo */ }
   }
-  const archivo = DriveApp.createFile(SNAP_VENTAS_ARCHIVO, texto, MimeType.PLAIN_TEXT);
-  props.setProperty(SNAP_VENTAS_PROP_FILE, archivo.getId());
+  const archivo = DriveApp.createFile(foto.archivo, texto, MimeType.PLAIN_TEXT);
+  props.setProperty(foto.prop, archivo.getId());
 }
-function leerSnapshotVentasDrive() {
-  const id = PropertiesService.getScriptProperties().getProperty(SNAP_VENTAS_PROP_FILE);
+function leerFotoDrive(foto) {
+  const id = PropertiesService.getScriptProperties().getProperty(foto.prop);
   if (!id) return null;
   return DriveApp.getFileById(id).getBlob().getDataAsString();
 }
 
-// Arma la foto y la guarda — la corre el activador de tiempo; también se usa como respaldo si
-// una entrada no encuentra ninguna foto vigente.
-function actualizarSnapshotVentas() {
-  const snap = calcularVentasDistrito();
+function guardarFoto(foto, snap, etiqueta) {
   const texto = JSON.stringify(snap);
-  try { guardarSnapshotVentasCache(texto, snap.generado); } catch (e) { console.error('Foto de ventas → caché: ' + e.message); }
-  try { guardarSnapshotVentasDrive(texto); } catch (e) { console.error('Foto de ventas → Drive: ' + e.message); }
+  try { guardarFotoCache(foto, texto, snap.generado); } catch (e) { console.error('Foto de ' + etiqueta + ' → caché: ' + e.message); }
+  try { guardarFotoDrive(foto, texto); } catch (e) { console.error('Foto de ' + etiqueta + ' → Drive: ' + e.message); }
   return snap;
 }
 
+// Arman la foto y la guardan — las corre el activador de tiempo; también se usan como respaldo si
+// una entrada no encuentra ninguna foto vigente.
+function actualizarSnapshotVentas() {
+  return guardarFoto(FOTO_VENTAS, calcularVentasDistrito(), 'ventas');
+}
+function actualizarSnapshotRanking() {
+  return guardarFoto(FOTO_RANKING, { generado: Date.now(), rankEnt: leerRankingEntrenamiento(), rankMen: leerRankingMensual() }, 'ranking');
+}
+
 // Activador: cada 30 minutos entre las 6:00 y las 22:00 (de noche no se captura nada y así el
-// activador no se come la cuota diaria de ejecución de Apps Script).
+// activador no se come la cuota diaria de ejecución de Apps Script). Ventas y ranking van cada uno
+// en su try: si uno truena, el otro igual se actualiza.
 function actualizarSnapshotVentasProgramado() {
   const h = Number(Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'H'));
   if (h < 6 || h >= 22) return;
-  actualizarSnapshotVentas();
+  try { actualizarSnapshotVentas(); } catch (e) { console.error('Foto de ventas: ' + e.message); }
+  try { actualizarSnapshotRanking(); } catch (e) { console.error('Foto de ranking: ' + e.message); }
 }
 
 // EJECUTAR UNA SOLA VEZ desde el editor (menú de funciones → instalarActualizacionVentas →
@@ -698,23 +708,26 @@ function instalarActualizacionVentas() {
   });
   ScriptApp.newTrigger('actualizarSnapshotVentasProgramado').timeBased().everyMinutes(30).create();
   const snap = actualizarSnapshotVentas();
-  console.log('Listo: activador instalado y foto de ventas armada (' + Object.keys(snap.ventasByVendedor).length + ' vendedores con oportunidades).');
+  const rank = actualizarSnapshotRanking();
+  console.log('Listo: activador instalado y fotos armadas (' + Object.keys(snap.ventasByVendedor).length + ' vendedores con oportunidades, ' + Object.keys(rank.rankMen).length + ' claves de ranking).');
 }
 
-function leerSnapshotVentas() {
+function leerFoto(foto) {
   let texto = null, deDrive = false;
-  try { texto = leerSnapshotVentasCache(); } catch (e) { texto = null; }
+  try { texto = leerFotoCache(foto); } catch (e) { texto = null; }
   if (!texto) {
-    try { texto = leerSnapshotVentasDrive(); deDrive = true; } catch (e) { texto = null; }
+    try { texto = leerFotoDrive(foto); deDrive = true; } catch (e) { texto = null; }
   }
   if (!texto) return null;
   let snap;
   try { snap = JSON.parse(texto); } catch (e) { return null; }
   if (!snap || !snap.generado || Date.now() - snap.generado > SNAP_VENTAS_MAX_EDAD_MS) return null;
   // Se leyó del respaldo porque la caché se vació: se vuelve a llenar para las siguientes entradas.
-  if (deDrive) { try { guardarSnapshotVentasCache(texto, snap.generado); } catch (e) { /* sin caché, igual funciona */ } }
+  if (deDrive) { try { guardarFotoCache(foto, texto, snap.generado); } catch (e) { /* sin caché, igual funciona */ } }
   return snap;
 }
+function leerSnapshotVentas() { return leerFoto(FOTO_VENTAS); }
+function leerSnapshotRanking() { return leerFoto(FOTO_RANKING); }
 
 // accion=ventas: la foto del distrito recortada al equipo del token (el propio usuario, su equipo,
 // sus coaches y líderes — idsPermitidos). Mismo shape de siempre para el cliente, más `generado`
@@ -929,15 +942,18 @@ function obtenerRanking(params) {
     const nombresPermitidos = {};
     [user].concat(built.team, built.coaches, built.lideres || []).forEach(function (m) { nombresPermitidos[m.nombre] = true; });
 
+    // De la foto de cada 30 minutos (ver actualizarSnapshotRanking); en vivo solo si no hay una vigente.
+    const snap = leerSnapshotRanking() || actualizarSnapshotRanking();
+
     const rankEnt = {};
-    const rankEntFull = leerRankingEntrenamiento();
+    const rankEntFull = snap.rankEnt;
     Object.keys(rankEntFull).forEach(function (k) {
       const v = rankEntFull[k];
       if (permitidos[k] || (v._nombre && nombresPermitidos[v._nombre])) rankEnt[k] = v;
     });
 
     const rankMen = {};
-    const rankMenFull = leerRankingMensual();
+    const rankMenFull = snap.rankMen;
     Object.keys(rankMenFull).forEach(function (k) {
       const v = rankMenFull[k];
       if (permitidos[k] || (v.nombre && nombresPermitidos[v.nombre])) rankMen[k] = v;

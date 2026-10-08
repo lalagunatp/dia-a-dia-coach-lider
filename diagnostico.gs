@@ -28,6 +28,49 @@ function letraColumna(i) {
   return s;
 }
 
+// ─── Diagnóstico de "la conexión está tardando demasiado" ───
+// Mide, con el usuario que se indique (por defecto el primer Director activo), cuánto tarda cada
+// lectura que la app hace al abrir. El navegador corta en 25s (60s el historial, 90s ventas): lo
+// que salga cerca o arriba de eso es lo que hay que aligerar.
+// Uso: diagnosticoTiempos() o diagnosticoTiempos('12345678') → ▶ Ejecutar → Registro de ejecución.
+function diagnosticoTiempos(numEmpArg) {
+  const log = [];
+  const linea = function (s) { log.push(s); console.log(s); };
+  try {
+    const all = leerRosterCompleto();
+    const numEmp = String(numEmpArg || NUM_EMP_DIAGNOSTICO || '').trim();
+    const user = numEmp
+      ? all.filter(function (e) { return e.numEmp === numEmp; })[0]
+      : all.filter(function (e) { return e.activo === 'ACTIVO' && getRoleType(e.posicion) === 'director'; })[0];
+    if (!user) { linea('✘ No encontré al empleado ' + (numEmp || '(ningún Director activo)')); return log.join('\n'); }
+    linea('USUARIO: ' + user.nombre + ' · ' + user.posicion);
+    const token = emitirToken(user.numEmp);
+    const medir = function (nombre, fn, tope) {
+      const t0 = Date.now();
+      let res;
+      try { res = fn(); } catch (e) { res = { ok: false, error: e.message }; }
+      const ms = Date.now() - t0;
+      const tam = JSON.stringify(res).length;
+      linea((ms > tope ? '★ ' : '  ') + nombre + ': ' + (res.ok ? 'ok' : 'ERROR → ' + res.error) + ' en ' + ms + ' ms, ' + Math.round(tam / 1024) + ' KB' + (ms > tope ? ' (pasa el tope de ' + tope / 1000 + 's del navegador)' : ''));
+    };
+    linea('');
+    medir('ranking (con foto)', function () { return obtenerRanking({ token: token }); }, 25000);
+    medir('ventas (con foto)', function () { return obtenerVentasComisiones({ token: token }); }, 90000);
+    medir('perfil', function () { return refrescarPerfil({ token: token }); }, 25000);
+    Object.keys(SHEET_CONFIG).forEach(function (h) {
+      medir('historial ' + h, function () { return obtenerHistorial({ token: token, hoja: h }); }, 60000);
+    });
+    linea('');
+    const t0 = Date.now();
+    leerRankingEntrenamiento(); leerRankingMensual();
+    linea('  (referencia) ranking leído en vivo, sin foto: ' + (Date.now() - t0) + ' ms');
+    return log.join('\n');
+  } catch (err) {
+    linea('✘ EXCEPCIÓN: ' + err.message);
+    return log.join('\n');
+  }
+}
+
 // ─── Diagnóstico de "el Rendimiento de la tarjeta no cuadra" ───
 // Los "Últimos 3 meses" salen de las columnas "VENTAS EN EL DISTRITO <MES>" de la pestaña RANKING.
 // Esto imprime qué columnas encontró por encabezado y qué valores tiene esa persona en cada una,

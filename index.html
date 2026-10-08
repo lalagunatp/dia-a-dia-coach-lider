@@ -417,7 +417,9 @@ const qsVerComo=verComo=>verComo?`&verComo=${encodeURIComponent(verComo)}`:'';
 async function fetchHistorialHoja(hoja,token,verComo){
   if(!DOPOST_URL||!token)return{ok:false,registros:[],error:'Sin sesión'};
   try{
-    const json=await leerServidor(`${DOPOST_URL}?accion=historial&hoja=${encodeURIComponent(hoja||'ARRANQUE')}&token=${encodeURIComponent(token)}${qsVerComo(verComo)}`,{cache:true});
+    // 60s: para el Director cada hoja trae los registros de todo el distrito y, en horas pico, el
+    // servidor llegó a pasar de los 25s normales — cortarla ahí dejaba el Historial incompleto.
+    const json=await leerServidor(`${DOPOST_URL}?accion=historial&hoja=${encodeURIComponent(hoja||'ARRANQUE')}&token=${encodeURIComponent(token)}${qsVerComo(verComo)}`,{cache:true,ms:60000});
     if(!json.ok)return{ok:false,registros:[],error:json.error||'El servidor no pudo leer la hoja'};
     return{ok:true,registros:json.registros||[]};
   }catch(e){console.error('Historial equipo fetch error:',e);return{ok:false,registros:[],error:e.message};}
