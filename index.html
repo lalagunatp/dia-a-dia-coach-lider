@@ -1686,43 +1686,6 @@ function PhotoCaptureMulti({photos,onChange,label}){
   </div>;
 }
 
-// Tono corto (beep) antes de empezar a escuchar, para que los participantes sepan cuándo hablar.
-function reproducirTono(){
-  return new Promise(resolve=>{
-    try{
-      const ctx=new(window.AudioContext||window.webkitAudioContext)();
-      const osc=ctx.createOscillator();
-      const gain=ctx.createGain();
-      osc.frequency.value=880;
-      osc.connect(gain);gain.connect(ctx.destination);
-      gain.gain.setValueAtTime(.001,ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(.2,ctx.currentTime+.02);
-      gain.gain.exponentialRampToValueAtTime(.001,ctx.currentTime+.35);
-      osc.start();
-      osc.stop(ctx.currentTime+.35);
-      osc.onended=()=>{ctx.close();resolve();};
-    }catch(e){resolve();}
-  });
-}
-
-// ═══ AUDIO RECORDER ═══
-function AudioRecorder({onTranscript}){
-  const[rec,setRec]=useState(false);const[preparando,setPreparando]=useState(false);const[txt,setTxt]=useState('');const rr=useRef(null);
-  const toggle=async()=>{
-    if(rec){rr.current?.stop();setRec(false);return;}
-    const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-    if(!SR){alert('Navegador sin soporte de voz. Usa Chrome.');return;}
-    setPreparando(true);
-    await reproducirTono();
-    setPreparando(false);
-    const r=new SR();r.lang='es-MX';r.continuous=true;r.interimResults=true;let final=txt;
-    r.onresult=e=>{let interim='';for(let i=e.resultIndex;i<e.results.length;i++){if(e.results[i].isFinal)final+=e.results[i][0].transcript+' ';else interim+=e.results[i][0].transcript;}setTxt(final+interim);onTranscript(final+interim);};
-    r.onerror=()=>setRec(false);r.onend=()=>{if(rec)try{r.start();}catch{}};
-    rr.current=r;r.start();setRec(true);
-  };
-  return <div><div style={{display:'flex',gap:8,alignItems:'center',marginBottom:8}}><Btn onClick={toggle} disabled={preparando} variant={rec?'danger':'primary'} style={{display:'flex',alignItems:'center',gap:6}}>{rec?<><span style={{width:10,height:10,borderRadius:'50%',background:'#fff',animation:'pulse 1s infinite'}}/>Detener</>:preparando?<>🔔 Suena el tono...</>:<>🎙️ Grabar</>}</Btn>{rec&&<span style={{fontSize:13,color:'var(--red)',fontWeight:600}}>● Escuchando...</span>}</div>{txt&&<Textarea value={txt} onChange={e=>{setTxt(e.target.value);onTranscript(e.target.value);}} style={{minHeight:100}}/>}</div>;
-}
-
 // ═══════════════════════════════════════
 // LOGIN SCREEN
 // ═══════════════════════════════════════
@@ -2974,8 +2937,7 @@ function PlanTab({data,setData,team,toast,session,refreshKey,abrirResultado,reco
 // ─── Feedback ───
 function FeedbackTab({data,setData,team,toast,session,refreshKey}){
   const esLider=session.role==='lider';
-  const[form,setForm]=useState({date:today(),vendedor:'',tipo:'Acompañamiento',hallazgos:'',fortalezas:'',areas_oportunidad:'',compromisos:'',fecha_revision:'',semaforo:'',grabado:false,transcript:'',notas:'',photo:null,fotos:[]});
-  const[consent,setConsent]=useState(false);
+  const[form,setForm]=useState({date:today(),vendedor:'',tipo:'Acompañamiento',hallazgos:'',compromisos:'',fecha_revision:'',semaforo:'',photo:null,fotos:[]});
   const esAcompanamiento=form.tipo==='Acompañamiento';
   const esEvidenciaExterna=form.tipo==='Evidencia de asignación externa';
 
@@ -2995,10 +2957,11 @@ function FeedbackTab({data,setData,team,toast,session,refreshKey}){
     if(esAcompanamiento&&!form.photo){alert('Agrega una foto (con sello) — es obligatoria para este tipo de hallazgo');return;}
     if(esEvidenciaExterna&&!form.fotos.length){alert('Agrega al menos una foto (persona en campo y conversación del avance) — es obligatoria para este tipo de hallazgo');return;}
     // El semáforo que se guarda es el vigente al momento de documentar, no uno elegido aquí.
-    const rec={id:uid(),type:'feedback',...form,semaforo:semaforoVigente,registradoPor:session.user.nombre,token:session.token,savedAt:new Date().toISOString()};
+    // Cada tipo usa solo su evidencia: la foto sellada de Observaciones o las varias sin sello
+    // de la asignación externa (por si cambiaron de tipo después de tomar una).
+    const rec={id:uid(),type:'feedback',...form,photo:esEvidenciaExterna?null:form.photo,fotos:esEvidenciaExterna?form.fotos:[],semaforo:semaforoVigente,registradoPor:session.user.nombre,token:session.token,savedAt:new Date().toISOString()};
     const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast,setData);toast('✅ Hallazgo guardado');
-    setForm({date:today(),vendedor:'',tipo:'Acompañamiento',hallazgos:'',fortalezas:'',areas_oportunidad:'',compromisos:'',fecha_revision:'',semaforo:'',grabado:false,transcript:'',notas:'',photo:null,fotos:[]});
-    setConsent(false);
+    setForm({date:today(),vendedor:'',tipo:'Acompañamiento',hallazgos:'',compromisos:'',fecha_revision:'',semaforo:'',photo:null,fotos:[]});
   };
   const selectedMember=form.vendedor?team.find(m=>m.nombre===form.vendedor):null;
   // El semáforo ya no se elige aquí: se lee el vigente (puesto desde Dashboard → Equipo) y se
@@ -3106,9 +3069,6 @@ function FeedbackTab({data,setData,team,toast,session,refreshKey}){
         <span style={{fontSize:13,color:'var(--dim)'}}>· se pone en Dashboard → Equipo</span>
       </div>
     </Card>
-    {esAcompanamiento&&<Card title="📷 Evidencia (obligatoria)">
-      <PhotoCaptureGeo photo={form.photo} onCapture={p=>setForm({...form,photo:p})} coachName={session.user.nombre} toast={toast} label="📷 Tomar foto (con sello)"/>
-    </Card>}
     {esEvidenciaExterna&&<Card title="📷 Evidencia (obligatoria)">
       <p style={{fontSize:13,color:'var(--dim)',marginBottom:8}}>Sube foto(s) de la persona en campo y de la conversación con el avance al momento (sin sello).</p>
       <PhotoCaptureMulti photos={form.fotos} onChange={fotos=>setForm({...form,fotos})} label="Agregar foto"/>
@@ -3116,29 +3076,15 @@ function FeedbackTab({data,setData,team,toast,session,refreshKey}){
     {!esEvidenciaExterna&&<>
       <Card title="Observaciones">
         <Field label="Observación"><Textarea value={form.hallazgos} onChange={e=>setForm({...form,hallazgos:e.target.value})} placeholder="Qué se observó..."/></Field>
-        <Field label="Fortalezas"><Textarea value={form.fortalezas} onChange={e=>setForm({...form,fortalezas:e.target.value})} style={{minHeight:50}}/></Field>
-        <Field label="Áreas de oportunidad"><Textarea value={form.areas_oportunidad} onChange={e=>setForm({...form,areas_oportunidad:e.target.value})} style={{minHeight:50}}/></Field>
+        <Field label={esAcompanamiento?'Foto con sello (obligatoria)':'Foto con sello (opcional)'}>
+          <PhotoCaptureGeo photo={form.photo} onCapture={p=>setForm({...form,photo:p})} coachName={session.user.nombre} toast={toast}/>
+        </Field>
       </Card>
       <Card title="Compromisos">
         <Field label="Qué + Quién + Cuándo"><Textarea value={form.compromisos} onChange={e=>setForm({...form,compromisos:e.target.value})}/></Field>
         <Field label="Fecha de revisión"><Input type="date" value={form.fecha_revision} onChange={e=>setForm({...form,fecha_revision:e.target.value})}/></Field>
       </Card>
-      <Card title="🎙️ Grabación de voz">
-        <p style={{fontSize:13,color:'var(--dim)',margin:'0 0 10px'}}>Transcribe lo que se hable a texto en tiempo real (no guarda audio). Requiere autorización previa.</p>
-        {!consent?<div style={{textAlign:'center',padding:12}}>
-          <p style={{fontSize:14,marginBottom:8,textAlign:'left'}}>Antes de grabar, pide a los participantes que:</p>
-          <ul style={{textAlign:'left',fontSize:14,margin:'0 0 12px',paddingLeft:18,color:'var(--text)'}}>
-            <li>Digan su <b>nombre y puesto</b> al iniciar.</li>
-            <li>Acepten en voz alta que se va a grabar este feedback.</li>
-            <li>Empiecen a hablar <b>después del tono</b>.</li>
-          </ul>
-          <p style={{fontSize:14,fontWeight:700,marginBottom:10}}>¿Autoriza la grabación?</p>
-          <div style={{display:'flex',gap:8,justifyContent:'center'}}><Btn onClick={()=>{setConsent(true);setForm({...form,grabado:true});}}>Sí</Btn><Btn variant="secondary" onClick={()=>toast('Sin autorización')}>No</Btn></div>
-        </div>:
-        <AudioRecorder onTranscript={t=>setForm({...form,transcript:t})}/>}
-      </Card>
     </>}
-    <Card title="Notas"><Textarea value={form.notas} onChange={e=>setForm({...form,notas:e.target.value})} style={{minHeight:50}}/></Card>
     {session.soloLectura?<AvisoSoloLectura nombre={session.user.nombre}/>:<Btn onClick={guardar} style={{width:'100%'}}>💾 Guardar hallazgo</Btn>}
   </div>;
 }
