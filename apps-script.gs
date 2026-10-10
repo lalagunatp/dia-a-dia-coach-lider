@@ -1241,8 +1241,34 @@ const SHEET_CONFIG = {
       'ID', 'Fecha', 'Integrante', 'Semáforo', 'Nota',
       'Registrado por', 'Timestamp'
     ]
+  },
+  // Cierre de los compromisos de un hallazgo: una fila por cada revisión. "Compromiso ID" es el ID
+  // del hallazgo (hoja FEEDBACK). Si trae "Nueva fecha", el compromiso sigue abierto hasta esa
+  // fecha (se reprogramó); si no, quedó cerrado con ese resultado.
+  SEGUIMIENTO: {
+    name: 'SEGUIMIENTO',
+    headers: [
+      'ID', 'Fecha', 'Compromiso ID', 'Integrante', 'Compromiso', 'Fecha compromiso',
+      'Resultado', 'Comentario', 'Nueva fecha', 'Avisado',
+      'Registrado por', 'Timestamp'
+    ]
   }
 };
+
+// Hoja de SHEET_CONFIG, creada con sus encabezados si todavía no existe (las pestañas nuevas
+// funcionan sin tener que volver a correr crearHojas a mano).
+function hojaDeConfig(ss, cfg) {
+  let sheet = ss.getSheetByName(cfg.name);
+  if (sheet) return sheet;
+  sheet = ss.insertSheet(cfg.name);
+  const headerRange = sheet.getRange(1, 1, 1, cfg.headers.length);
+  headerRange.setValues([cfg.headers]);
+  headerRange.setFontWeight('bold');
+  headerRange.setBackground('#1e40af');
+  headerRange.setFontColor('#ffffff');
+  sheet.setFrozenRows(1);
+  return sheet;
+}
 
 // ─── Crear hojas con encabezados (ejecutar una sola vez, o de nuevo tras
 //     este cambio para que aparezcan las columnas/pestañas nuevas) ───
@@ -1295,12 +1321,7 @@ function doPost(e) {
     data.rolRegistro = getRoleType(autor.posicion);
 
     const ss = getSpreadsheet();
-    const sheetName = SHEET_CONFIG[type.toUpperCase()].name;
-    const sheet = ss.getSheetByName(sheetName);
-
-    if (!sheet) {
-      return jsonResponse({ ok: false, error: 'Hoja no encontrada: ' + sheetName });
-    }
+    const sheet = hojaDeConfig(ss, SHEET_CONFIG[type.toUpperCase()]);
 
     // buildRow regresa { row, extra } — "extra" trae las ligas de Drive que hay que
     // devolver a la app para que reemplace la foto local.
@@ -1482,6 +1503,16 @@ function buildRow(type, d) {
       ] };
     }
 
+    case 'seguimiento': {
+      const RESULTADO = { cumplido: 'Cumplió', parcial: 'Parcial', no_cumplido: 'No cumplió' };
+      return { row: [
+        d.id, d.date, d.compromisoId || '', d.vendedor || '', d.compromiso || '', d.fechaCompromiso || '',
+        RESULTADO[d.resultado] || d.resultado || '', d.comentario || '', d.nuevaFecha || '',
+        d.avisado ? 'SÍ' : 'NO',
+        d.registradoPor || '', ts
+      ] };
+    }
+
     default:
       return { row: [d.id, type, JSON.stringify(d), ts] };
   }
@@ -1551,7 +1582,8 @@ function obtenerHistorial(params) {
 
     const ss = getSpreadsheet();
     const sheet = ss.getSheetByName(cfg.name);
-    if (!sheet) return { ok: false, error: 'Hoja no encontrada: ' + cfg.name };
+    // Una pestaña nueva (p.ej. SEGUIMIENTO) no existe hasta el primer registro: no es un error.
+    if (!sheet) return { ok: true, registros: [] };
 
     const lastRow = sheet.getLastRow();
     if (lastRow < 2) return { ok: true, registros: [] };

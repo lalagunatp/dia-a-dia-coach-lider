@@ -567,6 +567,10 @@ function recordDesdeFila(tipo,f){
     }
     case'semaforo':
       return{...base,vendedor:f['Integrante']||'',semaforo:f['Semáforo']||'',nota:f['Nota']||''};
+    case'seguimiento':
+      return{...base,compromisoId:String(f['Compromiso ID']||''),vendedor:f['Integrante']||'',compromiso:f['Compromiso']||'',
+        fechaCompromiso:f['Fecha compromiso']||'',resultado:RESULTADO_POR_LABEL[f['Resultado']]||'',
+        comentario:f['Comentario']||'',nuevaFecha:f['Nueva fecha']||'',avisado:String(f['Avisado']||'').toUpperCase().startsWith('S')};
     default:return null;
   }
 }
@@ -581,6 +585,73 @@ function construirSemaforoMap(records){
     .sort((a,b)=>String(a.savedAt||'').localeCompare(String(b.savedAt||'')))
     .forEach(r=>{map[r.vendedor]={valor:r.semaforo,fecha:r.date||'',porQuien:r.registradoPor||'',desde:r.type};});
   return map;
+}
+
+// ═══ COMPROMISOS: VENCIMIENTO Y CIERRE ═══
+// El compromiso vive dentro del hallazgo (texto + fecha de revisión) y se cierra con registros
+// 'seguimiento' (hoja SEGUIMIENTO), uno por cada revisión: resultado, comentario y, si se
+// reprograma, la nueva fecha. Manda la revisión más reciente: con nueva fecha el compromiso sigue
+// abierto hasta ese día; sin ella, quedó cerrado.
+const RESULTADOS_COMPROMISO={
+  cumplido:{emoji:'✅',label:'Cumplió',color:'var(--green)',fondo:'var(--gbg)'},
+  parcial:{emoji:'🟡',label:'Parcial',color:'var(--yellow)',fondo:'var(--ybg)'},
+  no_cumplido:{emoji:'❌',label:'No cumplió',color:'var(--red)',fondo:'var(--rbg)'},
+};
+const RESULTADO_POR_LABEL={Cumplió:'cumplido',Parcial:'parcial','No cumplió':'no_cumplido'};
+const esYmd=s=>/^\d{4}-\d{2}-\d{2}$/.test(String(s||''));
+// Días de `desde` a `hasta` (yyyy-mm-dd), en fechas locales: positivo si `hasta` es después.
+const diasEntre=(desde,hasta)=>Math.round((new Date(hasta+'T00:00:00')-new Date(desde+'T00:00:00'))/864e5);
+const sumarDias=(ymd,n)=>{const d=new Date(ymd+'T00:00:00');d.setDate(d.getDate()+n);return ymdLocal(d);};
+// "vencido hace 3 días" / "vence hoy" / "vence mañana" / "vence en 2 días"
+function textoVencimiento(dias){
+  if(dias>0)return `vencido hace ${dias} día${dias!==1?'s':''}`;
+  if(dias===0)return'vence hoy';
+  if(dias===-1)return'vence mañana';
+  return `vence en ${-dias} días`;
+}
+// Lo del teléfono y lo del Sheet sin repetir (mismo ID en los dos lados; gana el del teléfono).
+function unirPorId(locales,delSheet){
+  const porId=new Map();
+  (delSheet||[]).forEach(r=>porId.set(r.id,r));
+  (locales||[]).forEach(r=>porId.set(r.id,r));
+  return[...porId.values()];
+}
+// Un renglón por hallazgo con compromiso y fecha de revisión: { r, segs, ult, abierto, vence,
+// dias (hoy − vence: >0 vencido), revisadoATiempo }. "A tiempo" = la primera revisión se registró a
+// más tardar el día siguiente a la fecha comprometida.
+function estadoCompromisos(feedbacks,seguimientos,hoy){
+  const segPor={};
+  (seguimientos||[]).forEach(s=>{if(s.compromisoId)(segPor[s.compromisoId]=segPor[s.compromisoId]||[]).push(s);});
+  return(feedbacks||[])
+    .filter(r=>r.type==='feedback'&&String(r.compromisos||'').trim()&&esYmd(r.fecha_revision))
+    .map(r=>{
+      const segs=(segPor[r.id]||[]).slice().sort((a,b)=>String(a.savedAt||'').localeCompare(String(b.savedAt||'')));
+      const ult=segs[segs.length-1]||null;
+      const abierto=!ult||esYmd(ult.nuevaFecha);
+      const vence=ult&&esYmd(ult.nuevaFecha)?ult.nuevaFecha:r.fecha_revision;
+      const primera=segs[0];
+      const revisadoATiempo=!!primera&&esYmd(primera.date)&&diasEntre(r.fecha_revision,primera.date)<=1;
+      return{r,segs,ult,abierto,vence,dias:diasEntre(vence,hoy),revisadoATiempo};
+    });
+}
+// % de compromisos revisados a tiempo entre los que vencieron en los últimos `ventana` días.
+function cumplimientoRevision(items,hoy,ventana=30){
+  const vencidos=items.filter(c=>{const d=diasEntre(c.r.fecha_revision,hoy);return d>=1&&d<=ventana;});
+  if(!vencidos.length)return null;
+  const ok=vencidos.filter(c=>c.revisadoATiempo).length;
+  return{ok,total:vencidos.length,pct:Math.round(ok/vencidos.length*100)};
+}
+// Mensaje para el vendedor con el resultado de la revisión (se manda por WhatsApp; el coach elige el contacto).
+function textoAvisoCompromiso({compromiso,fechaCompromiso,resultado,comentario,nuevaFecha,autor}){
+  const res=RESULTADOS_COMPROMISO[resultado];
+  const cierre={cumplido:'¡Buen trabajo, sigue así! 💪',parcial:'Vamos bien, hay que completarlo.',no_cumplido:'Lo retomamos juntos para sacarlo adelante.'}[resultado]||'';
+  const l=['Hola 👋',`Revisamos tu compromiso${esYmd(fechaCompromiso)?` del ${fmt(fechaCompromiso)}`:''}:`,`"${String(compromiso||'').trim()}"`,'',
+    `Resultado: ${res?`${res.emoji} ${res.label}`:''}`];
+  if(comentario&&comentario.trim())l.push(`Comentario: ${comentario.trim()}`);
+  if(esYmd(nuevaFecha))l.push(`📅 Nueva fecha de revisión: ${fmt(nuevaFecha)}`);
+  if(cierre)l.push('',cierre);
+  if(autor)l.push(`— ${nombreCorto(autor)}`);
+  return l.join('\n');
 }
 // Los registros que capturó ESA persona (los suyos, no los de su equipo), de todas las hojas o
 // solo de las de `tipos` (p.ej. ['plan','plan_resultado']).
@@ -3153,8 +3224,98 @@ function TrabajoCampo({campo,onChange}){
   </Card>;
 }
 
+// ─── Compromisos: renglón y revisión ───
+// Un compromiso en una línea: quién, cuándo vence (en color) y qué se comprometió.
+function RenglonCompromiso({c,onRevisar,mostrarAutor}){
+  const color=c.dias>0?'var(--red)':c.dias===0?'var(--yellow)':'var(--dim)';
+  const prev=c.ult&&RESULTADOS_COMPROMISO[c.ult.resultado];
+  const txt=String(c.r.compromisos||'');
+  return <div style={{display:'flex',gap:10,alignItems:'center',padding:'8px 0',borderBottom:'1px solid var(--border)'}}>
+    <span style={{width:10,height:10,borderRadius:'50%',background:color,flexShrink:0}}/>
+    <div style={{flex:1,minWidth:0,fontSize:13}}>
+      <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap'}}>
+        <b>{nombreCorto(c.r.vendedor)}</b>
+        <span style={{color,fontWeight:700}}>{textoVencimiento(c.dias)}</span>
+      </div>
+      <p style={{color:'var(--dim)',margin:'2px 0 0',overflowWrap:'anywhere'}}>{txt.slice(0,120)}{txt.length>120?'…':''}</p>
+      {(prev||mostrarAutor)&&<p style={{color:'var(--dim)',margin:'2px 0 0',fontSize:12}}>
+        {prev&&<>↻ Reprogramado · antes {prev.emoji} {prev.label}</>}
+        {prev&&mostrarAutor&&' · '}
+        {mostrarAutor&&<>Hallazgo del {fmt(c.r.date)}</>}
+      </p>}
+    </div>
+    {onRevisar&&<Btn onClick={()=>onRevisar(c)} variant={c.dias>=0?'primary':'secondary'} style={{padding:'8px 12px',fontSize:13,flexShrink:0}}>Revisar</Btn>}
+  </div>;
+}
+// Hoja que sube desde abajo para cerrar un compromiso: resultado en un toque, comentario opcional,
+// reprogramar si no se cumplió del todo, y avisarle al vendedor por WhatsApp con el mensaje armado.
+function RevisarCompromiso({c,session,onGuardar,onCerrar}){
+  const[resultado,setResultado]=useState('');
+  const[comentario,setComentario]=useState('');
+  const[reprogramar,setReprogramar]=useState(false);
+  const[nuevaFecha,setNuevaFecha]=useState(()=>sumarDias(today(),7));
+  const puedeReprogramar=resultado==='parcial'||resultado==='no_cumplido';
+  const conFecha=puedeReprogramar&&reprogramar&&esYmd(nuevaFecha);
+  const guardar=avisar=>{
+    if(!resultado){alert('Elige cómo le fue: Cumplió, Parcial o No cumplió');return;}
+    if(puedeReprogramar&&reprogramar&&(!esYmd(nuevaFecha)||nuevaFecha<=today())){alert('La nueva fecha de revisión tiene que ser después de hoy');return;}
+    const rev={resultado,comentario:comentario.trim(),nuevaFecha:conFecha?nuevaFecha:''};
+    // WhatsApp se abre aquí, dentro del toque, para que el teléfono no lo bloquee como ventana emergente.
+    if(avisar)window.open(whatsappUrl(textoAvisoCompromiso({compromiso:c.r.compromisos,fechaCompromiso:c.r.date,...rev,autor:session.user.nombre})),'_blank','noopener');
+    onGuardar({...rev,avisado:avisar});
+  };
+  return <div onClick={onCerrar} style={{position:'fixed',inset:0,background:'rgba(0,0,0,.5)',zIndex:9998,display:'flex',alignItems:'flex-end',justifyContent:'center'}}>
+    <div onClick={e=>e.stopPropagation()} style={{background:'var(--card)',width:'100%',maxWidth:600,borderRadius:'16px 16px 0 0',padding:18,maxHeight:'90vh',overflowY:'auto',boxSizing:'border-box'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:8}}>
+        <div>
+          <h3 style={{margin:0,fontSize:16,fontWeight:800}}>Revisar compromiso</h3>
+          <p style={{margin:'2px 0 0',fontSize:13,color:'var(--dim)'}}>{c.r.vendedor} · {textoVencimiento(c.dias)}</p>
+        </div>
+        <button onClick={onCerrar} style={{background:'none',border:'none',fontSize:18,color:'var(--dim)',cursor:'pointer'}} aria-label="Cerrar">✕</button>
+      </div>
+      <div style={{margin:'12px 0',padding:10,borderRadius:8,background:'var(--bg)',borderLeft:'3px solid var(--accent)',fontSize:14}}>
+        <div style={{fontSize:12,color:'var(--dim)',fontWeight:700,marginBottom:2}}>COMPROMISO DEL {fmt(c.r.date)} · REVISIÓN {fmt(c.vence)}</div>
+        <div style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}}>{c.r.compromisos}</div>
+        {c.segs.length>0&&<div style={{marginTop:6,fontSize:12,color:'var(--dim)'}}>
+          {c.segs.map(s=>{const x=RESULTADOS_COMPROMISO[s.resultado];return <div key={s.id}>↻ {fmt(s.date)}: {x?`${x.emoji} ${x.label}`:''}{s.comentario?` — ${s.comentario}`:''}</div>;})}
+        </div>}
+      </div>
+      <div style={{fontSize:13,fontWeight:700,color:'var(--dim)',marginBottom:6}}>¿CÓMO LE FUE?</div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:12}}>
+        {Object.entries(RESULTADOS_COMPROMISO).map(([k,x])=>{const sel=resultado===k;
+          return <button key={k} onClick={()=>setResultado(k)} aria-pressed={sel}
+            style={{padding:'12px 4px',borderRadius:10,cursor:'pointer',fontSize:14,fontWeight:700,
+              border:`2px solid ${sel?x.color:'var(--border)'}`,background:sel?x.fondo:'var(--card)',color:sel?x.color:'var(--text)'}}>
+            <div style={{fontSize:22}}>{x.emoji}</div>{x.label}
+          </button>;})}
+      </div>
+      <Field label="Comentario (opcional)"><Textarea value={comentario} onChange={e=>setComentario(e.target.value)} placeholder="Qué se logró, qué faltó, siguiente paso…" style={{minHeight:60}}/></Field>
+      {puedeReprogramar&&<div style={{marginBottom:12}}>
+        <label style={{display:'flex',alignItems:'center',gap:8,fontSize:14,fontWeight:600,cursor:'pointer'}}>
+          <input type="checkbox" checked={reprogramar} onChange={e=>setReprogramar(e.target.checked)} style={{width:18,height:18}}/>
+          ↻ Reprogramar: darle otra fecha de revisión
+        </label>
+        {reprogramar&&<div style={{marginTop:8}}><Input type="date" value={nuevaFecha} min={sumarDias(today(),1)} onChange={e=>setNuevaFecha(e.target.value)}/></div>}
+      </div>}
+      <Btn onClick={()=>guardar(true)} variant="success" style={{width:'100%',marginBottom:8}}>📲 Guardar y avisar por WhatsApp</Btn>
+      <Btn onClick={()=>guardar(false)} variant="secondary" style={{width:'100%'}}>Solo guardar</Btn>
+      <p style={{fontSize:12,color:'var(--dim)',margin:'8px 0 0',textAlign:'center'}}>WhatsApp se abre con el mensaje listo; elige ahí a {nombreCorto(c.r.vendedor)}.</p>
+    </div>
+  </div>;
+}
+// Guarda la revisión como registro 'seguimiento' (local + Sheet), igual que el resto de capturas.
+function registrarRevision({data,setData,session,toast,c,rev}){
+  if(session.soloLectura)return;
+  const rec={id:uid(),type:'seguimiento',date:today(),compromisoId:c.r.id,vendedor:c.r.vendedor,compromiso:c.r.compromisos,
+    fechaCompromiso:c.vence,...rev,registradoPor:session.user.nombre,token:session.token,savedAt:new Date().toISOString()};
+  const upd={...data,records:[...data.records,rec]};
+  setData(upd);saveAndSync(upd,rec,toast,setData);
+  const x=RESULTADOS_COMPROMISO[rev.resultado];
+  toast(`${x?.emoji||'✅'} Compromiso de ${nombreCorto(c.r.vendedor)} ${rev.nuevaFecha?`reprogramado al ${fmt(rev.nuevaFecha)}`:'cerrado'}`);
+}
+
 // ─── Feedback ───
-function FeedbackTab({data,setData,team,toast,session,refreshKey}){
+function FeedbackTab({data,setData,team,toast,session,refreshKey,compromisos=[]}){
   const esLider=session.role==='lider';
   const[form,setForm]=useState({date:today(),vendedor:'',tipo:TIPO_CAMPO,hallazgos:'',compromisos:'',fecha_revision:'',semaforo:'',photo:null,fotos:[],campo:campoVacio()});
   const esAcompanamiento=form.tipo===TIPO_CAMPO;
@@ -3184,6 +3345,8 @@ function FeedbackTab({data,setData,team,toast,session,refreshKey}){
       if(k>=0){alert(`Casa ${k+1}: indica si tiene apps de streaming y, si tiene, cuáles`);return;}
     }
     if(esAcompanamiento&&!form.photo){alert('Agrega una foto (con sello) — es obligatoria para este tipo de hallazgo');return;}
+    // Sin fecha de revisión el compromiso nunca vence ni se le da seguimiento.
+    if(!esEvidenciaExterna&&form.compromisos.trim()&&!form.fecha_revision){alert('Pon la fecha de revisión del compromiso — ese día te aparece en el Dashboard para darle seguimiento');return;}
     if(esEvidenciaExterna&&!form.fotos.length){alert('Agrega al menos una foto (persona en campo y conversación del avance) — es obligatoria para este tipo de hallazgo');return;}
     // El semáforo que se guarda es el vigente al momento de documentar, no uno elegido aquí.
     // Cada tipo usa solo su evidencia: la foto sellada de Observaciones o las varias sin sello
@@ -3199,7 +3362,12 @@ function FeedbackTab({data,setData,team,toast,session,refreshKey}){
   // Líder: el hallazgo/feedback lo documenta sobre coaches, no directamente sobre vendedores
   // (eso le toca a cada coach) — la lista de integrantes se limita a sus coaches.
   const integrantesDisponibles=esLider?team.filter(m=>isCoach(m.posicion)):team;
+  // Al documentar a alguien, lo primero es cerrar lo que quedó pendiente con esa persona.
+  const[revisando,setRevisando]=useState(null);
+  const pendientesIntegrante=form.vendedor?compromisos.filter(c=>c.abierto&&c.r.vendedor===form.vendedor&&c.r.registradoPor===session.user.nombre).sort((a,b)=>b.dias-a.dias):[];
   return <div>
+    {revisando&&<RevisarCompromiso c={revisando} session={session} onCerrar={()=>setRevisando(null)}
+      onGuardar={rev=>{registrarRevision({data,setData,session,toast,c:revisando,rev});setRevisando(null);}}/>}
     {esLider&&<Card title="💬 Hallazgos y feedback por coach — hoy">
       {cargandoFeedbackEquipo?<div style={{textAlign:'center',padding:20}}><Spinner/></div>:
       (session.coaches||[]).length===0?<p style={{color:'var(--dim)',fontSize:15}}>Sin coaches asignados.</p>:
@@ -3286,6 +3454,10 @@ function FeedbackTab({data,setData,team,toast,session,refreshKey}){
           })()}
         </div>
       }
+      {pendientesIntegrante.length>0&&<div style={{background:'var(--ybg)',border:'1.5px solid var(--yellow)',borderRadius:10,padding:'10px 12px',marginBottom:12}}>
+        <div style={{fontSize:13,fontWeight:700,color:'var(--yellow)'}}>📌 La vez pasada quedaron en… ¿cómo le fue?</div>
+        {pendientesIntegrante.map(c=><RenglonCompromiso key={c.r.id} c={c} onRevisar={session.soloLectura?null:setRevisando}/>)}
+      </div>}
       {/* Solo informativo: el semáforo se pone en Dashboard → Equipo, que es donde se ve el
           rendimiento contra la meta. Aquí se muestra el vigente y se guarda con el hallazgo como
           foto del momento, para saber en qué estaba la persona cuando se documentó. */}
@@ -3313,7 +3485,8 @@ function FeedbackTab({data,setData,team,toast,session,refreshKey}){
       </Card>
       <Card title="Compromisos">
         <Field label="Qué + Quién + Cuándo"><Textarea value={form.compromisos} onChange={e=>setForm({...form,compromisos:e.target.value})}/></Field>
-        <Field label="Fecha de revisión"><Input type="date" value={form.fecha_revision} onChange={e=>setForm({...form,fecha_revision:e.target.value})}/></Field>
+        <Field label={form.compromisos.trim()?'Fecha de revisión (obligatoria)':'Fecha de revisión'}><Input type="date" value={form.fecha_revision} onChange={e=>setForm({...form,fecha_revision:e.target.value})}/></Field>
+        {form.compromisos.trim()&&<p style={{fontSize:12,color:'var(--dim)',margin:'-6px 0 0'}}>Ese día te aparece en el Dashboard para revisarlo y avisarle el resultado.</p>}
       </Card>
     </>}
     {session.soloLectura?<AvisoSoloLectura nombre={session.user.nombre}/>:<Btn onClick={guardar} style={{width:'100%'}}>💾 Guardar hallazgo</Btn>}
@@ -3363,7 +3536,75 @@ function AvancePlan({real,plan}){
     <div style={{fontSize:11,color:'var(--dim)',fontWeight:600}}>del plan ({plan})</div>
   </div>;
 }
-function DashboardTab({data,setData,team,coaches,session,setTab,toast,recordsPlan=data.records}){
+// Compromisos propios por revisar: los vencidos arriba (del más atrasado al más reciente), luego los
+// de hoy; los de los próximos 3 días van plegados para llegar preparado. Cada uno se cierra con
+// "Revisar" (ver RevisarCompromiso) y en ese momento sale del panel.
+function PanelCompromisos({items,session,data,setData,toast,puedeRevisar}){
+  const[revisando,setRevisando]=useState(null);
+  const[verProximos,setVerProximos]=useState(false);
+  const[verTodos,setVerTodos]=useState(false);
+  const hoy=today();
+  const abiertos=items.filter(c=>c.abierto);
+  const porRevisar=abiertos.filter(c=>c.dias>=0).sort((a,b)=>b.dias-a.dias);
+  const proximos=abiertos.filter(c=>c.dias<0&&c.dias>=-3).sort((a,b)=>b.dias-a.dias);
+  const vencidos=porRevisar.filter(c=>c.dias>0).length,deHoy=porRevisar.length-vencidos;
+  const revisadosSemana=items.reduce((n,c)=>n+c.segs.filter(s=>esYmd(s.date)&&diasEntre(s.date,hoy)<7).length,0);
+  const cumplimiento=cumplimientoRevision(items,hoy);
+  if(!porRevisar.length&&!proximos.length&&!revisadosSemana)return null;
+  const visibles=verTodos?porRevisar:porRevisar.slice(0,6);
+  const partes=[vencidos&&`${vencidos} vencido${vencidos!==1?'s':''}`,deHoy&&`${deHoy} hoy`].filter(Boolean);
+  return <Card title={`⏰ Compromisos por revisar${partes.length?` (${partes.join(' · ')})`:''}`}
+    style={{borderLeft:`4px solid ${vencidos?'var(--red)':deHoy?'var(--yellow)':'var(--green)'}`}}>
+    {revisando&&<RevisarCompromiso c={revisando} session={session} onCerrar={()=>setRevisando(null)}
+      onGuardar={rev=>{registrarRevision({data,setData,session,toast,c:revisando,rev});setRevisando(null);}}/>}
+    {porRevisar.length===0&&<p style={{fontSize:14,color:'var(--green)',fontWeight:600,margin:'0 0 6px'}}>✅ Estás al día: no hay compromisos vencidos.</p>}
+    {visibles.map(c=><RenglonCompromiso key={c.r.id} c={c} onRevisar={puedeRevisar?setRevisando:null}/>)}
+    {porRevisar.length>6&&<Btn variant="ghost" onClick={()=>setVerTodos(v=>!v)} style={{fontSize:13,marginTop:4}}>{verTodos?'Ver menos':`Ver los ${porRevisar.length}`}</Btn>}
+    {proximos.length>0&&<div style={{marginTop:6}}>
+      <button onClick={()=>setVerProximos(v=>!v)} style={{background:'none',border:'none',padding:'6px 0',cursor:'pointer',fontSize:13,fontWeight:700,color:'var(--dim)'}}>
+        {verProximos?'▾':'▸'} Próximos 3 días ({proximos.length})
+      </button>
+      {verProximos&&proximos.map(c=><RenglonCompromiso key={c.r.id} c={c} onRevisar={puedeRevisar?setRevisando:null}/>)}
+    </div>}
+    {(revisadosSemana>0||cumplimiento)&&<p style={{fontSize:12,color:'var(--dim)',margin:'8px 0 0'}}>
+      {revisadosSemana>0&&`✅ ${revisadosSemana} revisado${revisadosSemana!==1?'s':''} en los últimos 7 días`}
+      {revisadosSemana>0&&cumplimiento&&' · '}
+      {cumplimiento&&<>Revisados a tiempo (30 días): <b style={{color:colorAvance(cumplimiento.pct)}}>{cumplimiento.pct}%</b> ({cumplimiento.ok}/{cumplimiento.total})</>}
+    </p>}
+  </Card>;
+}
+// Líder/Director: cómo va cada persona de su equipo cerrando sus compromisos — vencidos sin revisar
+// y % revisados a tiempo (a más tardar un día después de la fecha). Solo consulta.
+function PanelCompromisosEquipo({items,session}){
+  const[abierto,setAbierto]=useState(false);
+  const[persona,setPersona]=useState(null);
+  const hoy=today();
+  const porAutor={};
+  items.filter(c=>c.r.registradoPor&&c.r.registradoPor!==session.user.nombre)
+    .forEach(c=>{(porAutor[c.r.registradoPor]=porAutor[c.r.registradoPor]||[]).push(c);});
+  const filas=Object.entries(porAutor).map(([autor,lista])=>({autor,
+    vencidos:lista.filter(c=>c.abierto&&c.dias>0).sort((a,b)=>b.dias-a.dias),
+    cumplimiento:cumplimientoRevision(lista,hoy)}))
+    .filter(f=>f.vencidos.length||f.cumplimiento)
+    .sort((a,b)=>b.vencidos.length-a.vencidos.length||(a.cumplimiento?.pct??101)-(b.cumplimiento?.pct??101));
+  if(!filas.length)return null;
+  const totalVencidos=filas.reduce((n,f)=>n+f.vencidos.length,0);
+  return <PanelAcordeon title={`📋 Compromisos del equipo${totalVencidos?` (${totalVencidos} vencido${totalVencidos!==1?'s':''} sin revisar)`:''}`} abierto={abierto} onToggle={()=>setAbierto(v=>!v)}>
+    {filas.map(f=>{const sel=persona===f.autor;
+      return <div key={f.autor} style={{borderBottom:'1px solid var(--border)'}}>
+        <div onClick={()=>setPersona(sel?null:f.autor)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,padding:'8px 0',cursor:f.vencidos.length?'pointer':'default',fontSize:14}}>
+          <span style={{fontWeight:600}}>{f.vencidos.length?(sel?'▾ ':'▸ '):''}{nombreCorto(f.autor)}</span>
+          <span style={{display:'flex',gap:10,alignItems:'center',fontSize:13}}>
+            <span style={{fontWeight:700,color:f.vencidos.length?'var(--red)':'var(--green)'}}>{f.vencidos.length?`🔴 ${f.vencidos.length} vencido${f.vencidos.length!==1?'s':''}`:'✅ al día'}</span>
+            {f.cumplimiento&&<span style={{fontWeight:700,color:colorAvance(f.cumplimiento.pct)}} title="Revisados a tiempo, últimos 30 días">{f.cumplimiento.pct}% a tiempo</span>}
+          </span>
+        </div>
+        {sel&&<div style={{paddingLeft:10,marginBottom:6}}>{f.vencidos.map(c=><RenglonCompromiso key={c.r.id} c={c} mostrarAutor/>)}</div>}
+      </div>;})}
+    <p style={{fontSize:12,color:'var(--dim)',margin:'8px 0 0'}}>"A tiempo" = revisado a más tardar un día después de la fecha comprometida, de los que vencieron en los últimos 30 días.</p>
+  </PanelAcordeon>;
+}
+function DashboardTab({data,setData,team,coaches,session,setTab,toast,recordsPlan=data.records,compromisos=[]}){
   const{role}=session;
   const now=new Date();
   const mesActual=now.getMonth();const anioActual=now.getFullYear();
@@ -3713,7 +3954,8 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast,recordsPla
     toast(`${SEM_EMOJI[valor]} ${nombreCorto(nombre)} en ${STATUS[valor].label.toLowerCase()}`);
   };
   const hoy=today();
-  const compPendientes=recs.filter(r=>r.type==='feedback'&&r.compromisos&&r.fecha_revision&&r.fecha_revision<=hoy);
+  // Los compromisos que documentó esta persona (los de su equipo van en PanelCompromisosEquipo).
+  const compromisosPropios=compromisos.filter(c=>c.r.registradoPor===session.user.nombre);
 
   const Gauge=({value,goal,label,icon})=>{
     const pct=goal>0?Math.min(100,Math.round(value/goal*100)):0;
@@ -4443,14 +4685,8 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast,recordsPla
           }
       </div>
       <div style={{order:14}}>
-          {compPendientes.length>0&&
-            <Card title={`⏰ Compromisos por revisar (${compPendientes.length})`} style={{borderLeft:'4px solid var(--yellow)'}}>
-              {compPendientes.slice(0,5).map(r=><div key={r.id} style={{fontSize:13,padding:'6px 0',borderBottom:'1px solid var(--border)'}}>
-                <div style={{display:'flex',justifyContent:'space-between'}}><b>{r.vendedor}</b><span style={{color:'var(--dim)'}}>{fmt(r.fecha_revision)}</span></div>
-                <p style={{color:'var(--dim)',margin:'2px 0 0'}}>{r.compromisos?.slice(0,100)}{r.compromisos?.length>100?'...':''}</p>
-              </div>)}
-            </Card>
-          }
+          <PanelCompromisos items={compromisosPropios} session={session} data={data} setData={setData} toast={toast} puedeRevisar={!session.soloLectura&&!soloConsulta}/>
+          {esLider&&<PanelCompromisosEquipo items={compromisos} session={session}/>}
       </div>
       {!soloConsulta&&<div style={{order:15}}>
           <Card title="⚡ Acciones rápidas">
@@ -4972,6 +5208,16 @@ function FichaRegistro({ev,resaltar,enfoque,onVerFoto,imprimir,conEncabezado,rol
         {texto('Áreas de oportunidad',r.areas_oportunidad)}
         {texto('Compromisos',r.compromisos)}
         {r.fecha_revision&&<Seccion titulo="Fecha de revisión"><div style={HS.texto}>📅 {fechaLarga(r.fecha_revision)}</div></Seccion>}
+        {r.compromisos&&r.fecha_revision&&<Seccion titulo="Seguimiento del compromiso">
+          {(r.seguimientos||[]).length===0
+            ?<div style={{...HS.texto,color:'var(--dim)'}}>⏳ Sin revisar todavía</div>
+            :r.seguimientos.map(s=>{const x=RESULTADOS_COMPROMISO[s.resultado];
+              return <div key={s.id} style={{...HS.texto,marginBottom:4}}>
+                {x?<b style={{color:x.color}}>{x.emoji} {x.label}</b>:null} · {fmt(s.date)}{s.avisado?' · 📲 avisado':''}
+                {s.comentario&&<div>{s.comentario}</div>}
+                {esYmd(s.nuevaFecha)&&<div style={{color:'var(--dim)'}}>↻ Reprogramado al {fmt(s.nuevaFecha)}</div>}
+              </div>;})}
+        </Seccion>}
         {texto('Notas',r.notas)}
         {r.transcript&&<Transcripcion texto={r.transcript} imprimir={imprimir}/>}
         {fotos.length>0&&<Seccion titulo="Evidencia"><div style={{display:'flex',flexWrap:'wrap',gap:6}}>
@@ -5200,7 +5446,7 @@ function InformeImprimible({nombreArchivo,alcance,periodo,filtros,generadoPor,re
     document.body);
 }
 
-function HistorialTab({data,session,refreshKey}){
+function HistorialTab({data,session,refreshKey,seguimientos=[]}){
   const[periodo,setPeriodo]=useState('semana');
   const[offset,setOffset]=useState(0);
   const[rango,setRango]=useState({desde:'',hasta:''});
@@ -5257,8 +5503,13 @@ function HistorialTab({data,session,refreshKey}){
     const porId=new Map();
     sheet.registros.forEach(r=>porId.set(r.id,r));
     (data.records||[]).filter(r=>!r.registradoPor||permitidos.has(r.registradoPor)).forEach(r=>porId.set(r.id,r));
-    return[...porId.values()].map(r=>normalizarEvento(r,pendientes)).filter(Boolean);
-  },[data.records,sheet.registros]);
+    // Cada hallazgo lleva sus revisiones del compromiso, para verlas en su ficha.
+    const segPor={};
+    seguimientos.forEach(s=>{(segPor[s.compromisoId]=segPor[s.compromisoId]||[]).push(s);});
+    return[...porId.values()]
+      .map(r=>r.type==='feedback'&&segPor[r.id]?{...r,seguimientos:segPor[r.id].slice().sort((a,b)=>String(a.savedAt||'').localeCompare(String(b.savedAt||'')))}:r)
+      .map(r=>normalizarEvento(r,pendientes)).filter(Boolean);
+  },[data.records,sheet.registros,seguimientos]);
 
   const opcionesPersona=useMemo(()=>{
     const autores=new Set([user.nombre,...nombresCoach,...nombresLider,...eventos.map(e=>e.autor)].filter(Boolean));
@@ -5448,12 +5699,19 @@ function reporteDetalleHTML(r){
     case'feedback':
       return `<p><b>${escapeHtml(r.vendedor)}</b> — ${escapeHtml(r.tipo)}${r.semaforo?` (${escapeHtml(STATUS[r.semaforo]?.label||'')})`:''}</p>`+
         (r.hallazgos?`<p>${escapeHtml(r.hallazgos)}</p>`:'')+(r.compromisos?`<p><b>Compromisos:</b> ${escapeHtml(r.compromisos)}</p>`:'');
+    case'seguimiento':{
+      const x=RESULTADOS_COMPROMISO[r.resultado];
+      return `<p><b>${escapeHtml(r.vendedor)}</b> — ${x?`${x.emoji} ${escapeHtml(x.label)}`:''}${r.avisado?' · 📲 avisado':''}</p>`+
+        (r.compromiso?`<p><b>Compromiso:</b> ${escapeHtml(r.compromiso)}</p>`:'')+
+        (r.comentario?`<p><b>Comentario:</b> ${escapeHtml(r.comentario)}</p>`:'')+
+        (esYmd(r.nuevaFecha)?`<p>↻ Reprogramado al ${escapeHtml(fmt(r.nuevaFecha))}</p>`:'');
+    }
     default:
       return'';
   }
 }
 function reporteRecordHTML(r){
-  const t=REPORTE_TIPOS[r.type]||{icon:'•',label:r.type,color:'#6b7086'};
+  const t=REPORTE_TIPOS[r.type]||(r.type==='seguimiento'?{icon:'🔁',label:'Seguimiento de compromiso',color:'#16a34a'}:{icon:'•',label:r.type,color:'#6b7086'});
   return `<div style="border-left:4px solid ${t.color};background:#fff;border-radius:10px;padding:14px 16px;margin-bottom:10px;box-shadow:0 1px 3px rgba(0,0,0,.06)">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
       <span style="font-weight:700;font-size:13px">${t.icon} ${t.label}</span>
@@ -5577,6 +5835,26 @@ function MainApp({session:sesionRecibida,setSession,onLogout,sessionBase,vistas,
   const[planesSheet,setPlanesSheet]=useState(null); // null = todavía no llegan
   const recordsPlan=useMemo(()=>enVista?data.records:juntarPlanesDelSheet(data.records,planesSheet),[enVista,data.records,planesSheet]);
   const planesListos=enVista?registrosVista!==null:planesSheet!==null;
+  // Compromisos: hallazgos y revisiones del Sheet (propios y, para líder/director, los de su
+  // equipo) más lo de este teléfono — para que vencer, revisar y medir no dependa de en qué
+  // teléfono se capturó. Gestor/Auditor reciben todo el distrito y solo lo consultan.
+  const[compromisosSheet,setCompromisosSheet]=useState({feedback:[],seguimiento:[]});
+  // Al cambiar de vista no se arrastran los compromisos de la persona anterior.
+  useEffect(()=>{setCompromisosSheet({feedback:[],seguimiento:[]});},[session.verComo]);
+  useEffect(()=>{
+    let cancelado=false;
+    Promise.all(['FEEDBACK','SEGUIMIENTO'].map(h=>fetchHistorialHoja(h,session.token,session.verComo)))
+      .then(([fb,sg])=>{
+        if(cancelado)return;
+        setCompromisosSheet(prev=>({
+          // Si una lectura falla se conserva la anterior en vez de vaciar el panel.
+          feedback:fb.ok?fb.registros.map(f=>recordDesdeFila('feedback',f)).filter(Boolean):prev.feedback,
+          seguimiento:sg.ok?sg.registros.map(f=>recordDesdeFila('seguimiento',f)).filter(Boolean):prev.seguimiento}));
+      });
+    return()=>{cancelado=true;};
+  },[session.verComo,refreshKey]);
+  const seguimientos=useMemo(()=>unirPorId(data.records.filter(r=>r.type==='seguimiento'),compromisosSheet.seguimiento),[data.records,compromisosSheet]);
+  const compromisos=useMemo(()=>estadoCompromisos(unirPorId(data.records.filter(r=>r.type==='feedback'),compromisosSheet.feedback),seguimientos,today()),[data.records,compromisosSheet,seguimientos]);
   const allTeam=[...(coaches||[]),...team];
   // Líder y Director supervisan a través de coaches (el director, los de todos sus líderes).
   const supervisaCoaches=role==='lider'||role==='director'||esRolConsulta(role);
@@ -5813,13 +6091,13 @@ function MainApp({session:sesionRecibida,setSession,onLogout,sessionBase,vistas,
         <div key={session.verComo||'propia'} ref={contenidoRef} className="app-contenido"><div className={anchoContenido}>
           {tab==='dashboard'&&estadoResultado.pendiente&&<RenglonResultadoPendiente plan={estadoResultado.pendiente}
             aDestiempo={estadoResultado.ventana.aDestiempo} onClick={()=>irATab('plan',{abrirResultado:true})}/>}
-          {tab==='dashboard'&&<DashboardTab data={data} setData={setData} team={allTeam} coaches={coaches} session={session} setTab={irATab} toast={toast} recordsPlan={recordsPlan}/>}
+          {tab==='dashboard'&&<DashboardTab data={data} setData={setData} team={allTeam} coaches={coaches} session={session} setTab={irATab} toast={toast} recordsPlan={recordsPlan} compromisos={compromisos}/>}
           {tab==='arranque'&&<ArranqueTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
           {tab==='permisos'&&<PermisosTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
           {tab==='cierre'&&<CierreTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
           {tab==='plan'&&<PlanTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey} abrirResultado={abrirResultado} recordsPlan={recordsPlan} planesListos={planesListos}/>}
-          {tab==='feedback'&&<FeedbackTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
-          {tab==='historial'&&<HistorialTab data={data} session={session} refreshKey={refreshKey}/>}
+          {tab==='feedback'&&<FeedbackTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey} compromisos={compromisos}/>}
+          {tab==='historial'&&<HistorialTab data={data} session={session} refreshKey={refreshKey} seguimientos={seguimientos}/>}
         </div></div>
       </main>
     </div>
