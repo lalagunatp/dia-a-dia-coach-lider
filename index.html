@@ -3315,7 +3315,21 @@ function FeedbackTab({data,setData,team,toast,session,refreshKey}){
 }
 
 // ─── Dashboard ───
-function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
+// % de avance de un número del embudo contra lo comprometido en el Plan (tarjetas de Ventas del equipo).
+// Mismos cortes de color que el resultado del plan (comparativoResultado): 95% verde, 60% amarillo.
+function AvancePlan({real,plan}){
+  if(!plan)return null;
+  const pct=Math.round((Number(real)||0)/plan*100);
+  const color=pct>=95?'var(--green)':pct>=60?'var(--yellow)':'var(--red)';
+  return <div style={{marginTop:8,paddingTop:6,borderTop:'1px dashed var(--border)'}}>
+    <div style={{fontSize:16,fontWeight:800,color,lineHeight:1.1}}>{pct}%</div>
+    <div style={{height:5,borderRadius:999,background:'var(--border)',overflow:'hidden',margin:'4px 6px'}}>
+      <div style={{width:`${Math.min(100,pct)}%`,height:'100%',background:color,borderRadius:999,transition:'width .3s'}}/>
+    </div>
+    <div style={{fontSize:11,color:'var(--dim)',fontWeight:600}}>del plan ({plan})</div>
+  </div>;
+}
+function DashboardTab({data,setData,team,coaches,session,setTab,toast,recordsPlan=data.records}){
   const{role}=session;
   const now=new Date();
   const mesActual=now.getMonth();const anioActual=now.getFullYear();
@@ -3453,6 +3467,20 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
   const[expandedPDV,setExpandedPDV]=useState(null);
   // Las vacantes de los coaches de estos vendedores también suman a la meta (3 por semana cada
   // una), igual que en el Plan y en el Reporte de seguimiento.
+  // Compromiso del Plan semanal para el periodo elegido: en "semana", el plan de esa semana; en
+  // "mes", la suma de los planes de las semanas que arrancan en ese mes. De cada semana manda el
+  // plan más reciente (si se editó hay varios, ver masReciente). Ventas del plan = validadas.
+  const planDelPeriodo=(()=>{
+    const porSemana={};
+    (recordsPlan||[]).filter(r=>r.type==='plan'&&r.semanaInicio).forEach(r=>{(porSemana[r.semanaInicio]=porSemana[r.semanaInicio]||[]).push(r);});
+    const iniStr=ymdLocal(rangoIni),finStr=ymdLocal(rangoFin);
+    const semanas=Object.keys(porSemana).filter(k=>periodoVentas==='semana'?k===iniStr:k>=iniStr&&k<=finStr);
+    if(!semanas.length)return null;
+    const obj={oportunidades:0,validadas:0,instaladas:0};
+    semanas.forEach(k=>{const o=masReciente(porSemana[k],'savedAt')?.objetivos||{};
+      obj.oportunidades+=Number(o.oportunidades)||0;obj.validadas+=Number(o.ventas)||0;obj.instaladas+=Number(o.instalaciones)||0;});
+    return{...obj,semanas:semanas.length};
+  })();
   const vacantesDash=vacantesDe(session,[...new Set(vendedores.map(m=>m.reportaA))]);
   metaInstalTotal+=periodoVentas==='semana'?vacantesDash*META_VACANTE:metaMensualVacantes(vacantesDash);
   vendedores.forEach(m=>{
@@ -3942,18 +3970,21 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
             </div>
             <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:10}}>
               {[
-                {l:'Oportunidades',v:ventasTotal.oportunidades,icon:'🆕',sub:null},
-                {l:'Validadas',v:ventasTotal.validadas,icon:'✅',sub:ventasTotal.oportunidades?`${Math.round(ventasTotal.validadas/ventasTotal.oportunidades*100)}% de op.`:null},
-                {l:'Instaladas',v:ventasTotal.instaladas,icon:'🔌',sub:ventasTotal.validadas?`${Math.round(ventasTotal.instaladas/ventasTotal.validadas*100)}% de val.`:null},
+                {k:'oportunidades',l:'Oportunidades',v:ventasTotal.oportunidades,icon:'🆕',sub:null},
+                {k:'validadas',l:'Validadas',v:ventasTotal.validadas,icon:'✅',sub:ventasTotal.oportunidades?`${Math.round(ventasTotal.validadas/ventasTotal.oportunidades*100)}% de op.`:null},
+                {k:'instaladas',l:'Instaladas',v:ventasTotal.instaladas,icon:'🔌',sub:ventasTotal.validadas?`${Math.round(ventasTotal.instaladas/ventasTotal.validadas*100)}% de val.`:null},
               ].map(s=>
                 <div key={s.l} style={{background:'var(--bg)',borderRadius:10,padding:'10px 8px',textAlign:'center'}}>
                   <div style={{fontSize:17}}>{s.icon}</div>
                   <div style={{fontSize:20,fontWeight:800}}>{s.v}</div>
                   <div style={{fontSize:12,color:'var(--dim)',fontWeight:600}}>{s.l}</div>
                   {s.sub&&<div style={{fontSize:12,color:'var(--accent)',fontWeight:700,marginTop:2}}>{s.sub}</div>}
+                  <AvancePlan real={s.v} plan={planDelPeriodo?.[s.k]}/>
                 </div>
               )}
             </div>
+            {planDelPeriodo?<p style={{fontSize:12,color:'var(--dim)',margin:'-2px 0 10px',textAlign:'center'}}>📋 Avance contra lo comprometido en el Plan{periodoVentas==='mes'?` (${planDelPeriodo.semanas} semana${planDelPeriodo.semanas!==1?'s':''} con plan en el mes)`:''}</p>
+              :<p style={{fontSize:12,color:'var(--dim)',margin:'-2px 0 10px',textAlign:'center'}}>📋 Sin Plan capturado para {periodoVentas==='semana'?'esta semana':'este mes'}: no hay compromiso contra qué medir el avance.</p>}
             <Gauge value={ventasTotal.instaladas} goal={metaInstalTotal} label={`Instalaciones vs meta (${periodoVentas})`} icon="🎯"/>
           </Card>
       </div>
@@ -5695,7 +5726,7 @@ function MainApp({session:sesionRecibida,setSession,onLogout,sessionBase,vistas,
         <div key={session.verComo||'propia'} ref={contenidoRef} className="app-contenido"><div className={anchoContenido}>
           {tab==='dashboard'&&estadoResultado.pendiente&&<RenglonResultadoPendiente plan={estadoResultado.pendiente}
             aDestiempo={estadoResultado.ventana.aDestiempo} onClick={()=>irATab('plan',{abrirResultado:true})}/>}
-          {tab==='dashboard'&&<DashboardTab data={data} setData={setData} team={allTeam} coaches={coaches} session={session} setTab={irATab} toast={toast}/>}
+          {tab==='dashboard'&&<DashboardTab data={data} setData={setData} team={allTeam} coaches={coaches} session={session} setTab={irATab} toast={toast} recordsPlan={recordsPlan}/>}
           {tab==='arranque'&&<ArranqueTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
           {tab==='permisos'&&<PermisosTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
           {tab==='cierre'&&<CierreTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
