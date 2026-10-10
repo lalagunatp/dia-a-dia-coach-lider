@@ -1098,7 +1098,7 @@ function pctCumplimiento(real, objetivo) {
   return Math.round((Number(real) || 0) / o * 100);
 }
 
-// Trabajo en campo de un Acompañamiento → las columnas del final de FEEDBACK (vacías en los demás
+// Hallazgo tipo "Trabajo en campo" (antes "Acompañamiento") → las columnas del final de FEEDBACK (vacías en los demás
 // tipos). Las cuentas se rehacen aquí para que el Sheet no dependa de lo que calcule el teléfono.
 function columnasCampo(campo) {
   if (!campo) return ['', '', '', '', '', '', '', '', '', '', '', '', '', ''];
@@ -1224,7 +1224,7 @@ const SHEET_CONFIG = {
       'Compromisos', 'Fecha revisión', 'Grabado',
       'Transcripción', 'Notas', 'Con foto', 'Foto evidencia',
       'Registrado por', 'Timestamp',
-      // Trabajo en campo del Acompañamiento (agregadas al final para no desacomodar lo anterior).
+      // Hallazgo tipo Trabajo en campo (agregadas al final para no desacomodar lo anterior).
       // 'Campo (datos)' es el mismo detalle en JSON, para que la app lo vuelva a dibujar tal cual.
       'Casas tocadas', 'Casas abiertas', '% Apertura',
       'Ventas en campo', 'Seguimientos', 'Rechazos', 'Pago promedio',
@@ -1452,7 +1452,7 @@ function buildRow(type, d) {
     }
 
     case 'feedback': {
-      // Acompañamiento manda una sola foto sellada (d.photo); Evidencia de asignación externa
+      // Trabajo en campo (antes Acompañamiento) manda una sola foto sellada (d.photo); Evidencia de asignación externa
       // manda varias fotos sin sello (d.fotos) — cualquiera de las dos termina en la misma columna.
       let fotoUrl = '';
       let fotosEvidencia = null;
