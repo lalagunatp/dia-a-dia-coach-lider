@@ -3315,12 +3315,32 @@ function FeedbackTab({data,setData,team,toast,session,refreshKey}){
 }
 
 // ─── Dashboard ───
+// Compromiso del Plan semanal en un periodo: en "semana", el plan de esa semana; en "mes", la suma
+// de los planes de las semanas que arrancan en ese mes. De cada semana manda el plan más reciente
+// (si se editó hay varios, ver masReciente). Ventas del plan = validadas. null si no hay ninguno.
+function planEnPeriodo(planes,periodo,ini,fin){
+  const porSemana={};
+  (planes||[]).filter(r=>r.type==='plan'&&r.semanaInicio).forEach(r=>{(porSemana[r.semanaInicio]=porSemana[r.semanaInicio]||[]).push(r);});
+  const iniStr=ymdLocal(ini),finStr=ymdLocal(fin);
+  const semanas=Object.keys(porSemana).filter(k=>periodo==='semana'?k===iniStr:k>=iniStr&&k<=finStr);
+  if(!semanas.length)return null;
+  const obj={oportunidades:0,validadas:0,instaladas:0,semanas:semanas.length};
+  semanas.forEach(k=>{const o=masReciente(porSemana[k],'savedAt')?.objetivos||{};
+    obj.oportunidades+=Number(o.oportunidades)||0;obj.validadas+=Number(o.ventas)||0;obj.instaladas+=Number(o.instalaciones)||0;});
+  return obj;
+}
+function sumarPlanes(lista){
+  const v=lista.filter(Boolean);
+  if(!v.length)return null;
+  return v.reduce((a,p)=>({oportunidades:a.oportunidades+p.oportunidades,validadas:a.validadas+p.validadas,instaladas:a.instaladas+p.instaladas,semanas:Math.max(a.semanas,p.semanas)}),{oportunidades:0,validadas:0,instaladas:0,semanas:0});
+}
+const colorAvance=pct=>pct>=95?'var(--green)':pct>=60?'var(--yellow)':'var(--red)';
 // % de avance de un número del embudo contra lo comprometido en el Plan (tarjetas de Ventas del equipo).
 // Mismos cortes de color que el resultado del plan (comparativoResultado): 95% verde, 60% amarillo.
 function AvancePlan({real,plan}){
   if(!plan)return null;
   const pct=Math.round((Number(real)||0)/plan*100);
-  const color=pct>=95?'var(--green)':pct>=60?'var(--yellow)':'var(--red)';
+  const color=colorAvance(pct);
   return <div style={{marginTop:8,paddingTop:6,borderTop:'1px dashed var(--border)'}}>
     <div style={{fontSize:16,fontWeight:800,color,lineHeight:1.1}}>{pct}%</div>
     <div style={{height:5,borderRadius:999,background:'var(--border)',overflow:'hidden',margin:'4px 6px'}}>
@@ -3467,20 +3487,27 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast,recordsPla
   const[expandedPDV,setExpandedPDV]=useState(null);
   // Las vacantes de los coaches de estos vendedores también suman a la meta (3 por semana cada
   // una), igual que en el Plan y en el Reporte de seguimiento.
-  // Compromiso del Plan semanal para el periodo elegido: en "semana", el plan de esa semana; en
-  // "mes", la suma de los planes de las semanas que arrancan en ese mes. De cada semana manda el
-  // plan más reciente (si se editó hay varios, ver masReciente). Ventas del plan = validadas.
-  const planDelPeriodo=(()=>{
-    const porSemana={};
-    (recordsPlan||[]).filter(r=>r.type==='plan'&&r.semanaInicio).forEach(r=>{(porSemana[r.semanaInicio]=porSemana[r.semanaInicio]||[]).push(r);});
-    const iniStr=ymdLocal(rangoIni),finStr=ymdLocal(rangoFin);
-    const semanas=Object.keys(porSemana).filter(k=>periodoVentas==='semana'?k===iniStr:k>=iniStr&&k<=finStr);
-    if(!semanas.length)return null;
-    const obj={oportunidades:0,validadas:0,instaladas:0};
-    semanas.forEach(k=>{const o=masReciente(porSemana[k],'savedAt')?.objetivos||{};
-      obj.oportunidades+=Number(o.oportunidades)||0;obj.validadas+=Number(o.ventas)||0;obj.instaladas+=Number(o.instalaciones)||0;});
-    return{...obj,semanas:semanas.length};
-  })();
+  // Avance contra el Plan. El coach y el líder, contra su propio plan; además, el líder ve a cada
+  // coach contra el suyo y el Director a cada líder contra el suyo (planes leídos del Sheet, porque
+  // cada quien lo captura en su teléfono). El Director no captura plan: su total es la suma de los
+  // de sus líderes. Gestor CH y Auditor ven lo mismo que el Director.
+  const unidadesPlan=esDirector?(session.lideres||[]):esLider?(coaches||[]):[];
+  const[planesEquipoDash,setPlanesEquipoDash]=useState(null);
+  const[abrirAvancePlan,setAbrirAvancePlan]=useState(false);
+  useEffect(()=>{
+    if(!unidadesPlan.length)return;
+    fetchHistorialEquipo('PLAN',session.token,session.verComo).then(filas=>setPlanesEquipoDash((filas||[]).map(f=>recordDesdeFila('plan',f)).filter(Boolean)));
+  },[session.token,session.verComo,unidadesPlan.length]);
+  const vendedoresDeUnidad=u=>esDirector
+    ?vendedores.filter(m=>(coaches||[]).some(c=>c.nombre===m.reportaA&&c.reportaA===u.nombre))
+    :vendedores.filter(m=>m.reportaA===u.nombre);
+  const avancePorUnidad=unidadesPlan.map(u=>{
+    const real={oportunidades:0,validadas:0,instaladas:0};
+    vendedoresDeUnidad(u).forEach(m=>{const f=funnelPeriodo(m.ventas,rangoIni,rangoFin);real.oportunidades+=f.oportunidades;real.validadas+=f.validadas;real.instaladas+=f.instaladas;});
+    const plan=planesEquipoDash?planEnPeriodo(planesEquipoDash.filter(r=>r.registradoPor===u.nombre),periodoVentas,rangoIni,rangoFin):null;
+    return{u,real,plan};
+  });
+  const planDelPeriodo=esDirector?sumarPlanes(avancePorUnidad.map(x=>x.plan)):planEnPeriodo(recordsPlan,periodoVentas,rangoIni,rangoFin);
   const vacantesDash=vacantesDe(session,[...new Set(vendedores.map(m=>m.reportaA))]);
   metaInstalTotal+=periodoVentas==='semana'?vacantesDash*META_VACANTE:metaMensualVacantes(vacantesDash);
   vendedores.forEach(m=>{
@@ -3983,8 +4010,34 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast,recordsPla
                 </div>
               )}
             </div>
-            {planDelPeriodo?<p style={{fontSize:12,color:'var(--dim)',margin:'-2px 0 10px',textAlign:'center'}}>📋 Avance contra lo comprometido en el Plan{periodoVentas==='mes'?` (${planDelPeriodo.semanas} semana${planDelPeriodo.semanas!==1?'s':''} con plan en el mes)`:''}</p>
+            {planDelPeriodo?<p style={{fontSize:12,color:'var(--dim)',margin:'-2px 0 10px',textAlign:'center'}}>📋 Avance contra {esDirector?'la suma de los planes de tus líderes':'lo comprometido en el Plan'}{periodoVentas==='mes'?` (${planDelPeriodo.semanas} semana${planDelPeriodo.semanas!==1?'s':''} con plan en el mes)`:''}</p>
+              :esDirector&&planesEquipoDash===null?<p style={{fontSize:12,color:'var(--dim)',margin:'-2px 0 10px',textAlign:'center'}}>📋 Cargando planes de tus líderes…</p>
               :<p style={{fontSize:12,color:'var(--dim)',margin:'-2px 0 10px',textAlign:'center'}}>📋 Sin Plan capturado para {periodoVentas==='semana'?'esta semana':'este mes'}: no hay compromiso contra qué medir el avance.</p>}
+            {unidadesPlan.length>0&&<div style={{marginBottom:10}}>
+              <button onClick={()=>setAbrirAvancePlan(!abrirAvancePlan)} style={{width:'100%',display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 10px',borderRadius:10,border:'1px solid var(--border)',background:'var(--card)',cursor:'pointer',fontSize:13,fontWeight:700,color:'var(--text)'}}>
+                <span>📋 Avance vs plan por {esDirector?'líder':'coach'}</span>
+                <span style={{color:'var(--dim)'}}>{abrirAvancePlan?'▲':'▼'}</span>
+              </button>
+              {abrirAvancePlan&&<div style={{marginTop:6}}>
+                {planesEquipoDash===null?<div style={{textAlign:'center',padding:12}}><Spinner/></div>:
+                avancePorUnidad.map(({u,real,plan})=><div key={u.nombre} style={{padding:'8px 10px',borderRadius:10,background:'var(--bg)',marginBottom:6}}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',gap:6,marginBottom:6}}>
+                    <span style={{fontSize:13,fontWeight:700}}>{nombreCorto(u.nombre)}</span>
+                    {!plan&&<span style={{fontSize:12,color:'var(--red)',fontWeight:600}}>Sin plan</span>}
+                  </div>
+                  <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:6}}>
+                    {[['oportunidades','Op.'],['validadas','Val.'],['instaladas','Inst.']].map(([k,l])=>{
+                      const meta=plan?.[k];const pct=meta?Math.round(real[k]/meta*100):null;
+                      return <div key={k} style={{textAlign:'center',background:'var(--card)',borderRadius:8,padding:'6px 4px'}}>
+                        <div style={{fontSize:11,color:'var(--dim)',fontWeight:600}}>{l}</div>
+                        <div style={{fontSize:14,fontWeight:800}}>{real[k]}{meta?<span style={{color:'var(--dim)',fontWeight:600}}>/{meta}</span>:null}</div>
+                        {pct!=null&&<div style={{fontSize:12,fontWeight:800,color:colorAvance(pct)}}>{pct}%</div>}
+                      </div>;
+                    })}
+                  </div>
+                </div>)}
+              </div>}
+            </div>}
             <Gauge value={ventasTotal.instaladas} goal={metaInstalTotal} label={`Instalaciones vs meta (${periodoVentas})`} icon="🎯"/>
           </Card>
       </div>
