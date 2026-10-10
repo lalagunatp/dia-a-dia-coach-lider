@@ -1101,7 +1101,7 @@ function pctCumplimiento(real, objetivo) {
 // Trabajo en campo de un Acompañamiento → las columnas del final de FEEDBACK (vacías en los demás
 // tipos). Las cuentas se rehacen aquí para que el Sheet no dependa de lo que calcule el teléfono.
 function columnasCampo(campo) {
-  if (!campo) return ['', '', '', '', '', '', '', '', '', '', ''];
+  if (!campo) return ['', '', '', '', '', '', '', '', '', '', '', '', '', ''];
   const num = v => Number(v) || 0;
   const cs = campo.contactos || [];
   const tocadas = num(campo.tocadas), abiertas = num(campo.abiertas);
@@ -1112,11 +1112,19 @@ function columnasCampo(campo) {
     return Object.keys(m).sort((a, b) => m[b] - m[a]).map(k => k + ' (' + m[k] + ')').join(', ');
   };
   const pagos = cs.map(x => num(x.pago)).filter(p => p > 0);
+  const appsDe = x => (x.apps || []).map(a => a === 'Otra' && String(x.otraApp || '').trim() ? String(x.otraApp).trim() : a);
+  const conStreaming = cs.filter(x => x.streaming === 'si');
+  const contestaron = cs.filter(x => x.streaming).length;
+  const pagosApps = conStreaming.map(x => num(x.pagoApps)).filter(p => p > 0);
   const etiqueta = { venta: 'Venta', seguimiento: 'Seguimiento', rechazo: 'Rechazo' };
   const detalle = cs.map((x, i) => {
     const motivos = x.resultado === 'rechazo' ? motivosDe(x).join(', ') : '';
+    const streaming = x.streaming === 'si'
+      ? ' · Streaming: ' + (appsDe(x).join(', ') || 'sí') + (num(x.pagoApps) > 0 ? ' $' + num(x.pagoApps) : '')
+      : x.streaming === 'no' ? ' · Sin streaming' : '';
     return (i + 1) + '. ' + (x.proveedor || '—') +
       (num(x.pago) > 0 ? ' · $' + num(x.pago) : '') +
+      streaming +
       (etiqueta[x.resultado] ? ' · ' + etiqueta[x.resultado] : '') +
       (motivos ? ': ' + motivos : '');
   }).join('\n');
@@ -1130,7 +1138,10 @@ function columnasCampo(campo) {
     contar(cs.map(x => x.proveedor).filter(Boolean)),
     contar(cs.filter(x => x.resultado === 'rechazo').reduce((a, x) => a.concat(motivosDe(x)), [])),
     detalle,
-    JSON.stringify(campo)
+    JSON.stringify(campo),
+    contestaron ? conStreaming.length + ' de ' + contestaron : '',
+    contar(conStreaming.reduce((a, x) => a.concat(appsDe(x)), [])),
+    pagosApps.length ? Math.round(pagosApps.reduce((a, b) => a + b, 0) / pagosApps.length) : ''
   ];
 }
 
@@ -1217,7 +1228,8 @@ const SHEET_CONFIG = {
       // 'Campo (datos)' es el mismo detalle en JSON, para que la app lo vuelva a dibujar tal cual.
       'Casas tocadas', 'Casas abiertas', '% Apertura',
       'Ventas en campo', 'Seguimientos', 'Rechazos', 'Pago promedio',
-      'Proveedores', 'Motivos de rechazo', 'Detalle de casas', 'Campo (datos)'
+      'Proveedores', 'Motivos de rechazo', 'Detalle de casas', 'Campo (datos)',
+      'Casas con streaming', 'Apps de streaming', 'Pago prom. streaming'
     ]
   },
   // El semáforo se pone desde el panel Equipo del Dashboard, no dentro de un hallazgo. Vive en su
