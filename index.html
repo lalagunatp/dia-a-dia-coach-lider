@@ -284,16 +284,17 @@ const TABS=[
   {id:'cierre',icon:'🌙',label:'Cierre'},
   {id:'feedback',icon:'💬',label:'Hallazgos'},
   {id:'historial',icon:'📁',label:'Historial'},
+  {id:'manual',icon:'📖',label:'Manual'},
 ];
 // Reporte comercial (semana en curso, semana cerrada o mes cerrado, por líder): vive en el
 // Reporte de seguimiento, que ya tiene la base, el ranking y las órdenes. Este botón solo lo
 // abre directo en esa vista (#reporte); allá se entra con el mismo número y PIN.
 const REPORTE_COMERCIAL_URL='https://lalagunatp.github.io/informeseguimiento/#reporte';
 // Gestor de Capital Humano y Auditor Geografía Operativo Sr: consulta de todo el distrito (el
-// servidor les arma el equipo completo), sin capturar nada — solo Dashboard e Historial.
+// servidor les arma el equipo completo), sin capturar nada — solo Dashboard, Historial y Manual.
 const ROLES_CONSULTA=['gestor','auditor'];
 const esRolConsulta=role=>ROLES_CONSULTA.includes(role);
-const TABS_CONSULTA=['dashboard','historial'];
+const TABS_CONSULTA=['dashboard','historial','manual'];
 // "Trabajo fuera de ruta" y "Actividad especial" no son ausencias: el vendedor sí trabaja, solo que
 // fuera de su ruta. Por eso aparecen tanto aquí (Arranque) como en Permisos, y en los dos lados son
 // los únicos que piden el compromiso del día — el resto de motivos no tiene nada que comprometer.
@@ -5746,6 +5747,343 @@ ${cuerpo||'<p style="text-align:center;color:#6b7086;padding:40px">Sin registros
 }
 
 // ═══════════════════════════════════════
+// MANUAL
+// ═══════════════════════════════════════
+// Manual de uso por nivel, escrito para leerse sin ayuda: frases cortas, pasos numerados y un
+// cuadro de color para lo que impide guardar. Va como contenido (no como pantallas) para que
+// corregirlo sea cambiar texto aquí. **texto** sale en negritas. Si cambia una pantalla, hay que
+// actualizar aquí lo que dice de ella — el manual promete botones y reglas exactos.
+// Bloques: {p} párrafo · {sub} subtítulo · {pasos} lista numerada · {lista} viñetas ·
+// {ok}/{ojo}/{alto} avisos verde/amarillo/rojo · {colores:[[icono,nombre,qué significa]]}.
+const MANUAL_COMUNES={
+  entrar:{icon:'🔑',titulo:'Entrar a la app',cuando:'La primera vez, o si saliste.',bloques:[
+    {pasos:['Escribe tu **número de empleado** (por ejemplo: 17091931).','Escribe tu **PIN**: son **4 números**.','Toca **Iniciar sesión**.']},
+    {ok:'Si sale un aviso **azul** que dice "Ya entraste. Cargando las ventas…", no hagas nada: espera. Los números aparecen solos.'},
+    {alto:'Si sale un aviso **rojo** que dice que las ventas no cargaron, los números están en cero **por un error**, no porque no se haya vendido. Toca el botón redondo **🔄** (abajo a la derecha).'},
+    {p:'La app se acuerda de ti aunque la cierres. Para salir, toca **Salir** (arriba a la derecha).'},
+  ]},
+  pantalla:{icon:'🧭',titulo:'Cómo se lee la pantalla',cuando:'Para no perderte.',bloques:[
+    {sub:'Arriba, en la barra azul'},
+    {lista:['Tu **puesto** y tu **nombre**.','☀️ = ya guardaste tu arranque de hoy. 🌙 = ya guardaste tu cierre de hoy.','📥 = descarga un reporte con lo que guardaste en este teléfono.','**Salir** = cerrar tu sesión.']},
+    {sub:'Los 4 cuadritos'},
+    {lista:['**Hoy**: cuántas cosas guardaste hoy.','**Equipo**: cuántas personas tienes.','**Coaches** (o **Total**): cuántos coaches tienes (o cuántos registros llevas).','**Registros**: todo lo que has guardado en este teléfono.']},
+    {sub:'El menú'},
+    {p:'Es la fila de botones con dibujito (en la computadora está a la izquierda). Toca uno para cambiar de pantalla. Si **📊 Plan** tiene un **puntito** amarillo o rojo, te falta cerrar la semana pasada.'},
+    {sub:'El botón redondo 🔄'},
+    {p:'Está abajo a la derecha. Tócalo para traer lo más nuevo: ventas, ranking y lo que guardó tu equipo. La app también se actualiza sola cuando regresas a ella y cada 10 minutos.'},
+  ]},
+  historial:{icon:'📁',titulo:'Historial: encontrar lo que ya se guardó',cuando:'Cuando necesites buscar algo o una prueba.',bloques:[
+    {p:'Aquí está todo lo que se ha guardado: lo tuyo y lo de tu equipo.'},
+    {pasos:['Toca **📁 Historial**.','Elige el tiempo: **Día**, **Semana**, **Mes** o **Rango** (en Rango tú pones las fechas).','Con **‹** te vas para atrás y con **›** para adelante.','En **Todos los tipos** elige qué quieres ver: Arranque, Cierre, Permiso, Hallazgo, Semáforo, Plan o Resultado del plan.','En **🔎 Buscar persona** escribe un nombre y elige. Si dice **actividad**, ves lo que esa persona guardó. Si dice **expediente**, ves todo lo que se dijo de esa persona: faltas, permisos, hallazgos, semáforos y ventas de los cierres.','Toca un renglón para abrir todo el detalle. Toca una foto para verla grande.']},
+    {lista:['**Agrupar** acomoda la lista por Día, Vendedor, Coach o Tipo.','Si eliges **Hallazgo**, puedes escoger hasta **3 subtipos** (por ejemplo, solo Trabajo en campo).','Los cuadros con números también son botones: tócalos para ver solo ese tipo.','**🖨️ Informe PDF** arma un documento con lo que tengas en pantalla, listo para imprimir o guardar como PDF.','El **🔄** del cuadro Historial vuelve a leer todo del Sheet.']},
+    {colores:[['🔴','Renglón rojo','Falta injustificada, semáforo rojo o plan cumplido a menos del 60%.'],['🟡','Renglón amarillo','Falta justificada, incapacidad, retardo o cierre con incidencias.'],['⏳','Pendiente','Se guardó en el teléfono y todavía no sube al Sheet.']]},
+    {ojo:'Abajo del cuadro dice "Actualizado a las…". Si dice "**Sin conexión con el Sheet**", solo estás viendo lo de tu teléfono.'},
+  ]},
+  colores:{icon:'🎨',titulo:'Qué quiere decir cada color',cuando:'Cuando veas un color y no sepas qué significa.',bloques:[
+    {sub:'Semáforo de una persona'},
+    {colores:[['🟢','Va bien','Cumple su meta y su ritmo.'],['🟡','Ojo','Se está quedando corto.'],['🔴','Urgente','Necesita un plan de acción.'],['⚪','Sin semáforo','Nadie lo ha marcado. Todos deben tener uno.']]},
+    {sub:'Avance contra el plan (%)'},
+    {colores:[['🟢','95% o más','Va cumpliendo.'],['🟡','60% a 94%','Va atrasado.'],['🔴','Menos de 60%','Va muy atrasado.']]},
+    {sub:'Tu compromiso contra la meta (en el Plan)'},
+    {colores:[['🔴','Número rojo','Te comprometiste a **menos** que la meta.'],['⚫','Número negro','Te comprometiste a lo **mismo** que la meta.'],['🟢','Número verde','Te comprometiste a **más** que la meta.']]},
+    {sub:'Cuadros de tu equipo'},
+    {colores:[['✅','Verde con ✓','Ya lo hizo.'],['❌','Rojo con ✗','Todavía no lo hace.']]},
+  ]},
+  senal:{icon:'📶',titulo:'Si no tienes señal',cuando:'En la calle, sin internet.',bloques:[
+    {p:'No pasa nada: llena y guarda igual.'},
+    {lista:['Si sale "⚠️ **Guardado local — sin conexión al Sheet**", lo que guardaste se quedó en tu teléfono.','Cuando regrese la señal, la app lo sube sola y te dice "✅ **Registros pendientes sincronizados**".']},
+    {alto:'Mientras tengas algo pendiente, **no borres los datos del navegador** ni quites la app: se perdería lo que no ha subido.'},
+  ]},
+  palabras:{icon:'📚',titulo:'Palabras que vas a ver',cuando:'Si una palabra no la entiendes.',bloques:[
+    {colores:[['🆕','Oportunidad','Una venta que se metió al sistema.'],['✅','Validada (venta)','Una venta que ya quedó ganada en el sistema.'],['🔌','Instalada','El servicio ya quedó puesto en la casa del cliente.'],['💰','NPPF / sin pagar','Cuentas instaladas que el cliente todavía no paga.'],['💵','ARPU','Lo que paga cada cliente al mes, en promedio (sin IVA).'],['🗺️','Cluster y colonia','El cluster es una zona grande; adentro tiene colonias.'],['📷','Foto con sello','Foto tomada con la cámara de la app. Lleva tu nombre, el día, la hora y el lugar. Es tu prueba.'],['📄','Sheet','La hoja de Google donde se guarda todo lo del distrito.']]},
+  ]},
+};
+const MANUAL_ROLES={
+  coach:{
+    nombre:'Coach',icon:'🏅',
+    intro:'Tú cuidas a tus vendedores todos los días: los reúnes en la mañana, los acompañas en la calle y cierras el día con sus números.',
+    dia:[
+      ['Lunes','📊','Haz tu **Plan** de la semana y **cierra la semana pasada**.'],
+      ['Cada mañana','☀️','Guarda tu **Arranque** con la foto de grupo.'],
+      ['En la calle','💬','Acompaña a tu gente y guarda **Hallazgos**.'],
+      ['Si alguien sale','📋','Guarda el **Permiso** con su prueba.'],
+      ['Cada noche','🌙','Guarda tu **Cierre** y mándalo por WhatsApp.'],
+      ['Siempre','🚦','En el **Dashboard**: pon el semáforo a cada vendedor y revisa tus compromisos.'],
+    ],
+    secciones:[
+      {icon:'☀️',titulo:'Arranque (cada mañana)',cuando:'Todos los días, al empezar.',bloques:[
+        {pasos:['Toca **☀️ Arranque**.','La **fecha** y la **hora** ya vienen puestas.','En **Foto de grupo** toca **📷 Tomar foto** y tómala con tu equipo. Si el teléfono pregunta por tu ubicación, dile que **sí**.','Si quieres, en **Foto adicional** sube otra foto de tu galería.','En **Asistencia** todos salen en **verde ✓**. Si alguien **no vino**, toca su **✓** y se pone en **rojo ✗**.','Al que no vino elígele el **motivo** y escribe el **detalle**. Puedes agregar una foto o captura de la plática.','Escribe **Notas** si pasa algo especial.','Toca **💾 Guardar arranque**.','Se abre la ventana para compartir: elige **WhatsApp** y manda la evidencia.']},
+        {alto:'Sin la **foto de grupo** no se puede guardar. Se toma con la cámara, en ese momento.'},
+        {p:'Motivos: Falta justificada, Falta injustificada, Incapacidad, Permiso autorizado, Vacaciones, Descanso, Retardo, Trabajo fuera de ruta, Actividad especial u Otro.'},
+        {ojo:'**Trabajo fuera de ruta** y **Actividad especial** no son faltas: la persona sí trabaja. Llena su **🎯 Compromiso del día**: cuentas, ventas, instalaciones y la colonia donde va a trabajar.'},
+        {ok:'Si no se abrió WhatsApp, arriba queda el botón verde **📲 Enviar evidencia por WhatsApp**.'},
+        {sub:'Si eres Coach de Punto de Venta (Promovendedor)'},
+        {lista:['De **cada** vendedor sube su **foto de entrada** en el punto de venta (de la galería, sin sello) **o** márcalo ausente con su motivo.','Un letrero te dice cuántos van resueltos. El botón de guardar se prende cuando **todos** están resueltos.']},
+      ]},
+      {icon:'📋',titulo:'Permisos',cuando:'Cuando alguien tiene que salir o trabajar fuera de su ruta.',bloques:[
+        {pasos:['Toca **📋 Permisos**.','Revisa la **Fecha**.','En **Integrante** elige a la persona.','En **Tipo** elige: Trabajo fuera de ruta, Salida anticipada, Actividad especial u Otro.','Escribe el **Motivo**.','Si es Trabajo fuera de ruta o Actividad especial, llena el **🎯 Compromiso del día**.','En **Autorizado por** ya viene tu nombre. Cámbialo solo si autorizó otra persona.','En **Evidencia** toma o sube una foto, o la captura de la conversación.','Toca **💾 Guardar permiso**.']},
+        {alto:'No se guarda si falta el **integrante** o la **foto de evidencia**.'},
+      ]},
+      {icon:'🌙',titulo:'Cierre (cada noche)',cuando:'Todos los días, al terminar.',bloques:[
+        {pasos:['Toca **🌙 Cierre**.','En **Resultado del día por vendedor**, cada quien ya trae sus **Oport.**, **Valid.** e **Instal.** de hoy (salen del sistema). Revísalos y corrige si hace falta.','En **Pagadas hoy** pon cuántas cuentas se confirmaron hoy como pagadas (las que salieron de NPPF).','En **Pendiente para mañana** escribe lo que le falta a esa persona.','En **Incidencias** escribe rechazos o lo que salió mal.','En **Seguimiento mañana** toca el nombre de quien necesita atención: cambia de **+ Agregar** a **✓ Seguimiento**. Escribe el motivo.','Toca **💾 Guardar cierre**.','Se abre WhatsApp con el resumen: elige a quién mandarlo.']},
+        {ojo:'La línea "📊 Semana: … oport. · … valid. · … instal." solo te dice cómo va cada quien en la semana. Es de referencia: no cuenta para nada oficial.'},
+        {ok:'Si WhatsApp no se abrió, usa el botón verde **📲 Enviar cierre por WhatsApp**.'},
+      ]},
+      {icon:'📊',titulo:'Plan de la semana (lunes)',cuando:'El lunes. Se puede corregir lunes y martes.',bloques:[
+        {p:'La semana va de **lunes a domingo**. Aquí dices cuánto se compromete a lograr tu equipo.'},
+        {pasos:['Toca **📊 Plan**.','En **🎯 Objetivo de la semana** escribe **Oportunidades**, **Ventas (validaciones)** e **Instalaciones**. Debajo de cada una dice la **Meta** y si quedaste **debajo** (rojo), **igual** (negro) o **arriba** (verde).','Escribe **Cuentas recuperadas (NPPF)** y el **ARPU** (en pesos).','En **Prioridades** escribe en qué te vas a enfocar (vendedores en amarillo o rojo, calidad, incidencias…).','En **Acompañamientos** escribe a quién vas a acompañar y por qué.','En **🗺️ Zonas a trabajar**, para cada día: toca **Por Cluster** o **Por Colonia**, búscala y toca **+ Agregar**. Pon el **punto de reunión** y comentarios si hace falta.','Escribe **Resultado esperado** y **Notas**.','Toca **💾 Guardar plan**.','Toca **📲 Enviar plan al líder por WhatsApp**.']},
+        {alto:'Si el lunes no guardas el plan, sale un aviso rojo: "debía quedar listo el lunes".'},
+        {sub:'¿De dónde sale la meta?'},
+        {p:'Toca **📊 ¿De dónde sale la meta?** para ver la cuenta. Cada vendedor suma instalaciones por semana según su ranking:'},
+        {colores:[['💎','Diamante y Platino','6 por semana'],['🥇','Oro','5 por semana'],['🥈','Plata','4 por semana'],['🥉','Bronce, Condicionado y Entrenamiento','3 por semana'],['❔','Sin ranking en la hoja','3 (avisa para que lo carguen)'],['🪑','Cada vacante','3 por semana']]},
+        {p:'Las **ventas** son 15% más que las instalaciones, y las **oportunidades** 15% más que las ventas.'},
+        {sub:'Corregir el plan'},
+        {lista:['El **lunes** y el **martes** sale el botón **✏️ Editar plan**. Corriges y tocas **💾 Guardar cambios**. Lo de antes no se borra: queda guardado.','Del **miércoles** en adelante el plan queda **firme** 🔒 y ya no se puede cambiar.']},
+        {sub:'Si eres Coach de Punto de Venta'},
+        {p:'En vez de zonas eliges los **🏬 Puntos de venta** de cada día y marcas a qué vendedor le toca **😴 descanso** ese día. Todos tus vendedores deben tener su día de descanso.'},
+      ]},
+      {icon:'🏁',titulo:'Cerrar la semana pasada (lunes)',cuando:'El lunes. El martes todavía se puede, pero queda marcado “a destiempo”.',bloques:[
+        {p:'Es comparar lo que prometiste la semana pasada contra lo que de verdad pasó.'},
+        {pasos:['El lunes sale arriba del Dashboard (y en el Plan) el renglón **🏁 Cierra tu semana**. Tócalo.','La tabla ya viene llena: **Compromiso**, **Real** y **%**. No escribes números.','Escribe **¿Por qué quedó así?** (o **¿Qué funcionó?** si cumpliste todo).','Toca **Guardar y enviar por WhatsApp**.']},
+        {colores:[['📅','Lunes','A tiempo.'],['⚠️','Martes','A destiempo: queda marcado en rojo.'],['⛔','Miércoles a domingo','Ya no se puede capturar.']]},
+        {ojo:'Si dice que las ventas están cargando, espera un momento. Si dice que no cargaron, toca **🔄**.'},
+      ]},
+      {icon:'💬',titulo:'Hallazgos (lo que ves en la calle)',cuando:'Cada vez que acompañas, das retroalimentación o pasa algo.',bloques:[
+        {pasos:['Toca **💬 Hallazgos**.','Elige la **Fecha** y el **Tipo**.','Elige al **Integrante**. Sale su contexto: ranking, promedio y cursos que le faltan.','Si sale el cuadro amarillo **📌 La vez pasada quedaron en…**, primero toca **Revisar** y di cómo le fue.','Llena lo que pide el tipo que elegiste (mira abajo).','Toca **💾 Guardar hallazgo**.']},
+        {sub:'Los tipos'},
+        {lista:['**Trabajo en campo**: acompañaste a la persona en la calle. Pide el recorrido y la foto con sello.','**Feedback 1 a 1**, **Revisión semanal** y **Retroalimentación**: una plática con la persona.','**Incidencia operativa** e **Incidencia crítica**: algo salió mal (la crítica es grave).','**Evidencia de asignación externa**: fotos de la persona en campo y de la conversación del avance (sin sello).','**Otro**.']},
+        {sub:'Trabajo en campo: el recorrido'},
+        {pasos:['En **Casas tocadas** usa **+** y **−** para poner cuántas puertas tocaron.','En **Abrieron** pon cuántas abrieron. Sale la **tasa de apertura**: verde 40% o más, amarillo 20% o más, rojo menos.','Toca **+ Agregar casa que abrió** por cada casa. Marca con quién tiene el servicio, cuánto paga, si tiene apps de streaming (cuáles y cuánto paga) y **en qué terminó**: ✅ Venta, 🕒 Seguimiento o ✖️ Rechazo.','Si fue **Rechazo**, marca el motivo (puede ser más de uno).','Toma la **foto con sello**: es obligatoria.']},
+        {sub:'Compromisos'},
+        {p:'Escribe **Qué + Quién + Cuándo**. Si escribes un compromiso, **tienes que** poner la **Fecha de revisión**. Ese día te sale en el Dashboard para revisarlo.'},
+        {ojo:'Aquí el **semáforo** solo se muestra. Se pone en **Dashboard → Equipo**.'},
+        {alto:'No se guarda si: falta el integrante · en Trabajo en campo faltan casas tocadas, proveedor, resultado, motivo del rechazo, respuesta de streaming o la foto · en Evidencia de asignación externa no hay ninguna foto · hay un compromiso sin fecha de revisión.'},
+      ]},
+      {icon:'⏰',titulo:'Revisar compromisos',cuando:'El día que vence cada compromiso.',bloques:[
+        {p:'En el Dashboard sale la tarjeta **⏰ Compromisos por revisar**.'},
+        {colores:[['🔴','Punto rojo','Ya se venció.'],['🟡','Punto amarillo','Vence hoy.'],['⚪','Punto gris','Vence pronto (están en "Próximos 3 días").']]},
+        {pasos:['Toca **Revisar**.','Elige cómo le fue: **✅ Cumplió**, **🟡 Parcial** o **❌ No cumplió**.','Escribe un comentario si quieres.','Si fue Parcial o No cumplió, puedes marcar **↻ Reprogramar** y poner una fecha nueva (después de hoy).','Toca **📲 Guardar y avisar por WhatsApp** (en WhatsApp elige al vendedor) o **Solo guardar**.']},
+        {ok:'"A tiempo" quiere decir revisado **a más tardar un día después** de la fecha. Tu líder ve tu porcentaje.'},
+      ]},
+      {icon:'📈',titulo:'Dashboard (tu tablero)',cuando:'Siempre que quieras saber cómo vas.',bloques:[
+        {sub:'Los 4 relojes (de este mes)'},
+        {lista:['🚶 **Trabajo en campo**: la meta es 8 al mes.','☀️ **Arranques** y 🌙 **Cierres**: uno por cada día laborable que va del mes.','💬 **Evaluaciones**: todos tus hallazgos; la meta es 2 por vendedor.']},
+        {ojo:'Los relojes cuentan lo que se guardó **en este teléfono**.'},
+        {p:'Abajo están tus **Permisos**, **Incidencias operativas** e **Incidencias críticas** del mes.'},
+        {sub:'🛒 Ventas del equipo'},
+        {lista:['Toca **Semana** o **Mes**. Con **‹** ves la anterior; con **Volver** regresas a la de hoy.','🕒 dice a qué hora se tomaron los datos.','Ves **Oportunidades**, **Validadas** e **Instaladas**, y abajo el **% de avance** contra tu Plan.','El reloj 🎯 compara las instalaciones contra la meta.']},
+        {sub:'Paneles que se abren al tocarlos'},
+        {lista:['❌ **Motivos de rechazo** de las oportunidades.','📦 **Instalaciones por plan**.','⏳ **Cuentas por instalar** (últimos 30 días). Las puedes mandar por WhatsApp.','💵 **ARPU** por vendedor.','💰 **Cuentas sin pagar**: instaladas hace 25 a 90 días y sin pagar. Entre más días, más urge.','✅ **Cuentas pagadas**: la semana pasada contra la anterior.']},
+        {sub:'🚦 Poner el semáforo'},
+        {pasos:['Baja hasta **👥 Equipo**.','Toca el **nombre** de alguien para ver su detalle.','Toca su **pastilla de color** (o **⚪ Marcar**) y elige **🟢 Va bien**, **🟡 Ojo** o **🔴 Urgente**.']},
+        {alto:'**Todos** tus vendedores deben tener semáforo. Si falta alguno, sale un aviso amarillo.'},
+      ]},
+    ],
+  },
+  lider:{
+    nombre:'Líder',icon:'⭐',
+    intro:'Tú cuidas a tus coaches. Revisas que hagan lo suyo cada día, trabajas con uno cada mañana y juntas el plan del equipo.',
+    dia:[
+      ['Lunes','📊','Revisa que tus coaches tengan su Plan, guarda el tuyo y **cierra la semana pasada**.'],
+      ['Cada mañana','☀️','Guarda tu **Arranque** con la foto con tu coach del día. Revisa quién ya hizo el suyo.'],
+      ['Durante el día','💬','Guarda **Hallazgos** de tus coaches. Revisa sus Permisos y Hallazgos.'],
+      ['Cada noche','🌙','Revisa el cierre de cada coach y guarda el tuyo.'],
+      ['Siempre','📈','Dashboard por coach, compromisos del equipo y **👁️ Ver un coach**.'],
+    ],
+    secciones:[
+      {icon:'☀️',titulo:'Arranque (cada mañana)',cuando:'Todos los días, al empezar.',bloques:[
+        {pasos:['Toca **☀️ Arranque**.','Arriba dice **👤 Hoy toca:** y el coach que pusiste en tu Plan para hoy.','En **Foto con coach prioridad del día** toca **📷 Tomar foto** y tómala con ese coach. Si el teléfono pregunta por tu ubicación, dile que **sí**.','Si quieres, sube una **foto adicional** de tu galería.','Mira **Asistencia — ¿ya guardaron su arranque hoy?**: ✓ verde = ya lo guardó · ✗ rojo = todavía no.','Mira **📋 Reporte de asistencia por coach**: presentes, ausentes, motivos y compromisos de cada uno.','Escribe **Notas** y toca **💾 Guardar arranque**.','Se abre la ventana para compartir: elige **WhatsApp**.']},
+        {alto:'Sin la **foto con el coach** no se puede guardar.'},
+      ]},
+      {icon:'📋',titulo:'Permisos (solo revisas)',cuando:'Cuando quieras ver qué permisos dieron tus coaches.',bloques:[
+        {p:'Tú no capturas permisos. Aquí ves **🗂️ Permisos otorgados por coach — este mes**: de cada coach, a quién le dio permiso, de qué tipo, su compromiso y quién lo autorizó.'},
+      ]},
+      {icon:'🌙',titulo:'Cierre (cada noche)',cuando:'Todos los días, al terminar.',bloques:[
+        {pasos:['Toca **🌙 Cierre**.','En **📊 Resultado del día por coach** ves quién ya cargó su cierre (✓) y quién no (✗), con sus números.','Escribe tus **Incidencias**.','En **Seguimiento mañana — por coach** ves a quién señaló cada coach.','Escribe **Notas** y toca **💾 Guardar cierre**.','Se abre WhatsApp con el resumen.']},
+      ]},
+      {icon:'📊',titulo:'Plan de la semana (lunes)',cuando:'El lunes, **después** de que tus coaches guarden el suyo.',bloques:[
+        {sub:'1. Revisa a tus coaches'},
+        {p:'En **📊 Planes del equipo** ves a cada coach: 🟢 100% capturado · 🟡 capturado a medias · 🔴 sin capturar.'},
+        {sub:'2. Tu plan'},
+        {pasos:['El **🎯 Objetivo de la semana** se llena **solo** con lo que puso cada coach. Debajo de cada uno, en gris, está **su meta**. Total del equipo y **Meta** van al final.','**Prioridades** y **Acompañamientos** también vienen de tus coaches (solo se leen).','En **🤝 Coach a priorizar en la semana**, para cada día busca al coach, toca **+ Agregar** y escribe un comentario si hace falta.','Escribe **Resultado esperado** y **Notas**.','Toca **💾 Guardar plan**.']},
+        {ojo:'Al guardar se copia lo que tus coaches tengan **en ese momento**. Por eso guárdalo cuando ya todos estén en 🟢.'},
+        {lista:['Los colores de los números: rojo = se comprometió a menos que su meta · negro = igual · verde = más.','Puedes **✏️ Editar plan** el lunes y el martes. Del miércoles en adelante queda firme 🔒.']},
+      ]},
+      {icon:'🏁',titulo:'Cerrar la semana pasada (lunes)',cuando:'El lunes. El martes queda “a destiempo”. El miércoles ya no se puede.',bloques:[
+        {pasos:['Toca el renglón **🏁 Cierra tu semana** (en el Dashboard o en el Plan).','La tabla del equipo ya viene llena.','En **Por coach** toca a cada uno: ves su compromiso, su real y su %. El 💬 encendido quiere decir que ya explicó su resultado.','Escribe la **lectura del equipo**: qué pasó y qué se va a hacer diferente.','Toca **Guardar y enviar por WhatsApp**.']},
+      ]},
+      {icon:'💬',titulo:'Hallazgos',cuando:'Cuando trabajas con un coach, y para revisar a tu equipo.',bloques:[
+        {p:'Arriba ves **💬 Hallazgos y feedback por coach — hoy**: ✓ con el número de hallazgos que cargó cada coach, o ✗ si no ha cargado ninguno.'},
+        {pasos:['En **Integrante** solo salen **tus coaches**: tú documentas sobre ellos, no sobre los vendedores.','Elige **Tipo**, llena lo que pide y, si hay compromiso, su **fecha de revisión**.','Toca **💾 Guardar hallazgo**.']},
+        {ok:'Se llena igual que el del coach. Mira la lección de **Hallazgos** en el manual del Coach si tienes dudas.'},
+      ]},
+      {icon:'⏰',titulo:'Compromisos',cuando:'Todos los días, en el Dashboard.',bloques:[
+        {lista:['**⏰ Compromisos por revisar**: los tuyos. Se revisan igual que el coach: **Revisar** → ✅ Cumplió · 🟡 Parcial · ❌ No cumplió.','**📋 Compromisos del equipo** (tócalo para abrirlo): de cada coach, cuántos compromisos tiene **vencidos sin revisar** y su **% revisados a tiempo**. Toca un nombre para ver cuáles.']},
+        {ok:'"A tiempo" = revisado a más tardar un día después de la fecha, de los que vencieron en los últimos 30 días.'},
+      ]},
+      {icon:'📈',titulo:'Dashboard (tu tablero)',cuando:'Siempre que quieras saber cómo va tu equipo.',bloques:[
+        {p:'Es igual al del coach, pero todo viene **agrupado por coach**.'},
+        {lista:['En **🛒 Ventas del equipo** el % se mide contra **la suma de los planes de tus coaches** (dice cuántos tienen plan).','Toca **📋 Avance vs plan por coach** para ver a cada uno: Op., Val. e Inst. contra su plan.','En los paneles (rechazos, planes, cuentas por instalar, ARPU, sin pagar, pagadas) primero tocas al **coach** y luego al **vendedor**.','En **👥 Equipo por Coach** cada coach dice cuántos vendedores tiene, su semáforo (🟢🟡🔴⚪), la semana, el mes y su meta. Tócalo para ver a sus vendedores.']},
+      ]},
+      {icon:'👁️',titulo:'Ver la app como uno de tus coaches',cuando:'Para ver exactamente lo que ve un coach.',bloques:[
+        {pasos:['Arriba dice **⭐ Estás en tu vista de líder**. Toca **👁️ Ver un coach**.','Elige al coach.','La barra se pone amarilla: **👁️ Viendo como …· solo consulta**. Puedes mirar todo, pero **no puedes guardar nada**.','Toca **← Regresar** para volver a tu vista.']},
+      ]},
+      {icon:'🧾',titulo:'Reporte comercial',cuando:'Para ver los números comerciales por semana o mes.',bloques:[
+        {p:'El botón **🧾 Reporte** del menú abre el Reporte comercial en otra página. Ahí entras con **tu mismo número y PIN**.'},
+      ]},
+    ],
+  },
+  director:{
+    nombre:'Director',icon:'👔',
+    intro:'Tú ves todo el distrito. Tu trabajo en la app es **mirar y entrar a revisar**: no llenas formularios.',
+    dia:[
+      ['Al empezar','📈','Abre el **Dashboard**: ventas del distrito, avance por líder y semáforo.'],
+      ['Para ver de cerca','👁️','**Ver como líder** y, desde ahí, **ver un coach**.'],
+      ['Para revisar pruebas','📁','**Historial** e **Informe PDF**.'],
+      ['Para números comerciales','🧾','Toca **Reporte**.'],
+    ],
+    secciones:[
+      {icon:'🙅',titulo:'Lo que no llenas',cuando:'Para que no te confundas.',bloques:[
+        {p:'En tu menú también salen **Arranque**, **Permisos**, **Cierre**, **Plan** y **Hallazgos**. Esas pantallas son para **coaches y líderes**: tú no las llenas.'},
+        {ok:'Si quieres ver cómo las llenó alguien, usa **👁️ Ver como líder** o el **📁 Historial**.'},
+        {ojo:'El **semáforo** de cada vendedor lo ponen sus coaches.'},
+      ]},
+      {icon:'📈',titulo:'Dashboard del distrito',cuando:'Siempre que quieras saber cómo va el distrito.',bloques:[
+        {lista:['**🛒 Ventas del equipo**: Oportunidades, Validadas e Instaladas de todo el distrito. Toca **Semana** o **Mes**; con **‹** ves las anteriores.','El % de avance se mide contra **la suma de los planes de todos**.','Toca **📋 Avance vs plan por líder**: cada líder con sus números y cuántos de sus coaches tienen plan (verde = todos, amarillo = algunos, rojo = ninguno).','**👥 Distrito por Coach**: todos los coaches. Cada uno dice de qué líder es (⭐), su semáforo, semana, mes y meta. Tócalo para ver a sus vendedores.','Los paneles (rechazos, planes, cuentas por instalar, ARPU, sin pagar, pagadas) se abren primero por coach y luego por vendedor.','**🚦 Semáforo del equipo**: cuántos hay en 🟢 🟡 🔴 y cuántos faltan ⚪.']},
+        {sub:'Compromisos'},
+        {p:'Toca **📋 Compromisos del equipo**: de cada persona ves cuántos compromisos tiene **vencidos sin revisar** y su **% revisados a tiempo**.'},
+      ]},
+      {icon:'👁️',titulo:'Ver la app como un líder o un coach',cuando:'Para ver exactamente lo que ve otra persona.',bloques:[
+        {pasos:['Arriba dice **👔 Estás en tu vista de director**. Toca **👁️ Ver como líder**.','Elige al líder. La barra se pone amarilla: **👁️ Viendo como … · solo consulta**.','Si quieres bajar otro nivel, toca **👁️ Ver un coach** y elige uno de ese líder.','**← Regresar** sube un nivel. **Salir de la vista** te regresa directo a la tuya.']},
+        {ojo:'En esta vista **no se puede guardar nada**: solo se mira.'},
+      ]},
+      {icon:'🧾',titulo:'Reporte comercial',cuando:'Para ver los números comerciales.',bloques:[
+        {p:'El botón **🧾 Reporte** del menú abre el Reporte comercial (semana en curso, semana cerrada o mes cerrado, por líder) en otra página. Entras con **tu mismo número y PIN**.'},
+      ]},
+    ],
+  },
+  gestor:{
+    nombre:'Gestor CH',icon:'🧑‍💼',
+    intro:'Tú (Capital Humano) ves todo el distrito **solo para consultar**. Te sirve para revisar asistencia, faltas, permisos y el expediente de cada persona.',
+    dia:[
+      ['Al entrar','📈','El **Dashboard** te enseña todo el distrito.'],
+      ['Para un expediente','📁','En **Historial** busca a la persona y elige **expediente**.'],
+      ['Para entregar','🖨️','Saca el **Informe PDF**.'],
+    ],
+    secciones:'consulta',
+  },
+  auditor:{
+    nombre:'Auditor',icon:'🔎',
+    intro:'Tú ves todo el distrito **solo para consultar**. Te sirve para revisar las pruebas: fotos con sello, fechas, horas y quién guardó cada cosa.',
+    dia:[
+      ['Al entrar','📈','El **Dashboard** te enseña todo el distrito.'],
+      ['Para revisar','📁','En **Historial** filtra por fecha, tipo o persona y abre cada registro.'],
+      ['Para entregar','🖨️','Saca el **Informe PDF**.'],
+    ],
+    secciones:'consulta',
+  },
+};
+// Gestor CH y Auditor ven y hacen lo mismo en la app (ver ROLES_CONSULTA).
+const MANUAL_CONSULTA=[
+  {icon:'👀',titulo:'Lo que puedes hacer',cuando:'Para saber qué sí y qué no.',bloques:[
+    {lista:['Tu menú tiene **📈 Dashboard**, **📁 Historial** y **📖 Manual**.','Ves **todo el distrito**: todos los líderes, coaches y vendedores.','**No puedes guardar ni cambiar nada**. El semáforo sale como **⚪ Sin marcar** si nadie lo ha puesto, y no se puede tocar.']},
+  ]},
+  {icon:'📈',titulo:'Dashboard del distrito',cuando:'Para ver cómo va todo.',bloques:[
+    {lista:['**🛒 Ventas del equipo**: Oportunidades, Validadas e Instaladas. Toca **Semana** o **Mes**; con **‹** ves las anteriores.','**👥 Distrito por Coach**: cada coach dice de qué líder es (⭐), su semáforo y sus números. Tócalo para ver a sus vendedores, y toca un vendedor para ver su detalle.','**🚦 Semáforo del equipo**: cuántos hay en 🟢 🟡 🔴 y cuántos faltan ⚪.','**📋 Compromisos del equipo**: quién tiene compromisos vencidos sin revisar y su % revisados a tiempo.']},
+  ]},
+  {icon:'🗂️',titulo:'Sacar el expediente de una persona',cuando:'Cuando te pidan la historia de alguien.',bloques:[
+    {pasos:['Toca **📁 Historial**.','Toca **Mes** o **Rango** y elige las fechas.','En **🔎 Buscar persona** escribe el nombre y elige la opción que dice **expediente**.','Arriba ves sus cuadros: ✅ Asistencias, 🚫 Ausencias, 📋 Permisos, 💬 Hallazgos y 🌙 Cierres. Abajo, sus ausencias por motivo y su último semáforo.','Toca cada renglón para ver el detalle y las fotos.','Toca **🖨️ Informe PDF** y luego guarda o imprime.']},
+    {ok:'Cada registro del informe trae su **folio** para encontrarlo en el Sheet.'},
+    {ojo:'Si eliges la opción que dice **actividad**, no ves el expediente: ves lo que **esa persona capturó** (útil para revisar a un coach).'},
+  ]},
+];
+const MANUAL_NIVELES=['coach','lider','director','gestor','auditor'];
+// **así** → negritas.
+const textoManual=s=>String(s).split('**').map((p,i)=>i%2?<b key={i}>{p}</b>:p);
+
+function BloqueManual({b}){
+  const aviso=(icono,color,fondo,txt)=><div style={{display:'flex',gap:10,alignItems:'flex-start',padding:'10px 12px',borderRadius:10,background:fondo,borderLeft:`4px solid ${color}`,margin:'10px 0',fontSize:15,lineHeight:1.45}}>
+    <span style={{fontSize:20,lineHeight:1.1}}>{icono}</span><span>{textoManual(txt)}</span>
+  </div>;
+  if(b.sub)return <h4 style={{fontSize:14,fontWeight:800,color:'var(--accent)',margin:'16px 0 6px',textTransform:'uppercase',letterSpacing:'.4px'}}>{b.sub}</h4>;
+  if(b.p)return <p style={{fontSize:15,lineHeight:1.5,margin:'8px 0'}}>{textoManual(b.p)}</p>;
+  if(b.ok)return aviso('✅','var(--green)','var(--gbg)',b.ok);
+  if(b.ojo)return aviso('💡','var(--yellow)','var(--ybg)',b.ojo);
+  if(b.alto)return aviso('⛔','var(--red)','var(--rbg)',b.alto);
+  if(b.pasos)return <ol style={{listStyle:'none',margin:'8px 0',padding:0}}>
+    {b.pasos.map((x,i)=><li key={i} style={{display:'flex',gap:10,alignItems:'flex-start',marginBottom:10}}>
+      <span style={{flexShrink:0,width:28,height:28,borderRadius:'50%',background:'var(--accent)',color:'#fff',fontWeight:800,fontSize:14,display:'flex',alignItems:'center',justifyContent:'center'}}>{i+1}</span>
+      <span style={{fontSize:15,lineHeight:1.45,paddingTop:3}}>{textoManual(x)}</span>
+    </li>)}
+  </ol>;
+  if(b.lista)return <ul style={{listStyle:'none',margin:'8px 0',padding:0}}>
+    {b.lista.map((x,i)=><li key={i} style={{display:'flex',gap:8,alignItems:'flex-start',marginBottom:8,fontSize:15,lineHeight:1.45}}>
+      <span style={{color:'var(--accent)',fontWeight:800}}>•</span><span>{textoManual(x)}</span>
+    </li>)}
+  </ul>;
+  if(b.colores)return <div style={{display:'flex',flexDirection:'column',gap:6,margin:'8px 0'}}>
+    {b.colores.map(([icono,nombre,que],i)=><div key={i} style={{display:'flex',gap:10,alignItems:'center',padding:'8px 10px',borderRadius:10,background:'var(--bg)'}}>
+      <span style={{fontSize:22,flexShrink:0,width:28,textAlign:'center'}}>{icono}</span>
+      <span style={{fontSize:15,lineHeight:1.4,minWidth:0}}><b>{nombre}</b> — {textoManual(que)}</span>
+    </div>)}
+  </div>;
+  return null;
+}
+
+function ManualTab({rolPropio}){
+  const[nivel,setNivel]=useState(MANUAL_ROLES[rolPropio]?rolPropio:'coach');
+  const[abierta,setAbierta]=useState(null);
+  const guia=MANUAL_ROLES[nivel];
+  const propias=guia.secciones==='consulta'?MANUAL_CONSULTA:guia.secciones;
+  const C=MANUAL_COMUNES;
+  const lecciones=[C.entrar,C.pantalla,...propias,C.historial,C.colores,C.senal,C.palabras];
+  const cambiarNivel=n=>{setNivel(n);setAbierta(null);};
+  return <div>
+    <Card>
+      <h2 style={{fontSize:20,fontWeight:800,margin:'0 0 4px'}}>📖 Manual de Supervisión 2.0</h2>
+      <p style={{fontSize:14,color:'var(--dim)',margin:'0 0 12px'}}>Elige tu puesto. Ya está marcado el tuyo.</p>
+      <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+        {MANUAL_NIVELES.map(n=>{const g=MANUAL_ROLES[n],activo=n===nivel;
+          return <button key={n} onClick={()=>cambiarNivel(n)} aria-pressed={activo}
+            style={{padding:'8px 12px',borderRadius:999,border:`1.5px solid ${activo?'var(--accent)':'var(--border)'}`,background:activo?'var(--accent)':'var(--card)',color:activo?'#fff':'var(--text)',fontSize:14,fontWeight:700,cursor:'pointer'}}>
+            {g.icon} {g.nombre}{n===rolPropio?' (tú)':''}
+          </button>;})}
+      </div>
+    </Card>
+
+    <Card title={`${guia.icon} Si eres ${guia.nombre}`}>
+      <p style={{fontSize:15,lineHeight:1.5,margin:'0 0 14px'}}>{textoManual(guia.intro)}</p>
+      <div style={{fontSize:13,fontWeight:700,color:'var(--dim)',textTransform:'uppercase',letterSpacing:'.5px',marginBottom:8}}>Tu día en un minuto</div>
+      {guia.dia.map(([cuando,icono,que],i)=><div key={i} style={{display:'flex',gap:12,alignItems:'flex-start',padding:'8px 0',borderTop:i?'1px solid var(--border)':'none'}}>
+        <span style={{fontSize:24,lineHeight:1,flexShrink:0,width:30,textAlign:'center'}}>{icono}</span>
+        <span style={{minWidth:0}}>
+          <span style={{display:'block',fontSize:13,fontWeight:800,color:'var(--accent)'}}>{cuando}</span>
+          <span style={{display:'block',fontSize:15,lineHeight:1.4}}>{textoManual(que)}</span>
+        </span>
+      </div>)}
+    </Card>
+
+    <div style={{fontSize:13,fontWeight:700,color:'var(--dim)',textTransform:'uppercase',letterSpacing:'.5px',margin:'4px 2px 8px'}}>Lecciones · toca una para abrirla</div>
+    {lecciones.map((s,i)=>{const abierto=abierta===i;
+      return <div key={nivel+i} style={{background:'var(--card)',border:`1px solid ${abierto?'var(--accent)':'var(--border)'}`,borderRadius:12,marginBottom:8,overflow:'hidden'}}>
+        <button onClick={()=>setAbierta(abierto?null:i)} aria-expanded={abierto}
+          style={{display:'flex',alignItems:'center',gap:12,width:'100%',padding:'12px 14px',background:abierto?'var(--accent-light)':'transparent',border:'none',textAlign:'left',cursor:'pointer',color:'var(--text)'}}>
+          <span style={{fontSize:26,lineHeight:1,flexShrink:0}}>{s.icon}</span>
+          <span style={{flex:1,minWidth:0}}>
+            <span style={{display:'block',fontSize:16,fontWeight:800}}>{s.titulo}</span>
+            {s.cuando&&<span style={{display:'block',fontSize:13,color:'var(--dim)',marginTop:2}}>{textoManual(s.cuando)}</span>}
+          </span>
+          <span style={{flexShrink:0,color:'var(--dim)',fontSize:20,transform:abierto?'rotate(90deg)':'none',transition:'transform .15s'}}>›</span>
+        </button>
+        {abierto&&<div style={{padding:'4px 16px 14px'}}>
+          {s.bloques.map((b,j)=><BloqueManual key={j} b={b}/>)}
+          <Btn variant="secondary" onClick={()=>setAbierta(null)} style={{width:'100%',marginTop:8,fontSize:14}}>Cerrar lección</Btn>
+        </div>}
+      </div>;})}
+  </div>;
+}
+
+// ═══════════════════════════════════════
 // MAIN APP
 // ═══════════════════════════════════════
 // ═══ VISTA PRESTADA (Director y Líder) ═══
@@ -6098,6 +6436,8 @@ function MainApp({session:sesionRecibida,setSession,onLogout,sessionBase,vistas,
           {tab==='plan'&&<PlanTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey} abrirResultado={abrirResultado} recordsPlan={recordsPlan} planesListos={planesListos}/>}
           {tab==='feedback'&&<FeedbackTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey} compromisos={compromisos}/>}
           {tab==='historial'&&<HistorialTab data={data} session={session} refreshKey={refreshKey} seguimientos={seguimientos}/>}
+          {/* El puesto propio (no el de la vista prestada): el manual abre en el de quien entró. */}
+          {tab==='manual'&&<ManualTab rolPropio={sessionBase?.role||role}/>}
         </div></div>
       </main>
     </div>
