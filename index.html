@@ -557,7 +557,7 @@ function recordDesdeFila(tipo,f){
         hallazgos:f['Hallazgos']||'',fortalezas:f['Fortalezas']||'',areas_oportunidad:f['Áreas de oportunidad']||'',
         compromisos:f['Compromisos']||'',fecha_revision:f['Fecha revisión']||'',
         grabado:String(f['Grabado']||'').toUpperCase().startsWith('S'),transcript:f['Transcripción']||'',
-        notas:f['Notas']||'',photo:fotos.length?null:(col||null),fotos};
+        notas:f['Notas']||'',photo:fotos.length?null:(col||null),fotos,campo:campoDeTexto(f['Campo (datos)'])};
     }
     case'semaforo':
       return{...base,vendedor:f['Integrante']||'',semaforo:f['Semáforo']||'',nota:f['Nota']||''};
@@ -2934,10 +2934,179 @@ function PlanTab({data,setData,team,toast,session,refreshKey,abrirResultado,reco
   </div>;
 }
 
+// ─── Trabajo en campo (hallazgo tipo Acompañamiento) ───
+// Lo que el coach vio en turno junto al vendedor: cuántas puertas tocaron, cuántas abrieron y, de
+// cada casa que abrió, con quién tiene el servicio, cuánto paga y en qué terminó (si no quiso, por qué).
+const CAMPO_PROVEEDORES=['Telmex','Izzi','Megacable','Totalplay','Telcel','Sky','Dish','Sin servicio','Otro'];
+const CAMPO_RESULTADOS=[
+  {value:'venta',label:'Venta',icono:'✅',color:'var(--green)',fondo:'var(--gbg)'},
+  {value:'seguimiento',label:'Seguimiento',icono:'🕒',color:'var(--yellow)',fondo:'var(--ybg)'},
+  {value:'rechazo',label:'Rechazo',icono:'✖️',color:'var(--red)',fondo:'var(--rbg)'},
+];
+const CAMPO_MOTIVOS=['Precio','Contrato vigente','Contento con su proveedor','Sin cobertura','No es el titular','Desconfianza','No califica (buró)','Sin tiempo','Se va a mudar','Otro'];
+const numC=v=>Number(v)||0;
+const campoVacio=()=>({tocadas:0,abiertas:0,contactos:[]});
+const contactoVacio=()=>({id:uid(),proveedor:'',pago:'',resultado:'',motivos:[],otroMotivo:''});
+const resultadoCampo=v=>CAMPO_RESULTADOS.find(x=>x.value===v);
+// Números del día para mostrar (formulario, historial, tarjeta del líder) y para guardar en el Sheet.
+function resumenCampo(campo){
+  const c=campo||campoVacio(),cs=c.contactos||[];
+  const tocadas=numC(c.tocadas),abiertas=numC(c.abiertas);
+  const pagos=cs.map(x=>numC(x.pago)).filter(p=>p>0);
+  const contar=lista=>Object.entries(lista.reduce((m,k)=>{m[k]=(m[k]||0)+1;return m;},{})).sort((a,b)=>b[1]-a[1]);
+  return{
+    tocadas,abiertas,
+    apertura:tocadas?Math.round(abiertas/tocadas*100):0,
+    ventas:cs.filter(x=>x.resultado==='venta').length,
+    seguimientos:cs.filter(x=>x.resultado==='seguimiento').length,
+    rechazos:cs.filter(x=>x.resultado==='rechazo').length,
+    pagoPromedio:pagos.length?Math.round(pagos.reduce((a,b)=>a+b,0)/pagos.length):0,
+    proveedores:contar(cs.map(x=>x.proveedor).filter(Boolean)),
+    motivos:contar(cs.filter(x=>x.resultado==='rechazo').flatMap(x=>x.motivos.map(m=>m==='Otro'&&x.otroMotivo?.trim()?x.otroMotivo.trim():m))),
+  };
+}
+// La columna 'Campo (datos)' del Sheet trae el mismo objeto en JSON (ver columnasCampo en apps-script.gs).
+function campoDeTexto(txt){
+  if(!txt)return null;
+  try{const c=JSON.parse(txt);return c&&typeof c==='object'?{...campoVacio(),...c,contactos:(c.contactos||[]).map(x=>({...contactoVacio(),...x}))}:null;}
+  catch(e){return null;}
+}
+// Vista de solo lectura del trabajo en campo (Historial y tarjeta del líder).
+function CampoResumen({campo,compacto}){
+  const res=resumenCampo(campo);
+  if(!res.tocadas&&!campo.contactos.length)return null;
+  if(compacto)return <p style={{fontSize:13,margin:'2px 0',color:'var(--text)'}}>🚪 {res.tocadas} tocadas · {res.abiertas} abrieron ({res.apertura}%){res.ventas?` · ✅ ${res.ventas} venta${res.ventas!==1?'s':''}`:''}{res.rechazos?` · ✖️ ${res.rechazos} rechazo${res.rechazos!==1?'s':''}`:''}</p>;
+  return <>
+    <Seccion titulo="Trabajo en campo">
+      <Metricas items={[
+        {label:'Tocadas',valor:res.tocadas},
+        {label:'Abrieron',valor:res.abiertas},
+        {label:'Apertura',valor:`${res.apertura}%`,color:res.apertura>=40?'var(--green)':res.apertura>=20?'var(--yellow)':'var(--red)'},
+        {label:'Ventas',valor:res.ventas,color:'var(--green)'},
+      ]}/>
+      {(res.pagoPromedio>0||res.proveedores.length>0)&&<div style={{display:'flex',flexWrap:'wrap',gap:6,marginTop:8}}>
+        {res.pagoPromedio>0&&<span style={HS.chip('var(--text)','var(--bg)')}>💲 Pago prom. ${res.pagoPromedio.toLocaleString('es-MX')}</span>}
+        {res.proveedores.map(([p,k])=><span key={p} style={HS.chip('var(--accent)','var(--accent-light)')}>{p} · {k}</span>)}
+      </div>}
+      {res.motivos.length>0&&<div style={{display:'flex',flexWrap:'wrap',gap:6,marginTop:6}}>
+        {res.motivos.map(([m,k])=><span key={m} style={HS.chip('var(--red)','var(--rbg)')}>{m} · {k}</span>)}
+      </div>}
+    </Seccion>
+    {campo.contactos.length>0&&<Seccion titulo="Casas que abrieron">{campo.contactos.map((x,i,lista)=>{
+      const r=resultadoCampo(x.resultado);
+      const motivos=x.resultado==='rechazo'?x.motivos.map(m=>m==='Otro'&&x.otroMotivo?.trim()?x.otroMotivo.trim():m).join(', '):'';
+      return <div key={x.id||i} style={{...HS.renglon,...HS.ultimo(i,lista)}}>
+        <div style={{minWidth:0}}>
+          <div style={{fontSize:14,fontWeight:600}}>🏠 {x.proveedor||'—'}{numC(x.pago)>0&&<span style={{color:'var(--dim)',fontWeight:500}}> · ${numC(x.pago).toLocaleString('es-MX')}/mes</span>}</div>
+          {motivos&&<div style={{fontSize:13,color:'var(--dim)'}}>{motivos}</div>}
+        </div>
+        {r&&<span style={HS.chip(r.color,r.fondo)}>{r.icono} {r.label}</span>}
+      </div>;
+    })}</Seccion>}
+  </>;
+}
+function ChipOpcion({activo,onClick,children,color='var(--accent)',fondo='var(--accent-light)'}){
+  return <button type="button" onClick={onClick} style={{padding:'7px 12px',borderRadius:999,border:`1.5px solid ${activo?color:'var(--border)'}`,background:activo?fondo:'var(--input)',color:activo?color:'var(--text)',fontSize:13,fontWeight:activo?700:500,cursor:'pointer',transition:'all .15s',whiteSpace:'nowrap'}}>{children}</button>;
+}
+function ContadorCampo({icono,label,valor,onChange,max}){
+  const btn={width:40,height:40,borderRadius:10,border:'1.5px solid var(--border)',background:'var(--card)',color:'var(--accent)',fontSize:22,fontWeight:700,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0};
+  const fijar=v=>onChange(Math.max(0,max!=null?Math.min(max,v):v));
+  return <div style={{background:'var(--bg)',borderRadius:12,padding:'12px 10px',textAlign:'center',minWidth:0}}>
+    <div style={{fontSize:12,fontWeight:700,color:'var(--dim)',textTransform:'uppercase',letterSpacing:'.5px',minHeight:30,display:'flex',alignItems:'center',justifyContent:'center',gap:4}}><span>{icono}</span><span>{label}</span></div>
+    <div style={{display:'flex',alignItems:'center',justifyContent:'center',gap:6,marginTop:6}}>
+      <button type="button" style={btn} onClick={()=>fijar(valor-1)} aria-label={`Menos ${label}`}>−</button>
+      <input type="number" inputMode="numeric" min={0} value={valor||''} placeholder="0" onChange={e=>fijar(parseInt(e.target.value,10)||0)}
+        style={{width:'100%',minWidth:0,maxWidth:70,textAlign:'center',fontSize:28,fontWeight:800,color:'var(--text)',border:'none',background:'transparent',outline:'none',padding:0}}/>
+      <button type="button" style={btn} onClick={()=>fijar(valor+1)} aria-label={`Más ${label}`}>+</button>
+    </div>
+  </div>;
+}
+function TrabajoCampo({campo,onChange}){
+  const c=campo||campoVacio();
+  const res=resumenCampo(c);
+  const set=cambios=>onChange({...c,...cambios});
+  const setContacto=(id,cambios)=>set({contactos:c.contactos.map(x=>x.id===id?{...x,...cambios}:x)});
+  // Cada casa con detalle es una casa que abrió: si registran más de las que dijeron, el contador sube solo.
+  const agregar=()=>{const contactos=[...c.contactos,contactoVacio()];set({contactos,abiertas:Math.max(c.abiertas,contactos.length),tocadas:Math.max(c.tocadas,contactos.length)});};
+  const quitar=id=>set({contactos:c.contactos.filter(x=>x.id!==id)});
+  const colorApertura=res.apertura>=40?'var(--green)':res.apertura>=20?'var(--yellow)':'var(--red)';
+  return <Card title="🚪 Trabajo en campo">
+    <p style={{fontSize:13,color:'var(--dim)',margin:'-4px 0 12px'}}>Lo que hicieron en turno: puertas tocadas, quién abrió y qué respondió.</p>
+    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+      <ContadorCampo icono="🏘️" label="Casas tocadas / abordados" valor={c.tocadas} onChange={v=>set({tocadas:v,abiertas:Math.min(c.abiertas,v)})}/>
+      <ContadorCampo icono="🚪" label="Abrieron / atendieron" valor={c.abiertas} max={c.tocadas} onChange={v=>set({abiertas:Math.max(v,c.contactos.length)})}/>
+    </div>
+    {res.tocadas>0&&<div style={{marginTop:10}}>
+      <div style={{display:'flex',justifyContent:'space-between',fontSize:13,marginBottom:4}}>
+        <span style={{color:'var(--dim)',fontWeight:600}}>Tasa de apertura</span>
+        <b style={{color:colorApertura}}>{res.apertura}%</b>
+      </div>
+      <div style={{height:8,borderRadius:999,background:'var(--bg)',overflow:'hidden'}}>
+        <div style={{width:`${res.apertura}%`,height:'100%',background:colorApertura,borderRadius:999,transition:'width .3s'}}/>
+      </div>
+    </div>}
+
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',margin:'18px 0 8px'}}>
+      <span style={{fontSize:13,fontWeight:700,color:'var(--dim)',textTransform:'uppercase',letterSpacing:'.5px'}}>Casas que abrieron</span>
+      {c.abiertas>0&&<span style={{fontSize:12,color:c.contactos.length<c.abiertas?'var(--yellow)':'var(--green)',fontWeight:700}}>{c.contactos.length} de {c.abiertas} con detalle</span>}
+    </div>
+    {c.contactos.map((x,i)=>{
+      const r=resultadoCampo(x.resultado);
+      return <div key={x.id} className="anim" style={{border:'1px solid var(--border)',borderLeft:`4px solid ${r?r.color:'var(--border)'}`,borderRadius:10,padding:12,marginBottom:10,background:'var(--card)'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+          <span style={{fontWeight:800,fontSize:15}}>🏠 Casa {i+1}{r&&<span style={{...HS.chip(r.color,r.fondo),marginLeft:8}}>{r.icono} {r.label}</span>}</span>
+          <button type="button" onClick={()=>quitar(x.id)} aria-label="Quitar casa" style={{border:'none',background:'transparent',color:'var(--dim)',fontSize:18,cursor:'pointer',padding:'0 4px'}}>✕</button>
+        </div>
+        <div style={{fontSize:12,fontWeight:700,color:'var(--dim)',marginBottom:6}}>¿CON QUIÉN TIENE EL SERVICIO?</div>
+        <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:12}}>
+          {CAMPO_PROVEEDORES.map(p=><ChipOpcion key={p} activo={x.proveedor===p} onClick={()=>setContacto(x.id,{proveedor:x.proveedor===p?'':p})}>{p}</ChipOpcion>)}
+        </div>
+        {x.proveedor!=='Sin servicio'&&<>
+          <div style={{fontSize:12,fontWeight:700,color:'var(--dim)',marginBottom:6}}>¿CUÁNTO PAGA (O PAGABA) AL MES?</div>
+          <div style={{position:'relative',marginBottom:12,maxWidth:200}}>
+            <span style={{position:'absolute',left:12,top:'50%',transform:'translateY(-50%)',color:'var(--dim)',fontWeight:700}}>$</span>
+            <Input type="number" inputMode="numeric" min={0} value={x.pago} placeholder="0" onChange={e=>setContacto(x.id,{pago:e.target.value})} style={{paddingLeft:26}}/>
+          </div>
+        </>}
+        <div style={{fontSize:12,fontWeight:700,color:'var(--dim)',marginBottom:6}}>¿EN QUÉ TERMINÓ?</div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:6}}>
+          {CAMPO_RESULTADOS.map(o=><ChipOpcion key={o.value} activo={x.resultado===o.value} color={o.color} fondo={o.fondo} onClick={()=>setContacto(x.id,{resultado:o.value,motivos:o.value==='rechazo'?x.motivos:[]})}>{o.icono} {o.label}</ChipOpcion>)}
+        </div>
+        {x.resultado==='rechazo'&&<div style={{marginTop:12,padding:10,borderRadius:8,background:'var(--rbg)'}}>
+          <div style={{fontSize:12,fontWeight:700,color:'var(--red)',marginBottom:6}}>MOTIVO DEL RECHAZO <span style={{fontWeight:500}}>(puedes marcar varios)</span></div>
+          <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+            {CAMPO_MOTIVOS.map(m=>{const on=x.motivos.includes(m);return <ChipOpcion key={m} activo={on} color="var(--red)" fondo="var(--card)" onClick={()=>setContacto(x.id,{motivos:on?x.motivos.filter(k=>k!==m):[...x.motivos,m]})}>{m}</ChipOpcion>;})}
+          </div>
+          {x.motivos.includes('Otro')&&<Input value={x.otroMotivo} placeholder="¿Cuál?" onChange={e=>setContacto(x.id,{otroMotivo:e.target.value})} style={{marginTop:8}}/>}
+        </div>}
+      </div>;
+    })}
+    <button type="button" onClick={agregar} style={{width:'100%',padding:'12px',borderRadius:10,border:'2px dashed var(--accent2)',background:'var(--accent-light)',color:'var(--accent)',fontSize:14,fontWeight:700,cursor:'pointer'}}>
+      + Agregar casa que abrió
+    </button>
+
+    {c.contactos.length>0&&<div style={{marginTop:14,padding:12,borderRadius:10,background:'var(--bg)'}}>
+      <div style={{fontSize:12,fontWeight:700,color:'var(--dim)',textTransform:'uppercase',letterSpacing:'.5px',marginBottom:8}}>Resumen del turno</div>
+      <Metricas items={[
+        {label:'Ventas',valor:res.ventas,color:'var(--green)'},
+        {label:'Seguimiento',valor:res.seguimientos,color:'var(--yellow)'},
+        {label:'Rechazos',valor:res.rechazos,color:'var(--red)'},
+        {label:'Pago prom.',valor:res.pagoPromedio?'$'+res.pagoPromedio.toLocaleString('es-MX'):'—'},
+      ]}/>
+      {res.proveedores.length>0&&<div style={{display:'flex',flexWrap:'wrap',gap:6,marginTop:10}}>
+        {res.proveedores.map(([p,k])=><span key={p} style={HS.chip('var(--accent)','var(--accent-light)')}>{p} · {k}</span>)}
+      </div>}
+      {res.motivos.length>0&&<div style={{display:'flex',flexWrap:'wrap',gap:6,marginTop:6}}>
+        {res.motivos.map(([m,k])=><span key={m} style={HS.chip('var(--red)','var(--rbg)')}>{m} · {k}</span>)}
+      </div>}
+    </div>}
+  </Card>;
+}
+
 // ─── Feedback ───
 function FeedbackTab({data,setData,team,toast,session,refreshKey}){
   const esLider=session.role==='lider';
-  const[form,setForm]=useState({date:today(),vendedor:'',tipo:'Acompañamiento',hallazgos:'',compromisos:'',fecha_revision:'',semaforo:'',photo:null,fotos:[]});
+  const[form,setForm]=useState({date:today(),vendedor:'',tipo:'Acompañamiento',hallazgos:'',compromisos:'',fecha_revision:'',semaforo:'',photo:null,fotos:[],campo:campoVacio()});
   const esAcompanamiento=form.tipo==='Acompañamiento';
   const esEvidenciaExterna=form.tipo==='Evidencia de asignación externa';
 
@@ -2954,14 +3123,22 @@ function FeedbackTab({data,setData,team,toast,session,refreshKey}){
   const guardar=async()=>{
     if(session.soloLectura)return; // vista prestada: solo consulta
     if(!form.vendedor){alert('Selecciona un integrante');return;}
+    if(esAcompanamiento){
+      const c=form.campo;
+      if(!c.tocadas){alert('Indica cuántas casas tocaron o personas abordaron en el turno');return;}
+      const i=c.contactos.findIndex(x=>!x.proveedor||!x.resultado);
+      if(i>=0){alert(`Casa ${i+1}: marca con quién tiene el servicio y en qué terminó`);return;}
+      const j=c.contactos.findIndex(x=>x.resultado==='rechazo'&&!x.motivos.length);
+      if(j>=0){alert(`Casa ${j+1}: marca al menos un motivo del rechazo`);return;}
+    }
     if(esAcompanamiento&&!form.photo){alert('Agrega una foto (con sello) — es obligatoria para este tipo de hallazgo');return;}
     if(esEvidenciaExterna&&!form.fotos.length){alert('Agrega al menos una foto (persona en campo y conversación del avance) — es obligatoria para este tipo de hallazgo');return;}
     // El semáforo que se guarda es el vigente al momento de documentar, no uno elegido aquí.
     // Cada tipo usa solo su evidencia: la foto sellada de Observaciones o las varias sin sello
     // de la asignación externa (por si cambiaron de tipo después de tomar una).
-    const rec={id:uid(),type:'feedback',...form,photo:esEvidenciaExterna?null:form.photo,fotos:esEvidenciaExterna?form.fotos:[],semaforo:semaforoVigente,registradoPor:session.user.nombre,token:session.token,savedAt:new Date().toISOString()};
+    const rec={id:uid(),type:'feedback',...form,photo:esEvidenciaExterna?null:form.photo,fotos:esEvidenciaExterna?form.fotos:[],campo:esAcompanamiento?form.campo:null,semaforo:semaforoVigente,registradoPor:session.user.nombre,token:session.token,savedAt:new Date().toISOString()};
     const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast,setData);toast('✅ Hallazgo guardado');
-    setForm({date:today(),vendedor:'',tipo:'Acompañamiento',hallazgos:'',compromisos:'',fecha_revision:'',semaforo:'',photo:null,fotos:[]});
+    setForm({date:today(),vendedor:'',tipo:'Acompañamiento',hallazgos:'',compromisos:'',fecha_revision:'',semaforo:'',photo:null,fotos:[],campo:campoVacio()});
   };
   const selectedMember=form.vendedor?team.find(m=>m.nombre===form.vendedor):null;
   // El semáforo ya no se elige aquí: se lee el vigente (puesto desde Dashboard → Equipo) y se
@@ -2987,6 +3164,7 @@ function FeedbackTab({data,setData,team,toast,session,refreshKey}){
                 <span>{r['Integrante']} · {r['Tipo']}</span>
                 <span style={{color:r['Semáforo']==='rojo'?'var(--red)':r['Semáforo']==='amarillo'?'var(--yellow)':'var(--green)'}}>●</span>
               </div>
+              {(()=>{const c=campoDeTexto(r['Campo (datos)']);return c&&<CampoResumen campo={c} compacto/>;})()}
               {r['Hallazgos']&&<p style={{fontSize:13,margin:'2px 0'}}>{r['Hallazgos']}</p>}
               {r['Compromisos']&&<p style={{fontSize:13,color:'var(--dim)',margin:'2px 0'}}>✅ {r['Compromisos']}</p>}
             </div>
@@ -3073,6 +3251,7 @@ function FeedbackTab({data,setData,team,toast,session,refreshKey}){
       <p style={{fontSize:13,color:'var(--dim)',marginBottom:8}}>Sube foto(s) de la persona en campo y de la conversación con el avance al momento (sin sello).</p>
       <PhotoCaptureMulti photos={form.fotos} onChange={fotos=>setForm({...form,fotos})} label="Agregar foto"/>
     </Card>}
+    {esAcompanamiento&&<TrabajoCampo campo={form.campo} onChange={campo=>setForm(f=>({...f,campo}))}/>}
     {!esEvidenciaExterna&&<>
       <Card title="Observaciones">
         <Field label="Observación"><Textarea value={form.hallazgos} onChange={e=>setForm({...form,hallazgos:e.target.value})} placeholder="Qué se observó..."/></Field>
@@ -4634,6 +4813,7 @@ function FichaRegistro({ev,resaltar,enfoque,onVerFoto,imprimir,conEncabezado,rol
           {r.tipo&&<span style={HS.chip(t.color,t.fondo)}>{r.tipo}</span>}
           {STATUS[r.semaforo]&&<StatusBadge status={r.semaforo} small/>}
         </>)}
+        {r.campo&&<CampoResumen campo={r.campo}/>}
         {texto('Hallazgo',r.hallazgos)}
         {texto('Fortalezas',r.fortalezas)}
         {texto('Áreas de oportunidad',r.areas_oportunidad)}
