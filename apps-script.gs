@@ -1098,6 +1098,42 @@ function pctCumplimiento(real, objetivo) {
   return Math.round((Number(real) || 0) / o * 100);
 }
 
+// Trabajo en campo de un Acompañamiento → las columnas del final de FEEDBACK (vacías en los demás
+// tipos). Las cuentas se rehacen aquí para que el Sheet no dependa de lo que calcule el teléfono.
+function columnasCampo(campo) {
+  if (!campo) return ['', '', '', '', '', '', '', '', '', '', ''];
+  const num = v => Number(v) || 0;
+  const cs = campo.contactos || [];
+  const tocadas = num(campo.tocadas), abiertas = num(campo.abiertas);
+  const motivosDe = x => (x.motivos || []).map(m => m === 'Otro' && String(x.otroMotivo || '').trim() ? String(x.otroMotivo).trim() : m);
+  const contar = lista => {
+    const m = {};
+    lista.forEach(k => { m[k] = (m[k] || 0) + 1; });
+    return Object.keys(m).sort((a, b) => m[b] - m[a]).map(k => k + ' (' + m[k] + ')').join(', ');
+  };
+  const pagos = cs.map(x => num(x.pago)).filter(p => p > 0);
+  const etiqueta = { venta: 'Venta', seguimiento: 'Seguimiento', rechazo: 'Rechazo' };
+  const detalle = cs.map((x, i) => {
+    const motivos = x.resultado === 'rechazo' ? motivosDe(x).join(', ') : '';
+    return (i + 1) + '. ' + (x.proveedor || '—') +
+      (num(x.pago) > 0 ? ' · $' + num(x.pago) : '') +
+      (etiqueta[x.resultado] ? ' · ' + etiqueta[x.resultado] : '') +
+      (motivos ? ': ' + motivos : '');
+  }).join('\n');
+  return [
+    tocadas, abiertas,
+    tocadas ? Math.round(abiertas / tocadas * 100) + '%' : '',
+    cs.filter(x => x.resultado === 'venta').length,
+    cs.filter(x => x.resultado === 'seguimiento').length,
+    cs.filter(x => x.resultado === 'rechazo').length,
+    pagos.length ? Math.round(pagos.reduce((a, b) => a + b, 0) / pagos.length) : '',
+    contar(cs.map(x => x.proveedor).filter(Boolean)),
+    contar(cs.filter(x => x.resultado === 'rechazo').reduce((a, x) => a.concat(motivosDe(x)), [])),
+    detalle,
+    JSON.stringify(campo)
+  ];
+}
+
 // Un coach dentro del resultado del líder, en una línea: "NOMBRE: 20/25 inst (80%) — su porqué".
 // La app lee de vuelta estas líneas tal cual para el Historial (ver recordDesdeFila).
 function lineaCoachResultado(c) {
@@ -1176,7 +1212,12 @@ const SHEET_CONFIG = {
       'Hallazgos', 'Fortalezas', 'Áreas de oportunidad',
       'Compromisos', 'Fecha revisión', 'Grabado',
       'Transcripción', 'Notas', 'Con foto', 'Foto evidencia',
-      'Registrado por', 'Timestamp'
+      'Registrado por', 'Timestamp',
+      // Trabajo en campo del Acompañamiento (agregadas al final para no desacomodar lo anterior).
+      // 'Campo (datos)' es el mismo detalle en JSON, para que la app lo vuelva a dibujar tal cual.
+      'Casas tocadas', 'Casas abiertas', '% Apertura',
+      'Ventas en campo', 'Seguimientos', 'Rechazos', 'Pago promedio',
+      'Proveedores', 'Motivos de rechazo', 'Detalle de casas', 'Campo (datos)'
     ]
   },
   // El semáforo se pone desde el panel Equipo del Dashboard, no dentro de un hallazgo. Vive en su
@@ -1417,7 +1458,7 @@ function buildRow(type, d) {
         d.transcript || '', d.notas || '',
         fotoUrl ? 'SÍ' : 'NO', fotoUrl,
         d.registradoPor || '', ts
-      ];
+      ].concat(columnasCampo(d.campo));
       const extra = fotosEvidencia ? { fotosEvidencia: fotosEvidencia } : { fotoUrl: fotoUrl };
       return { row: row, extra: extra };
     }
