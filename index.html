@@ -3485,29 +3485,33 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast,recordsPla
   const[expandedCoachEquipo,setExpandedCoachEquipo]=useState(null);
   const[abrirPDV,setAbrirPDV]=useState(false);
   const[expandedPDV,setExpandedPDV]=useState(null);
-  // Las vacantes de los coaches de estos vendedores también suman a la meta (3 por semana cada
-  // una), igual que en el Plan y en el Reporte de seguimiento.
-  // Avance contra el Plan. El coach y el líder, contra su propio plan; además, el líder ve a cada
-  // coach contra el suyo y el Director a cada líder contra el suyo (planes leídos del Sheet, porque
-  // cada quien lo captura en su teléfono). El Director no captura plan: su total es la suma de los
-  // de sus líderes. Gestor CH y Auditor ven lo mismo que el Director.
-  const unidadesPlan=esDirector?(session.lideres||[]):esLider?(coaches||[]):[];
+  // Avance contra el Plan: el compromiso es siempre el que captura cada COACH. El coach se mide
+  // contra el suyo; el líder, contra la suma de los de sus coaches; el Director (y Gestor CH /
+  // Auditor), contra la suma de los de todos los coaches de sus líderes. Los planes de los coaches
+  // se leen del Sheet, porque cada quien lo captura en su teléfono. El desglose de abajo va por
+  // coach (líder) o por líder (Director, cada uno con la suma de sus coaches).
+  const coachesPlan=esLider?(coaches||[]):[];
   const[planesEquipoDash,setPlanesEquipoDash]=useState(null);
   const[abrirAvancePlan,setAbrirAvancePlan]=useState(false);
   useEffect(()=>{
-    if(!unidadesPlan.length)return;
+    if(!coachesPlan.length)return;
     fetchHistorialEquipo('PLAN',session.token,session.verComo).then(filas=>setPlanesEquipoDash((filas||[]).map(f=>recordDesdeFila('plan',f)).filter(Boolean)));
-  },[session.token,session.verComo,unidadesPlan.length]);
-  const vendedoresDeUnidad=u=>esDirector
-    ?vendedores.filter(m=>(coaches||[]).some(c=>c.nombre===m.reportaA&&c.reportaA===u.nombre))
-    :vendedores.filter(m=>m.reportaA===u.nombre);
+  },[session.token,session.verComo,coachesPlan.length]);
+  const planDeCoach={};
+  if(planesEquipoDash)coachesPlan.forEach(c=>{planDeCoach[c.nombre]=planEnPeriodo(planesEquipoDash.filter(r=>r.registradoPor===c.nombre),periodoVentas,rangoIni,rangoFin);});
+  const unidadesPlan=esDirector?(session.lideres||[]):coachesPlan;
+  const coachesDeUnidad=u=>esDirector?coachesPlan.filter(c=>c.reportaA===u.nombre):[u];
   const avancePorUnidad=unidadesPlan.map(u=>{
+    const cs=coachesDeUnidad(u),nombres=new Set(cs.map(c=>c.nombre));
     const real={oportunidades:0,validadas:0,instaladas:0};
-    vendedoresDeUnidad(u).forEach(m=>{const f=funnelPeriodo(m.ventas,rangoIni,rangoFin);real.oportunidades+=f.oportunidades;real.validadas+=f.validadas;real.instaladas+=f.instaladas;});
-    const plan=planesEquipoDash?planEnPeriodo(planesEquipoDash.filter(r=>r.registradoPor===u.nombre),periodoVentas,rangoIni,rangoFin):null;
-    return{u,real,plan};
+    vendedores.filter(m=>nombres.has(m.reportaA)).forEach(m=>{const f=funnelPeriodo(m.ventas,rangoIni,rangoFin);real.oportunidades+=f.oportunidades;real.validadas+=f.validadas;real.instaladas+=f.instaladas;});
+    const planes=cs.map(c=>planDeCoach[c.nombre]);
+    return{u,real,plan:sumarPlanes(planes),conPlan:planes.filter(Boolean).length,totalCoaches:cs.length};
   });
-  const planDelPeriodo=esDirector?sumarPlanes(avancePorUnidad.map(x=>x.plan)):planEnPeriodo(recordsPlan,periodoVentas,rangoIni,rangoFin);
+  const coachesConPlan=coachesPlan.filter(c=>planDeCoach[c.nombre]).length;
+  const planDelPeriodo=esLider?sumarPlanes(coachesPlan.map(c=>planDeCoach[c.nombre])):planEnPeriodo(recordsPlan,periodoVentas,rangoIni,rangoFin);
+  // Las vacantes de los coaches de estos vendedores también suman a la meta (3 por semana cada
+  // una), igual que en el Plan y en el Reporte de seguimiento.
   const vacantesDash=vacantesDe(session,[...new Set(vendedores.map(m=>m.reportaA))]);
   metaInstalTotal+=periodoVentas==='semana'?vacantesDash*META_VACANTE:metaMensualVacantes(vacantesDash);
   vendedores.forEach(m=>{
@@ -4010,8 +4014,8 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast,recordsPla
                 </div>
               )}
             </div>
-            {planDelPeriodo?<p style={{fontSize:12,color:'var(--dim)',margin:'-2px 0 10px',textAlign:'center'}}>📋 Avance contra {esDirector?'la suma de los planes de tus líderes':'lo comprometido en el Plan'}{periodoVentas==='mes'?` (${planDelPeriodo.semanas} semana${planDelPeriodo.semanas!==1?'s':''} con plan en el mes)`:''}</p>
-              :esDirector&&planesEquipoDash===null?<p style={{fontSize:12,color:'var(--dim)',margin:'-2px 0 10px',textAlign:'center'}}>📋 Cargando planes de tus líderes…</p>
+            {planDelPeriodo?<p style={{fontSize:12,color:'var(--dim)',margin:'-2px 0 10px',textAlign:'center'}}>📋 Avance contra {esLider?`la suma de los planes de tus coaches (${coachesConPlan} de ${coachesPlan.length} con plan)`:'lo comprometido en el Plan'}{periodoVentas==='mes'?` (${planDelPeriodo.semanas} semana${planDelPeriodo.semanas!==1?'s':''} con plan en el mes)`:''}</p>
+              :esLider&&planesEquipoDash===null?<p style={{fontSize:12,color:'var(--dim)',margin:'-2px 0 10px',textAlign:'center'}}>📋 Cargando planes de los coaches…</p>
               :<p style={{fontSize:12,color:'var(--dim)',margin:'-2px 0 10px',textAlign:'center'}}>📋 Sin Plan capturado para {periodoVentas==='semana'?'esta semana':'este mes'}: no hay compromiso contra qué medir el avance.</p>}
             {unidadesPlan.length>0&&<div style={{marginBottom:10}}>
               <button onClick={()=>setAbrirAvancePlan(!abrirAvancePlan)} style={{width:'100%',display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 10px',borderRadius:10,border:'1px solid var(--border)',background:'var(--card)',cursor:'pointer',fontSize:13,fontWeight:700,color:'var(--text)'}}>
@@ -4020,10 +4024,12 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast,recordsPla
               </button>
               {abrirAvancePlan&&<div style={{marginTop:6}}>
                 {planesEquipoDash===null?<div style={{textAlign:'center',padding:12}}><Spinner/></div>:
-                avancePorUnidad.map(({u,real,plan})=><div key={u.nombre} style={{padding:'8px 10px',borderRadius:10,background:'var(--bg)',marginBottom:6}}>
+                avancePorUnidad.map(({u,real,plan,conPlan,totalCoaches})=><div key={u.nombre} style={{padding:'8px 10px',borderRadius:10,background:'var(--bg)',marginBottom:6}}>
                   <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',gap:6,marginBottom:6}}>
                     <span style={{fontSize:13,fontWeight:700}}>{nombreCorto(u.nombre)}</span>
-                    {!plan&&<span style={{fontSize:12,color:'var(--red)',fontWeight:600}}>Sin plan</span>}
+                    {esDirector
+                      ?<span style={{fontSize:12,fontWeight:600,color:conPlan===totalCoaches&&totalCoaches?'var(--green)':conPlan?'var(--yellow)':'var(--red)'}}>{conPlan} de {totalCoaches} coaches con plan</span>
+                      :!plan&&<span style={{fontSize:12,color:'var(--red)',fontWeight:600}}>Sin plan</span>}
                   </div>
                   <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:6}}>
                     {[['oportunidades','Op.'],['validadas','Val.'],['instaladas','Inst.']].map(([k,l])=>{
