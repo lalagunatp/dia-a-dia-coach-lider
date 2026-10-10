@@ -183,18 +183,20 @@ const MAX_LECTURAS_SIMULTANEAS=3;
 const ESPERAS_REINTENTO_MS=[1500,4000];
 let lecturasActivas=0;
 const colaLecturas=[];
-function conTurno(fn){
+// `prioridad`: se forma al frente de la cola (lo usan las ventas — son los números que la gente
+// viene a ver, y no deben quedarse esperando detrás de lecturas del Historial o de los planes).
+function conTurno(fn,prioridad=false){
   return new Promise((resolve,reject)=>{
     const correr=()=>{
       lecturasActivas++;
       fn().then(resolve,reject).finally(()=>{lecturasActivas--;const sig=colaLecturas.shift();if(sig)sig();});
     };
-    if(lecturasActivas<MAX_LECTURAS_SIMULTANEAS)correr();else colaLecturas.push(correr);
+    if(lecturasActivas<MAX_LECTURAS_SIMULTANEAS)correr();else if(prioridad)colaLecturas.unshift(correr);else colaLecturas.push(correr);
   });
 }
-async function pedirJSONConReintento(url,ms,reintentos=ESPERAS_REINTENTO_MS.length){
+async function pedirJSONConReintento(url,ms,reintentos=ESPERAS_REINTENTO_MS.length,prioridad=false){
   for(let i=0;;i++){
-    try{return await conTurno(()=>pedirJSON(url,undefined,ms));}
+    try{return await conTurno(()=>pedirJSON(url,undefined,ms),prioridad);}
     catch(e){
       if(!e.reintentable||i>=reintentos)throw e;
       await new Promise(r=>setTimeout(r,ESPERAS_REINTENTO_MS[i]));
@@ -207,11 +209,11 @@ async function pedirJSONConReintento(url,ms,reintentos=ESPERAS_REINTENTO_MS.leng
 const VIGENCIA_LECTURA_MS=60000;
 const lecturasEnCurso=new Map();
 const lecturasRecientes=new Map();
-function leerServidor(url,{ms=15000,cache=false,reintentos}={}){
+function leerServidor(url,{ms=15000,cache=false,reintentos,prioridad=false}={}){
   const hit=cache&&lecturasRecientes.get(url);
   if(hit&&Date.now()-hit.t<VIGENCIA_LECTURA_MS)return Promise.resolve(hit.json);
   if(lecturasEnCurso.has(url))return lecturasEnCurso.get(url);
-  const p=pedirJSONConReintento(url,ms,reintentos)
+  const p=pedirJSONConReintento(url,ms,reintentos,prioridad)
     .then(json=>{if(cache&&json&&json.ok)lecturasRecientes.set(url,{t:Date.now(),json});return json;})
     .finally(()=>lecturasEnCurso.delete(url));
   lecturasEnCurso.set(url,p);
@@ -904,6 +906,10 @@ async function enriquecerSesion({user,team,coaches,lideres,role,vacantes},token,
     lideres:sortByRanking(enrichTeam(lideres||[],rankEnt,rankMen).map(attachVentas)),
     role,
     vacantes:vacantes||{},
+    // Cuándo armó el servidor la foto de ventas (cada 30 min, ver actualizarSnapshotVentas) y cuándo
+    // la trajo este teléfono: se muestran en "Ventas del equipo" para saber qué tan frescos son.
+    ventasGenerado:vtas.generado||null,
+    ventasLeidas:vtas.error?null:new Date().toISOString(),
     // Si ventas o ranking no cargaron, la sesión queda marcada: sin esto el Dashboard mostraba
     // ceros que se leen como "el equipo no vendió nada" cuando en realidad la lectura falló.
     avisoDatos:[vtas.error&&('no se pudieron cargar las ventas del equipo ('+vtas.error+')'),
@@ -1069,7 +1075,7 @@ async function fetchVentasComisiones(token,verComo){
   const vacio={ventasByVendedor:{},cuentasByHomologado:{},asignacionesPorOS:{}};
   if(!token)return vacio;
   try{
-    const json=await leerServidor(`${DOPOST_URL}?accion=ventas&token=${encodeURIComponent(token)}${qsVerComo(verComo)}`,{ms:TOPE_VENTAS_MS,reintentos:1});
+    const json=await leerServidor(`${DOPOST_URL}?accion=ventas&token=${encodeURIComponent(token)}${qsVerComo(verComo)}`,{ms:TOPE_VENTAS_MS,reintentos:1,prioridad:true});
     if(!json.ok){console.error('Ventas fetch error:',json.error);return{...vacio,error:json.error||'el servidor no pudo leerlas'};}
     const ventasByVendedor={};
     Object.entries(json.ventasByVendedor||{}).forEach(([k,lista])=>{
@@ -1079,7 +1085,7 @@ async function fetchVentasComisiones(token,verComo){
     Object.entries(json.cuentasByHomologado||{}).forEach(([k,lista])=>{
       cuentasByHomologado[k]=lista.map(c=>({...c,fechaInstalacion:reviveFecha(c.fechaInstalacion)}));
     });
-    return{ventasByVendedor,cuentasByHomologado,asignacionesPorOS:json.asignacionesPorOS||{}};
+    return{ventasByVendedor,cuentasByHomologado,asignacionesPorOS:json.asignacionesPorOS||{},generado:json.generado||null};
   }catch(e){console.error('Ventas fetch error:',e);return{...vacio,error:e.message||'no hubo respuesta'};}
 }
 
@@ -3334,6 +3340,14 @@ function sumarPlanes(lista){
   if(!v.length)return null;
   return v.reduce((a,p)=>({oportunidades:a.oportunidades+p.oportunidades,validadas:a.validadas+p.validadas,instaladas:a.instaladas+p.instaladas,semanas:Math.max(a.semanas,p.semanas)}),{oportunidades:0,validadas:0,instaladas:0,semanas:0});
 }
+// "hoy 10:30" / "ayer 21:30" / "08/10 18:00": cuándo armó el servidor la foto de ventas.
+function horaCorteVentas(ms){
+  const d=new Date(ms);if(isNaN(d))return'';
+  const hora=d.toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'});
+  const hoy=new Date();const ayer=new Date();ayer.setDate(hoy.getDate()-1);
+  const mismo=(a,b)=>a.toDateString()===b.toDateString();
+  return mismo(d,hoy)?`hoy ${hora}`:mismo(d,ayer)?`ayer ${hora}`:`${fmtDateObj(d)} ${hora}`;
+}
 const colorAvance=pct=>pct>=95?'var(--green)':pct>=60?'var(--yellow)':'var(--red)';
 // % de avance de un número del embudo contra lo comprometido en el Plan (tarjetas de Ventas del equipo).
 // Mismos cortes de color que el resultado del plan (comparativoResultado): 95% verde, 60% amarillo.
@@ -3999,6 +4013,9 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast,recordsPla
                 aria-label={`${periodoVentas==='semana'?'Semana':'Mes'} siguiente`}
                 style={{width:30,height:30,flexShrink:0,borderRadius:9,border:'1px solid var(--border)',background:'var(--card)',color:offsetVentas===0?'var(--border)':'var(--accent)',fontSize:16,fontWeight:700,cursor:offsetVentas===0?'default':'pointer',lineHeight:1}}>›</button>
             </div>
+            {session.ventasGenerado&&<p style={{fontSize:12,color:'var(--dim)',margin:'-4px 0 10px',textAlign:'center'}}>
+              🕒 Datos de ventas al {horaCorteVentas(session.ventasGenerado)}
+            </p>}
             <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:10}}>
               {[
                 {k:'oportunidades',l:'Oportunidades',v:ventasTotal.oportunidades,icon:'🆕',sub:null},
@@ -5592,13 +5609,20 @@ function MainApp({session:sesionRecibida,setSession,onLogout,sessionBase,vistas,
   const sesionActualRef=useRef(session);sesionActualRef.current=session;
   const setSessionRef=useRef(setSession);setSessionRef.current=setSession;
   const reintentandoDatos=useRef(false);
+  // Las ventas reales (oportunidades/validadas/instaladas) antes solo se volvían a pedir al abrir la
+  // app o con 🔄: al regresar a la app, o dejándola abierta (en la compu), se quedaban con los números
+  // de la primera lectura. Ahora se vuelven a pedir solas al regresar/recuperar señal y cada
+  // VENTAS_REFRESCO_MS mientras está a la vista — no más seguido, porque el servidor arma su foto de
+  // ventas cada 30 min y pedirla antes solo traería lo mismo.
+  const VENTAS_REFRESCO_MS=10*60000;
   useEffect(()=>{
     const refrescar=()=>{
       retryPending(toast,setDatosLocales);
       olvidarLecturas();
       setRefreshKey(k=>k+1);
       const s=sesionActualRef.current;
-      if(s.avisoDatos&&!s.verComo&&!reintentandoDatos.current){
+      const ventasViejas=!s.ventasLeidas||Date.now()-new Date(s.ventasLeidas).getTime()>=VENTAS_REFRESCO_MS;
+      if((s.avisoDatos||ventasViejas)&&!s.verComo&&!reintentandoDatos.current){
         reintentandoDatos.current=true;
         refrescarYPersistirSesion(s,setSessionRef.current)
           .catch(e=>console.error('Reintento automático de ventas/ranking:',e))
@@ -5613,9 +5637,13 @@ function MainApp({session:sesionRecibida,setSession,onLogout,sessionBase,vistas,
       refrescar();
     };
     const alConectar=()=>{ultimoAutoRefresco.current=Date.now();refrescar();};
+    const periodico=setInterval(()=>{
+      if(document.visibilityState==='visible'&&navigator.onLine!==false){ultimoAutoRefresco.current=Date.now();refrescar();}
+    },VENTAS_REFRESCO_MS);
     document.addEventListener('visibilitychange',alVolver);
     window.addEventListener('online',alConectar);
     return()=>{
+      clearInterval(periodico);
       document.removeEventListener('visibilitychange',alVolver);
       window.removeEventListener('online',alConectar);
     };
