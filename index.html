@@ -298,9 +298,13 @@ const TABS_CONSULTA=['dashboard','historial'];
 const ABSENCE_REASONS=['Falta justificada','Falta injustificada','Incapacidad','Permiso autorizado','Vacaciones','Descanso','Retardo','Trabajo fuera de ruta','Actividad especial','Otro'];
 const PERMISO_TIPOS=['Trabajo fuera de ruta','Salida anticipada','Actividad especial','Otro'];
 const TIPOS_CON_COMPROMISO=['Trabajo fuera de ruta','Actividad especial'];
-const FEEDBACK_TIPOS=['Acompañamiento','Feedback 1 a 1','Revisión semanal','Incidencia operativa','Incidencia crítica','Retroalimentación','Evidencia de asignación externa','Otro'];
+// "Trabajo en campo" se llamaba "Acompañamiento": los registros viejos (Sheet y teléfono) se leen
+// con el nombre nuevo para que conteos, filtros y Dashboard no los separen.
+const TIPO_CAMPO='Trabajo en campo';
+const normTipoFeedback=t=>t==='Acompañamiento'?TIPO_CAMPO:(t||'');
+const FEEDBACK_TIPOS=[TIPO_CAMPO,'Feedback 1 a 1','Revisión semanal','Incidencia operativa','Incidencia crítica','Retroalimentación','Evidencia de asignación externa','Otro'];
 // Tipos de hallazgo que requieren foto sellada (como en Arranque) obligatoria.
-const FEEDBACK_TIPOS_CON_FOTO=['Acompañamiento','Evidencia de asignación externa'];
+const FEEDBACK_TIPOS_CON_FOTO=[TIPO_CAMPO,'Evidencia de asignación externa'];
 const DIAS_SEMANA=['lunes','martes','miercoles','jueves','viernes','sabado','domingo'];
 const DIAS_SEMANA_LABEL={lunes:'Lunes',martes:'Martes',miercoles:'Miércoles',jueves:'Jueves',viernes:'Viernes',sabado:'Sábado',domingo:'Domingo'};
 const MESES=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
@@ -310,7 +314,7 @@ const colorVsMeta=(val,meta)=>{const v=Number(val)||0;if(!meta)return'var(--text
 
 // ═══ STORAGE ═══
 const LS_KEY='supervision-v2';
-function loadData(){try{const d=localStorage.getItem(LS_KEY);return d?JSON.parse(d):{records:[],pendingSync:[]};}catch{return{records:[],pendingSync:[]};}}
+function loadData(){try{const d=localStorage.getItem(LS_KEY);if(!d)return{records:[],pendingSync:[]};const o=JSON.parse(d);o.records=(o.records||[]).map(r=>r.type==='feedback'?{...r,tipo:normTipoFeedback(r.tipo)}:r);return o;}catch{return{records:[],pendingSync:[]};}}
 function saveData(data){try{localStorage.setItem(LS_KEY,JSON.stringify(data));}catch(e){console.error(e);}}
 
 // ═══ SYNC TO DIRECTOR'S SHEET ═══
@@ -553,7 +557,7 @@ function recordDesdeFila(tipo,f){
       // columna que la foto única del acompañamiento — se distinguen por el separador.
       const col=String(f['Foto evidencia']||'').trim();
       const fotos=col.includes(';')?col.split(';').map(s=>s.trim()).filter(Boolean):[];
-      return{...base,vendedor:f['Integrante']||'',tipo:f['Tipo']||'',semaforo:f['Semáforo']||'',
+      return{...base,vendedor:f['Integrante']||'',tipo:normTipoFeedback(f['Tipo']),semaforo:f['Semáforo']||'',
         hallazgos:f['Hallazgos']||'',fortalezas:f['Fortalezas']||'',areas_oportunidad:f['Áreas de oportunidad']||'',
         compromisos:f['Compromisos']||'',fecha_revision:f['Fecha revisión']||'',
         grabado:String(f['Grabado']||'').toUpperCase().startsWith('S'),transcript:f['Transcripción']||'',
@@ -2934,7 +2938,7 @@ function PlanTab({data,setData,team,toast,session,refreshKey,abrirResultado,reco
   </div>;
 }
 
-// ─── Trabajo en campo (hallazgo tipo Acompañamiento) ───
+// ─── Trabajo en campo (tipo de hallazgo) ───
 // Lo que el coach vio en turno junto al vendedor: cuántas puertas tocaron, cuántas abrieron y, de
 // cada casa que abrió, con quién tiene el servicio, cuánto paga y en qué terminó (si no quiso, por qué).
 const CAMPO_PROVEEDORES=['Telmex','Izzi','Megacable','Totalplay','Telcel','Sky','Dish','Sin servicio','Otro'];
@@ -3052,7 +3056,7 @@ function TrabajoCampo({campo,onChange}){
   const agregar=()=>{const contactos=[...c.contactos,contactoVacio()];set({contactos,abiertas:Math.max(c.abiertas,contactos.length),tocadas:Math.max(c.tocadas,contactos.length)});};
   const quitar=id=>set({contactos:c.contactos.filter(x=>x.id!==id)});
   const colorApertura=res.apertura>=40?'var(--green)':res.apertura>=20?'var(--yellow)':'var(--red)';
-  return <Card title="🚪 Trabajo en campo">
+  return <Card title="🚪 Recorrido del turno">
     <p style={{fontSize:13,color:'var(--dim)',margin:'-4px 0 12px'}}>Lo que hicieron en turno: puertas tocadas, quién abrió y qué respondió.</p>
     <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
       <ContadorCampo icono="🏘️" label="Casas tocadas / abordados" valor={c.tocadas} onChange={v=>set({tocadas:v,abiertas:Math.min(c.abiertas,v)})}/>
@@ -3146,8 +3150,8 @@ function TrabajoCampo({campo,onChange}){
 // ─── Feedback ───
 function FeedbackTab({data,setData,team,toast,session,refreshKey}){
   const esLider=session.role==='lider';
-  const[form,setForm]=useState({date:today(),vendedor:'',tipo:'Acompañamiento',hallazgos:'',compromisos:'',fecha_revision:'',semaforo:'',photo:null,fotos:[],campo:campoVacio()});
-  const esAcompanamiento=form.tipo==='Acompañamiento';
+  const[form,setForm]=useState({date:today(),vendedor:'',tipo:TIPO_CAMPO,hallazgos:'',compromisos:'',fecha_revision:'',semaforo:'',photo:null,fotos:[],campo:campoVacio()});
+  const esAcompanamiento=form.tipo===TIPO_CAMPO;
   const esEvidenciaExterna=form.tipo==='Evidencia de asignación externa';
 
   // Líder: hallazgos/feedback que cada coach ya cargó hoy (leído del Sheet).
@@ -3180,7 +3184,7 @@ function FeedbackTab({data,setData,team,toast,session,refreshKey}){
     // de la asignación externa (por si cambiaron de tipo después de tomar una).
     const rec={id:uid(),type:'feedback',...form,photo:esEvidenciaExterna?null:form.photo,fotos:esEvidenciaExterna?form.fotos:[],campo:esAcompanamiento?form.campo:null,semaforo:semaforoVigente,registradoPor:session.user.nombre,token:session.token,savedAt:new Date().toISOString()};
     const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast,setData);toast('✅ Hallazgo guardado');
-    setForm({date:today(),vendedor:'',tipo:'Acompañamiento',hallazgos:'',compromisos:'',fecha_revision:'',semaforo:'',photo:null,fotos:[],campo:campoVacio()});
+    setForm({date:today(),vendedor:'',tipo:TIPO_CAMPO,hallazgos:'',compromisos:'',fecha_revision:'',semaforo:'',photo:null,fotos:[],campo:campoVacio()});
   };
   const selectedMember=form.vendedor?team.find(m=>m.nombre===form.vendedor):null;
   // El semáforo ya no se elige aquí: se lee el vigente (puesto desde Dashboard → Equipo) y se
@@ -3203,7 +3207,7 @@ function FeedbackTab({data,setData,team,toast,session,refreshKey}){
           rows.map((r,i)=>
             <div key={i} style={{marginTop:6,padding:8,border:'1px solid var(--nest-border)',background:'var(--nest-bg)',borderRadius:8}}>
               <div style={{display:'flex',justifyContent:'space-between',fontSize:13,fontWeight:600}}>
-                <span>{r['Integrante']} · {r['Tipo']}</span>
+                <span>{r['Integrante']} · {normTipoFeedback(r['Tipo'])}</span>
                 <span style={{color:r['Semáforo']==='rojo'?'var(--red)':r['Semáforo']==='amarillo'?'var(--yellow)':'var(--green)'}}>●</span>
               </div>
               {(()=>{const c=campoDeTexto(r['Campo (datos)']);return c&&<CampoResumen campo={c} compacto/>;})()}
@@ -3324,7 +3328,7 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
 
   const arranques=rm.filter(r=>r.type==='arranque').length;
   const cierres=rm.filter(r=>r.type==='cierre').length;
-  const acomp=rm.filter(r=>r.type==='feedback'&&r.tipo==='Acompañamiento').length;
+  const acomp=rm.filter(r=>r.type==='feedback'&&r.tipo===TIPO_CAMPO).length;
   const incOp=rm.filter(r=>r.type==='feedback'&&r.tipo==='Incidencia operativa').length;
   const incCrit=rm.filter(r=>r.type==='feedback'&&r.tipo==='Incidencia crítica').length;
   const permisos=rm.filter(r=>r.type==='permiso').length;
@@ -3897,7 +3901,7 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast}){
       </div>
       <div style={{order:2}}>
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:14}}>
-            <Gauge value={acomp} goal={8} label="Acompañamientos" icon="🚶"/>
+            <Gauge value={acomp} goal={8} label="Trabajo en campo" icon="🚶"/>
             <Gauge value={arranques} goal={diasLabTransc} label="Arranques" icon="☀️"/>
             <Gauge value={cierres} goal={diasLabTransc} label="Cierres" icon="🌙"/>
             <Gauge value={totalFeedback} goal={vendedores.length*2} label="Evaluaciones" icon="💬"/>
