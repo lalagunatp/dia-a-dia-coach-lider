@@ -355,31 +355,41 @@ async function saveAndSync(data,record,toast,setData){
         console.error('No se pudo encolar el registro pendiente:',e);
         toast?.('⚠️ Sin conexión y sin espacio para la cola — vuelve a guardarlo con señal');
       }
-    }else if(setData&&(result.fotoGrupoUrl||result.fotoGrupoSubidaUrl||result.fotosAusentes||result.fotoUrl||result.fotosEvidencia)){
-      // Ya se subieron a Drive: se reemplaza la foto pesada (base64) local por la liga,
-      // para que no se quede ocupando espacio en el teléfono.
-      setData(d=>{
-        const records=d.records.map(r=>{
-          if(r.id!==record.id)return r;
-          const upd={...r};
-          if(result.fotoGrupoUrl)upd.photo=result.fotoGrupoUrl;
-          if(result.fotoGrupoSubidaUrl)upd.photoSubida=result.fotoGrupoSubidaUrl;
-          if(result.fotoUrl)upd.photo=result.fotoUrl;
-          if(result.fotosEvidencia)upd.fotos=result.fotosEvidencia;
-          if(result.fotosAusentes&&upd.ausentes){
-            upd.ausentes=upd.ausentes.map(a=>{
-              const found=result.fotosAusentes.find(f=>f.name===a.name);
-              return found?{...a,photo:found.url}:a;
-            });
-          }
-          return upd;
-        });
-        const nuevo={...d,records};
-        saveData(nuevo);
-        return nuevo;
-      });
-    }
+    }else ponerLigasDeFotos(record.id,result,setData);
   }
+}
+// Ya se subieron a Drive: se reemplaza la foto pesada (base64) local por la liga, para que no se
+// quede ocupando espacio en el teléfono — si el almacenamiento se llena, saveData deja de guardar
+// y lo último capturado se pierde del teléfono al recargar.
+function ponerLigasDeFotos(id,r,setData){
+  if(!setData||!(r.fotoGrupoUrl||r.fotoGrupoSubidaUrl||r.fotosAusentes||r.fotosVendedores||r.fotoUrl||r.fotosEvidencia))return;
+  setData(d=>{
+    const records=d.records.map(x=>{
+      if(x.id!==id)return x;
+      const upd={...x};
+      if(r.fotoGrupoUrl)upd.photo=r.fotoGrupoUrl;
+      if(r.fotoGrupoSubidaUrl)upd.photoSubida=r.fotoGrupoSubidaUrl;
+      if(r.fotoUrl)upd.photo=r.fotoUrl;
+      // Solo si subieron TODAS: si falló alguna, el servidor la omite y reemplazar dejaría el
+      // teléfono sin esa foto (antes, si fallaban todas, llegaba [] y se borraban las locales).
+      if(r.fotosEvidencia&&r.fotosEvidencia.length&&r.fotosEvidencia.length===(upd.fotos||[]).length)upd.fotos=r.fotosEvidencia;
+      if(r.fotosAusentes&&upd.ausentes){
+        upd.ausentes=upd.ausentes.map(a=>{
+          const found=r.fotosAusentes.find(f=>f.name===a.name);
+          return found?{...a,photo:found.url}:a;
+        });
+      }
+      if(r.fotosVendedores&&upd.fotosVendedores){
+        const fv={...upd.fotosVendedores};
+        r.fotosVendedores.forEach(f=>{if(f.url&&fv[f.name])fv[f.name]=f.url;});
+        upd.fotosVendedores=fv;
+      }
+      return upd;
+    });
+    const nuevo={...d,records};
+    saveData(nuevo);
+    return nuevo;
+  });
 }
 // Reintentar pendientes
 async function retryPending(toast,setData){
@@ -390,28 +400,7 @@ async function retryPending(toast,setData){
   for(const rec of pending){
     const r=await sendToSheet(rec);
     if(!r.ok){still.push(rec);continue;}
-    if(setData&&(r.fotoGrupoUrl||r.fotoGrupoSubidaUrl||r.fotosAusentes||r.fotoUrl||r.fotosEvidencia)){
-      setData(d=>{
-        const records=d.records.map(x=>{
-          if(x.id!==rec.id)return x;
-          const upd={...x};
-          if(r.fotoGrupoUrl)upd.photo=r.fotoGrupoUrl;
-          if(r.fotoGrupoSubidaUrl)upd.photoSubida=r.fotoGrupoSubidaUrl;
-          if(r.fotoUrl)upd.photo=r.fotoUrl;
-          if(r.fotosEvidencia)upd.fotos=r.fotosEvidencia;
-          if(r.fotosAusentes&&upd.ausentes){
-            upd.ausentes=upd.ausentes.map(a=>{
-              const found=r.fotosAusentes.find(f=>f.name===a.name);
-              return found?{...a,photo:found.url}:a;
-            });
-          }
-          return upd;
-        });
-        const nuevo={...d,records};
-        saveData(nuevo);
-        return nuevo;
-      });
-    }
+    ponerLigasDeFotos(rec.id,r,setData);
   }
   try{localStorage.setItem('sv2-pending',JSON.stringify(still));}catch(e){console.error('No se pudo actualizar la cola de pendientes:',e);}
   if(still.length===0&&pending.length>0)toast?.('✅ Registros pendientes sincronizados');
@@ -5106,6 +5095,7 @@ function FichaRegistro({ev,resaltar,enfoque,onVerFoto,imprimir,conEncabezado,rol
             {comp?<div style={{fontSize:13,color:'var(--dim)'}}>🎯 {n(c.cuentas)} cuentas · {n(c.ventas)} ventas · {n(c.instalaciones)} instalaciones</div>:null}
             {a.colonia&&<div style={{fontSize:13,color:'var(--dim)'}}>📍 {a.colonia}</div>}
             {a.detail&&<div style={{fontSize:13,color:'var(--dim)'}}>{a.detail}</div>}
+            {a.photo&&<div style={{marginTop:6}}><EvidenciaFoto src={a.photo} onVer={onVerFoto} imprimir={imprimir} etiqueta="Evidencia"/></div>}
           </div>
           <span style={HS.chip('var(--accent)','var(--accent-light)')}>{a.reason}</span>
         </div>;
