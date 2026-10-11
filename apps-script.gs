@@ -480,6 +480,9 @@ function idsPermitidos(user, built) {
 // cada entrada a la app, sino en el activador de cada 30 minutos (actualizarSnapshotVentas), y
 // cada accion=ventas solo recorta de esa foto lo que le toca al token (ver obtenerVentasComisiones).
 function calcularVentasDistrito() {
+    // La foto vale "al momento en que se EMPEZÓ a leer": si la BASE se actualiza mientras se arma,
+    // esa actualización queda después de `generado` y la siguiente lectura la detecta (fotoAlDia).
+    const inicio = Date.now();
     const cutoff = new Date();
     cutoff.setDate(1); cutoff.setHours(0, 0, 0, 0);
     cutoff.setMonth(cutoff.getMonth() - VENTAS_LOOKBACK_MESES);
@@ -606,7 +609,7 @@ function calcularVentasDistrito() {
       }
     }
 
-    return { generado: Date.now(), ventasByVendedor: ventasByVendedor, cuentasByHomologado: cuentasByHomologado, asignacionesPorOS: asignacionesPorOS };
+    return { generado: inicio, ventasByVendedor: ventasByVendedor, cuentasByHomologado: cuentasByHomologado, asignacionesPorOS: asignacionesPorOS };
 }
 
 // ─── Foto de ventas del distrito (se prepara cada 30 minutos, no en cada entrada) ───
@@ -686,7 +689,8 @@ function actualizarSnapshotVentas() {
   return guardarFoto(FOTO_VENTAS, calcularVentasDistrito(), 'ventas');
 }
 function actualizarSnapshotRanking() {
-  return guardarFoto(FOTO_RANKING, { generado: Date.now(), rankEnt: leerRankingEntrenamiento(), rankMen: leerRankingMensual() }, 'ranking');
+  const inicio = Date.now(); // mismo criterio que calcularVentasDistrito
+  return guardarFoto(FOTO_RANKING, { generado: inicio, rankEnt: leerRankingEntrenamiento(), rankMen: leerRankingMensual() }, 'ranking');
 }
 
 // Activador: cada 30 minutos entre las 6:00 y las 22:00 (de noche no se captura nada y así el
@@ -729,6 +733,48 @@ function leerFoto(foto) {
 function leerSnapshotVentas() { return leerFoto(FOTO_VENTAS); }
 function leerSnapshotRanking() { return leerFoto(FOTO_RANKING); }
 
+// ─── Foto al día cuando se actualiza la BASE ───
+// La foto se arma cada 30 min, así que si BASE LA LAGUNA 2026 se actualizaba justo después de una
+// corrida, el Dashboard seguía mostrando hasta media hora los números de ANTES con un "Datos de
+// ventas al hoy HH:MM" que parecía reciente. Ahora cada lectura compara la última modificación del
+// archivo (Drive) contra `generado`: si la BASE cambió después de armar la foto, se rearma en ese
+// momento. La app escribe sus capturas en OTRO Sheet (SPREADSHEET_ID), así que esto solo se
+// dispara cuando de verdad se cargan datos nuevos a la BASE.
+// Si la BASE se edita seguido, una foto con menos de esta edad se usa igual (no se rearma en cada
+// lectura); lo más que tarda en verse una actualización es esto + el minuto del caché de abajo.
+const FOTO_EDAD_MIN_REARMAR_MS = 5 * 60 * 1000;
+function ultimaModificacionBase() {
+  const cache = CacheService.getScriptCache();
+  const enCache = cache.get('baseLagunaMod_v1');
+  if (enCache) return Number(enCache);
+  let t = 0;
+  try { t = DriveApp.getFileById(SPREADSHEET_ID_PLANTILLA).getLastUpdated().getTime(); }
+  catch (e) { console.error('No se pudo leer la última modificación de la BASE: ' + e.message); return 0; }
+  try { cache.put('baseLagunaMod_v1', String(t), 60); } catch (e) { /* sin caché, igual funciona */ }
+  return t;
+}
+function fotoVigente(snap) {
+  if (!snap) return false;
+  if (Date.now() - snap.generado < FOTO_EDAD_MIN_REARMAR_MS) return true;
+  return ultimaModificacionBase() <= snap.generado;
+}
+// Lee la foto y, si la BASE cambió después de armarla, la rearma. Con el candado del script solo
+// UNA ejecución la rearma; las que llegan al mismo tiempo esperan hasta `esperaMs` y se quedan con
+// la que esa armó. Si no alcanzan turno, usan la foto anterior (mejor eso que tronar).
+function fotoAlDia(foto, armar, esperaMs) {
+  const snap = leerFoto(foto);
+  if (fotoVigente(snap)) return snap;
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(esperaMs)) return snap || armar();
+  try {
+    const otra = leerFoto(foto);
+    if (fotoVigente(otra)) return otra;
+    return armar();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 // accion=ventas: la foto del distrito recortada al equipo del token (el propio usuario, su equipo,
 // sus coaches y líderes — idsPermitidos). Mismo shape de siempre para el cliente, más `generado`
 // (cuándo se armó la foto). Las fechas viajan como ISO (JSON no tiene tipo Date); el cliente las
@@ -742,7 +788,9 @@ function obtenerVentasComisiones(params) {
     const built = construirEquipo(user, all);
     const permitidos = idsPermitidos(user, built);
 
-    const snap = leerSnapshotVentas() || actualizarSnapshotVentas();
+    // Foto de cada 30 min, rearmada al momento si la BASE se actualizó después (ver fotoAlDia).
+    // Hasta 60s de espera: el cliente le da 90s a esta lectura.
+    const snap = fotoAlDia(FOTO_VENTAS, actualizarSnapshotVentas, 60000);
     const ventasByVendedor = {}, cuentasByHomologado = {}, asignacionesPorOS = {};
     Object.keys(permitidos).forEach(function (id) {
       if (snap.ventasByVendedor[id]) ventasByVendedor[id] = snap.ventasByVendedor[id];
@@ -942,8 +990,10 @@ function obtenerRanking(params) {
     const nombresPermitidos = {};
     [user].concat(built.team, built.coaches, built.lideres || []).forEach(function (m) { nombresPermitidos[m.nombre] = true; });
 
-    // De la foto de cada 30 minutos (ver actualizarSnapshotRanking); en vivo solo si no hay una vigente.
-    const snap = leerSnapshotRanking() || actualizarSnapshotRanking();
+    // De la foto de cada 30 minutos (ver actualizarSnapshotRanking), rearmada si la BASE cambió
+    // después (fotoAlDia). Espera corta: esta lectura tiene 15s en el cliente, y si ventas tiene el
+    // candado se usa la foto anterior.
+    const snap = fotoAlDia(FOTO_RANKING, actualizarSnapshotRanking, 5000);
 
     const rankEnt = {};
     const rankEntFull = snap.rankEnt;
@@ -1040,7 +1090,14 @@ function subirFotoADrive(dataUrl, nombreArchivo) {
     const file = folder.createFile(blob);
     // Si tu organización bloquea "cualquiera con la liga", cambia ANYONE_WITH_LINK
     // por DOMAIN_WITH_LINK (solo gente con cuenta de tu dominio podrá abrir la liga).
-    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    // Si compartir falla, la foto YA está en Drive: se regresa la liga igual (la abre quien tenga
+    // acceso a la carpeta) en vez de perderla y que el registro quede como "sin foto".
+    try {
+      file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    } catch (errShare) {
+      console.error('No se pudo compartir con el enlace ' + nombreArchivo + ': ' + errShare.message);
+      try { file.setSharing(DriveApp.Access.DOMAIN_WITH_LINK, DriveApp.Permission.VIEW); } catch (e2) { /* se queda con los permisos de la carpeta */ }
+    }
     // Liga del visor oficial de Drive: no sirve para incrustar como <img> (es una
     // página, no la imagen cruda), pero siempre abre bien al tocarla — la app la
     // usa como botón "Ver foto", no para mostrarla en línea.
