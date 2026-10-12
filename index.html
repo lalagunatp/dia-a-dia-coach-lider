@@ -5497,6 +5497,17 @@ function HistorialTab({data,session,refreshKey,seguimientos=[]}){
     // Cada hallazgo lleva sus revisiones del compromiso, para verlas en su ficha.
     const segPor={};
     seguimientos.forEach(s=>{(segPor[s.compromisoId]=segPor[s.compromisoId]||[]).push(s);});
+    // Plan editado (lunes/martes): cada edición es un registro nuevo, pero aquí solo se ve la
+    // versión vigente — la más reciente de esa persona para esa semana, igual que en la pantalla del Plan.
+    const planVigente={};
+    porId.forEach(r=>{
+      if(r.type!=='plan'||!r.semanaInicio)return;
+      const k=(r.registradoPor||'')+'|'+r.semanaInicio;
+      planVigente[k]=masReciente([planVigente[k],r].filter(Boolean),'savedAt');
+    });
+    porId.forEach((r,id)=>{
+      if(r.type==='plan'&&r.semanaInicio&&planVigente[(r.registradoPor||'')+'|'+r.semanaInicio]!==r)porId.delete(id);
+    });
     return[...porId.values()]
       .map(r=>r.type==='feedback'&&segPor[r.id]?{...r,seguimientos:segPor[r.id].slice().sort((a,b)=>String(a.savedAt||'').localeCompare(String(b.savedAt||'')))}:r)
       .map(r=>normalizarEvento(r,pendientes)).filter(Boolean);
