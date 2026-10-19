@@ -231,8 +231,12 @@ const META_SEMANAL_RANKING={ENTRENAMIENTO:3,CONDICIONADO:3,BRONCE:3,PLATA:4,ORO:
 // porque falte cargar un ranking o cubrir una vacante.
 const META_SIN_RANKING=3;
 const META_VACANTE=3;
+// Mínimo semanal de instalaciones para llevarse el bono: Platino y Oro con 4 ya lo ganan; de Plata
+// para abajo el mínimo es su misma meta. Diamante, si llega a haber, como Platino.
+const MINIMO_BONO_RANKING={ENTRENAMIENTO:3,CONDICIONADO:3,BRONCE:3,PLATA:4,ORO:4,PLATINO:4,DIAMANTE:4};
 const tieneRanking=badge=>!!META_SEMANAL_RANKING[badge];
 const metaSemanal=badge=>META_SEMANAL_RANKING[badge]||META_SIN_RANKING;
+const minimoBono=badge=>MINIMO_BONO_RANKING[badge]||META_SIN_RANKING;
 const metaMensual=badge=>Math.round(metaSemanal(badge)*4.33);
 const metaMensualVacantes=n=>Math.round(n*META_VACANTE*4.33);
 // Vacantes (las manda el servidor por coach, ver apps-script.gs: vacantesDelEquipo) de una lista
@@ -543,7 +547,10 @@ function recordDesdeFila(tipo,f){
         resultados:{oportunidades:nNum(f['Real Oportunidades']),ventas:nNum(f['Real Ventas']),instalaciones:nNum(f['Real Instalaciones']),cuentasRecuperadas:nNum(f['Real Cuentas recuperadas NPPF']),arpu:nNum(f['Real ARPU'])},
         aDestiempo:String(f['A destiempo']||'').toUpperCase().startsWith('S'),
         // El desglose por coach del líder llega como texto, un coach por línea (ver buildRow).
-        comentario:String(f['Comentario']||'').trim(),porCoachTexto:String(f['Detalle por coach']||'').trim()};
+        comentario:String(f['Comentario']||'').trim(),porCoachTexto:String(f['Detalle por coach']||'').trim(),
+        // Un vendedor por línea; en el del líder cada línea trae su coach adelante (ver vendedoresDeHoja).
+        ...(()=>{const vh=vendedoresDeHoja(f['Detalle por vendedor']);
+          return{porVendedor:vh.filter(v=>!v.coach),vendedoresPorCoach:vh.filter(v=>v.coach)};})()};
     case'feedback':{
       // "Evidencia de asignación externa" guarda varias ligas separadas por "; " en la misma
       // columna que la foto única del acompañamiento — se distinguen por el separador.
@@ -868,6 +875,68 @@ function resultadoRealSemana(vendedores,semanaInicio,ref){
   r.arpu=nArpu?Math.round(sumaArpu/nArpu/1.16*100)/100:0;
   return r;
 }
+// ─── Resultado del plan: cada vendedor contra su ranking ───
+// Instalaciones de la semana (lunes a domingo) de cada vendedor: llegó a su objetivo (la meta por
+// ranking), llegó solo al mínimo del bono, o no llegó. El ranking es el vigente al capturar el
+// resultado y queda guardado tal cual en el registro, aunque después cambie en la hoja.
+const NIVELES_VENDEDOR={
+  objetivo:{emoji:'🎯',titulo:'Llegaron a su objetivo',nota:'también se llevan bono',color:'var(--green)',fondo:'var(--gbg)'},
+  minimo:{emoji:'💰',titulo:'Llegaron al mínimo',nota:'se llevan bono, les faltó para su objetivo',color:'var(--yellow)',fondo:'var(--ybg)'},
+  no:{emoji:'🔴',titulo:'No llegaron al mínimo',nota:'sin bono esta semana',color:'var(--red)',fondo:'var(--rbg)'},
+};
+const ORDEN_NIVELES=['objetivo','minimo','no'];
+const nivelVendedor=(inst,meta,minimo)=>inst>=meta?'objetivo':inst>=minimo?'minimo':'no';
+function cumplimientoVendedores(vendedores,semanaInicio){
+  const ini=new Date(semanaInicio+'T00:00:00'),fin=endOfWeek(ini);
+  return(vendedores||[]).map(m=>{
+    const inst=funnelPeriodo(m.ventas,ini,fin).instaladas,meta=metaSemanal(m.badge),minimo=minimoBono(m.badge);
+    return{nombre:m.nombre,ranking:tieneRanking(m.badge)?m.badge:'',inst,meta,minimo,nivel:nivelVendedor(inst,meta,minimo)};
+  }).sort((a,b)=>ORDEN_NIVELES.indexOf(a.nivel)-ORDEN_NIVELES.indexOf(b.nivel)||b.inst-a.inst);
+}
+function resumenVendedores(lista){
+  const n=k=>(lista||[]).filter(v=>v.nivel===k).length;
+  return{total:(lista||[]).length,objetivo:n('objetivo'),minimo:n('minimo'),no:n('no'),bono:n('objetivo')+n('minimo')};
+}
+// Lo que le sobró o le faltó, dicho como se diría.
+function notaVendedor(v){
+  const falto=f=>`le falt${f===1?'ó 1':`aron ${f}`}`;
+  if(v.nivel==='objetivo')return v.inst>v.meta?`+${v.inst-v.meta} arriba de su objetivo`:'';
+  if(v.nivel==='minimo')return `${falto(v.meta-v.inst)} para su objetivo`;
+  return `${falto(v.minimo-v.inst)} para el mínimo`;
+}
+const iconoRanking=r=>RANK_COLORS[r]?.icon||'❔';
+const etiquetaRanking=r=>r?r.charAt(0)+r.slice(1).toLowerCase():'Sin ranking';
+// En la hoja (columna "Detalle por vendedor") va un vendedor por línea, legible y con el coach
+// adelante en el resultado del líder: "Coach › Vendedor · ORO · 5 de 5 inst (mín 4)". Se arma
+// igual en apps-script.gs (lineaVendedorResultado) y aquí se lee de vuelta para el Historial.
+function vendedoresDeHoja(texto){
+  return String(texto||'').split('\n').map(l=>{
+    const m=l.trim().match(/^(?:(.+?) › )?(.+?) · (.+?) · (\d+) de (\d+) inst \(mín (\d+)\)/);
+    if(!m)return null;
+    const inst=+m[4],meta=+m[5],minimo=+m[6];
+    return{coach:m[1]||'',nombre:m[2],ranking:m[3]==='SIN RANKING'?'':m[3],inst,meta,minimo,nivel:nivelVendedor(inst,meta,minimo)};
+  }).filter(Boolean);
+}
+// Resultado del líder: los vendedores de cada coach, del registro local (porCoach) o leídos de la hoja.
+function gruposVendedoresPorCoach(r){
+  if(r.porCoach?.length)return r.porCoach.filter(c=>c.vendedores?.length).map(c=>({coach:c.coach,lista:c.vendedores}));
+  const g={};
+  (r.vendedoresPorCoach||[]).forEach(v=>(g[v.coach]=g[v.coach]||[]).push(v));
+  return Object.entries(g).map(([coach,lista])=>({coach,lista}));
+}
+// Las líneas de WhatsApp: cuántos se llevan bono y, por grupo, quién.
+function lineasVendedoresTexto(lista){
+  if(!lista?.length)return[];
+  const s=resumenVendedores(lista);
+  const lineas=['','👥 Vendedores (instalaciones de la semana):',`💰 Se llevan bono: ${s.bono} de ${s.total}`];
+  ORDEN_NIVELES.forEach(k=>{
+    const g=lista.filter(v=>v.nivel===k);
+    if(!g.length)return;
+    lineas.push('',`${NIVELES_VENDEDOR[k].emoji} ${NIVELES_VENDEDOR[k].titulo} (${g.length}):`);
+    g.forEach(v=>{const nota=notaVendedor(v);lineas.push(`• ${nombreCorto(v.nombre)} ${iconoRanking(v.ranking)} ${v.inst} de ${v.meta}${nota?` — ${nota}`:''}`);});
+  });
+  return lineas;
+}
 // Los cinco renglones del resultado contra lo que se comprometió en el plan de esa semana.
 const KPIS_RESULTADO=[
   {k:'oportunidades',label:'Oportunidades'},
@@ -898,6 +967,7 @@ function textoResultadoPlan(rec){
     const dif=x.pct==null||x.dif===0?'':` (${x.dif>0?'+':'-'}${fmtV(x,Math.abs(x.dif))})`;
     lineas.push(`${x.tono?TONO_EMOJI[x.tono]:'•'} ${x.label}: ${fmtV(x,x.real)} de ${fmtV(x,x.obj)}${cumpl}${dif}`);
   });
+  lineas.push(...lineasVendedoresTexto(rec.porVendedor));
   if(rec.comentario)lineas.push('',`💬 ${rec.comentario}`);
   if(rec.porCoach?.length){
     lineas.push('','👥 Por coach:');
@@ -908,7 +978,8 @@ function textoResultadoPlan(rec){
 // Instalaciones como resumen de un coach dentro del resultado del líder (WhatsApp y hoja).
 function lineaCoachResultado(c){
   const o=Number(c.objetivos?.instalaciones)||0,v=Number(c.resultados?.instalaciones)||0;
-  return `${nombreCorto(c.coach)}: ${v}/${o} inst${o?` (${Math.round(v/o*100)}%)`:''}${c.comentario?` — ${c.comentario}`:''}`;
+  const s=c.vendedores?.length?resumenVendedores(c.vendedores):null;
+  return `${nombreCorto(c.coach)}: ${v}/${o} inst${o?` (${Math.round(v/o*100)}%)`:''}${s?` · 💰 bono ${s.bono} de ${s.total} (🎯 ${s.objetivo} a su objetivo)`:''}${c.comentario?` — ${c.comentario}`:''}`;
 }
 // ─── Arranque: evidencia por WhatsApp ───
 // Una liga de wa.me solo lleva texto, así que las fotos se mandan con el menú de compartir del
@@ -2523,6 +2594,41 @@ function TablaComparativo({objetivos,resultados}){
     </tbody>
   </table>;
 }
+// Los vendedores del resultado, agrupados por hasta dónde llegaron contra su ranking: arriba
+// cuántos se llevan bono, y luego un grupo por nivel con lo que le sobró o le faltó a cada uno.
+function CumplimientoVendedores({lista,sinLeyenda}){
+  if(!lista?.length)return null;
+  const s=resumenVendedores(lista);
+  return <div>
+    <div style={{display:'flex',alignItems:'baseline',gap:8,flexWrap:'wrap',margin:'0 0 8px'}}>
+      <span style={{fontSize:15,fontWeight:800}}>💰 {s.bono} de {s.total} se llevan bono</span>
+      <span style={{fontSize:13,color:'var(--dim)'}}>· 🎯 {s.objetivo} llegaron a su objetivo</span>
+    </div>
+    {ORDEN_NIVELES.map(k=>{
+      const g=lista.filter(v=>v.nivel===k);
+      if(!g.length)return null;
+      const n=NIVELES_VENDEDOR[k];
+      return <div key={k} style={{background:n.fondo,borderLeft:`3px solid ${n.color}`,borderRadius:8,padding:'8px 10px',marginBottom:8}}>
+        <div style={{fontSize:13,fontWeight:800,color:n.color}}>{n.emoji} {n.titulo} ({g.length}) <span style={{fontWeight:400,color:'var(--dim)'}}>· {n.nota}</span></div>
+        {g.map(v=>{
+          const nota=notaVendedor(v);
+          return <div key={v.nombre} style={{display:'flex',alignItems:'baseline',gap:8,padding:'4px 0',fontSize:14}}>
+            <span style={{flex:1,minWidth:0}}>
+              <span style={{fontWeight:600}}>{nombreCorto(v.nombre)}</span>
+              <span style={{fontSize:12,color:'var(--dim)'}}> · {iconoRanking(v.ranking)} {etiquetaRanking(v.ranking)}</span>
+              {nota&&<span style={{display:'block',fontSize:12,color:'var(--dim)'}}>{nota}</span>}
+            </span>
+            <span style={{whiteSpace:'nowrap'}}><b>{v.inst}</b> <span style={{fontSize:12,color:'var(--dim)'}}>de {v.meta}</span></span>
+          </div>;
+        })}
+      </div>;
+    })}
+    {!sinLeyenda&&<p style={{fontSize:12,color:'var(--dim)',margin:'2px 0 0'}}>
+      Instalaciones de la semana. Objetivo por ranking: Platino 6 · Oro 5 · Plata 4 · Bronce, Entrenamiento y
+      Condicionado 3. Mínimo para bono: Platino y Oro 4; los demás, su mismo objetivo.
+    </p>}
+  </div>;
+}
 // El resultado pendiente como un solo renglón que se toca: en el Dashboard lleva al Plan, y en el
 // Plan abre o cierra el formulario. Solo existe mientras hay algo que capturar.
 function RenglonResultadoPendiente({plan,aDestiempo,abierto,onClick}){
@@ -2547,10 +2653,12 @@ function RenglonCoachResultado({c}){
   const o=Number(c.objetivos?.instalaciones)||0,v=Number(c.resultados?.instalaciones)||0;
   const pct=o?Math.round(v/o*100):null;
   const tono=pct==null?null:pct>=95?'verde':pct>=60?'amarillo':'rojo';
+  const s=c.vendedores?.length?resumenVendedores(c.vendedores):null;
   return <div style={{borderBottom:'1px solid var(--border)'}}>
     <button onClick={()=>setAbierto(a=>!a)} style={{width:'100%',display:'flex',alignItems:'center',gap:10,padding:'9px 2px',
       background:'transparent',border:'none',cursor:'pointer',color:'var(--text)',fontFamily:'inherit',textAlign:'left'}}>
       <span style={{flex:1,minWidth:0,fontSize:14,fontWeight:600,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{nombreCorto(c.coach)}</span>
+      {s&&<span title="Vendedores que se llevan bono" style={{fontSize:13,color:'var(--dim)',whiteSpace:'nowrap'}}>💰 {s.bono}/{s.total}</span>}
       <span style={{fontSize:13,color:'var(--dim)'}}>{v}/{o} inst</span>
       <span style={{fontSize:13,fontWeight:800,minWidth:40,textAlign:'right',color:tono?TONO_COLOR[tono]:'var(--dim)'}}>{pct==null?'—':`${pct}%`}</span>
       <span title={c.comentario?'Ya explicó su resultado':'Aún no captura su resultado'} style={{fontSize:13,opacity:c.comentario?1:.35}}>💬</span>
@@ -2558,6 +2666,7 @@ function RenglonCoachResultado({c}){
     </button>
     {abierto&&<div style={{padding:'0 2px 12px'}}>
       <TablaComparativo objetivos={c.objetivos} resultados={c.resultados}/>
+      {s&&<div style={{marginTop:10}}><CumplimientoVendedores lista={c.vendedores} sinLeyenda/></div>}
       <p style={{fontSize:13,margin:'8px 0 0',color:c.comentario?'var(--text)':'var(--dim)',fontStyle:c.comentario?'normal':'italic'}}>
         {c.comentario?`💬 ${c.comentario}`:'Aún no captura su resultado de esa semana.'}
       </p>
@@ -2749,10 +2858,14 @@ function PlanTab({data,setData,team,toast,session,refreshKey,abrirResultado,reco
       instalaciones:Number(fila?.['Obj. Instalaciones'])||0,cuentasRecuperadas:Number(fila?.['Obj. Cuentas recuperadas NPPF'])||0,
       arpu:Number(fila?.['Obj. ARPU'])||0};
     const suyo=masReciente(resultadosEquipo.filter(r=>r['Registrado por']===c.nombre&&r['Semana']===planPendiente.semanaLabel),'Timestamp');
+    const suyos=vendedoresPlan.filter(m=>m.reportaA===c.nombre);
     return{coach:c.nombre,objetivos,
-      resultados:resultadoRealSemana(vendedoresPlan.filter(m=>m.reportaA===c.nombre),planPendiente.semanaInicio,nowDate),
+      resultados:resultadoRealSemana(suyos,planPendiente.semanaInicio,nowDate),
+      vendedores:cumplimientoVendedores(suyos,planPendiente.semanaInicio),
       comentario:String(suyo?.['Comentario']||'').trim()};
   }):[];
+  // Coach: cada uno de sus vendedores contra su ranking (el líder lo ve dentro de cada coach).
+  const porVendedorPendiente=!esLider&&planPendiente?cumplimientoVendedores(vendedoresPlan,planPendiente.semanaInicio):[];
   const cumplioTodo=realPendiente&&comparativoResultado(planPendiente.objetivos,realPendiente).every(x=>x.tono==null||x.tono==='verde');
 
   // Lo último que se guardó: se queda en pantalla con el comparativo y el botón de WhatsApp.
@@ -2763,7 +2876,7 @@ function PlanTab({data,setData,team,toast,session,refreshKey,abrirResultado,reco
     const rec={id:uid(),type:'plan_resultado',planId:planPendiente.id,date:today(),
       semanaInicio:planPendiente.semanaInicio,semanaFin:planPendiente.semanaFin,semanaLabel:planPendiente.semanaLabel,
       objetivos:planPendiente.objetivos,resultados:realPendiente,aDestiempo:!!ventanaResultado?.aDestiempo,
-      comentario:comentarioRes.trim(),...(esLider?{porCoach:porCoachPendiente}:{}),
+      comentario:comentarioRes.trim(),...(esLider?{porCoach:porCoachPendiente}:{porVendedor:porVendedorPendiente}),
       registradoPor:session.user.nombre,token:session.token,savedAt:new Date().toISOString()};
     // WhatsApp se abre aquí mismo, dentro del clic: después de un await el navegador lo bloquearía.
     window.open(whatsappUrl(textoResultadoPlan(rec)),'_blank','noopener');
@@ -2779,6 +2892,8 @@ function PlanTab({data,setData,team,toast,session,refreshKey,abrirResultado,reco
       <Card title={`🏁 Semana ${etiquetaSemanaPlan(ultimoResultado)} cerrada`} style={{borderLeft:`3px solid ${ultimoResultado.aDestiempo?'var(--red)':'var(--green)'}`}}>
         {ultimoResultado.aDestiempo&&<AvisoDestiempo/>}
         <TablaComparativo objetivos={ultimoResultado.objetivos} resultados={ultimoResultado.resultados}/>
+        {ultimoResultado.porVendedor?.length>0&&<div style={{marginTop:12}}><CumplimientoVendedores lista={ultimoResultado.porVendedor}/></div>}
+        {ultimoResultado.porCoach?.length>0&&<div style={{marginTop:12}}>{ultimoResultado.porCoach.map(c=><RenglonCoachResultado key={c.coach} c={c}/>)}</div>}
         {ultimoResultado.comentario&&<p style={{fontSize:14,margin:'10px 0 0'}}>💬 {ultimoResultado.comentario}</p>}
         <p style={{fontSize:13,color:'var(--dim)',margin:'12px 0 8px'}}>Se abrió WhatsApp con este resultado. Si no se abrió, envíalo desde aquí:</p>
         <a href={whatsappUrl(textoResultadoPlan(ultimoResultado))} target="_blank" rel="noopener noreferrer"
@@ -2813,6 +2928,10 @@ function PlanTab({data,setData,team,toast,session,refreshKey,abrirResultado,reco
           :<>
             <TablaComparativo objetivos={planPendiente.objetivos} resultados={realPendiente}/>
             <p style={{fontSize:12,color:'var(--dim)',margin:'6px 0 0'}}>Compromiso de tu plan; real del sistema (ventas, ARPU sin IVA y cuentas pagadas esa semana).</p>
+            {porVendedorPendiente.length>0&&<div style={{marginTop:16}}>
+              <div style={{fontSize:13,fontWeight:700,color:'var(--dim)',textTransform:'uppercase',letterSpacing:'.5px',marginBottom:6}}>Tus vendedores</div>
+              <CumplimientoVendedores lista={porVendedorPendiente}/>
+            </div>}
           </>}
 
         {esLider&&porCoachPendiente.length>0&&<div style={{marginTop:16}}>
@@ -4970,7 +5089,8 @@ function resumenDe(r,vendedor){
     case'plan':return `Semana ${r.semanaLabel||''}${r.objetivos?` · obj. ${n(r.objetivos.instalaciones)} inst`:''}`;
     case'plan_resultado':{
       const o=n(r.objetivos?.instalaciones),v=n(r.resultados?.instalaciones);
-      return `Semana ${r.semanaLabel||''} · ${v}/${o} inst${o?` (${Math.round(v/o*100)}%)`:''}${r.aDestiempo?' · ⚠️ a destiempo':''}`;
+      const s=r.porVendedor?.length?resumenVendedores(r.porVendedor):null;
+      return `Semana ${r.semanaLabel||''} · ${v}/${o} inst${o?` (${Math.round(v/o*100)}%)`:''}${s?` · 💰 bono ${s.bono}/${s.total}`:''}${r.aDestiempo?' · ⚠️ a destiempo':''}`;
     }
     default:return'';
   }
@@ -5333,10 +5453,14 @@ function FichaRegistro({ev,resaltar,enfoque,onVerFoto,imprimir,conEncabezado,rol
         <Seccion titulo="Resultado vs compromiso">
           <TablaComparativo objetivos={r.objetivos} resultados={r.resultados}/>
         </Seccion>
+        {r.porVendedor?.length>0&&<Seccion titulo="Vendedores"><CumplimientoVendedores lista={r.porVendedor}/></Seccion>}
         {texto('Por qué',r.comentario)}
         {r.porCoach?.length
           ?<Seccion titulo="Por coach">{r.porCoach.map(c=><div key={c.coach} style={{fontSize:14,padding:'3px 0'}}>• {lineaCoachResultado(c)}</div>)}</Seccion>
           :r.porCoachTexto?<Seccion titulo="Por coach">{r.porCoachTexto.split('\n').filter(Boolean).map((l,i)=><div key={i} style={{fontSize:14,padding:'3px 0'}}>• {l}</div>)}</Seccion>:null}
+        {gruposVendedoresPorCoach(r).map(g=><Seccion key={g.coach} titulo={`Vendedores de ${nombreCorto(g.coach)}`}>
+          <CumplimientoVendedores lista={g.lista} sinLeyenda/>
+        </Seccion>)}
       </>;
       break;
     }
@@ -5780,8 +5904,10 @@ function reporteDetalleHTML(r){
       const fmtV=(x,v)=>escapeHtml(x.dinero?fmtMoney(v):String(v));
       return (r.aDestiempo?'<p style="color:#dc2626;font-weight:700">⚠️ Capturado a destiempo: debía quedar el lunes y se llenó el martes.</p>':'')+
         comparativoResultado(r.objetivos,r.resultados).map(x=>`<p style="margin:2px 0">${escapeHtml(x.label)}: ${fmtV(x,x.real)} / compromiso ${fmtV(x,x.obj)}${x.pct!=null?` <b>${x.pct}%</b>`:''}</p>`).join('')+
+        (r.porVendedor?.length?`<p>${lineasVendedoresTexto(r.porVendedor).filter(Boolean).map(escapeHtml).join('<br>')}</p>`:'')+
         (r.comentario?`<p><b>Por qué:</b> ${escapeHtml(r.comentario)}</p>`:'')+
-        (r.porCoach?.length?`<p><b>Por coach:</b><br>${r.porCoach.map(c=>escapeHtml(lineaCoachResultado(c))).join('<br>')}</p>`:'');
+        (r.porCoach?.length?`<p><b>Por coach:</b><br>${r.porCoach.map(c=>escapeHtml(lineaCoachResultado(c))).join('<br>')}</p>`:'')+
+        gruposVendedoresPorCoach(r).map(g=>`<p><b>Vendedores de ${escapeHtml(nombreCorto(g.coach))}:</b><br>${lineasVendedoresTexto(g.lista).filter(Boolean).slice(1).map(escapeHtml).join('<br>')}</p>`).join('');
     }
     case'feedback':
       return `<p><b>${escapeHtml(r.vendedor)}</b> — ${escapeHtml(r.tipo)}${r.semaforo?` (${escapeHtml(STATUS[r.semaforo]?.label||'')})`:''}</p>`+

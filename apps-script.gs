@@ -1208,7 +1208,16 @@ function lineaCoachResultado(c) {
   const o = Number(c.objetivos && c.objetivos.instalaciones) || 0;
   const v = Number(c.resultados && c.resultados.instalaciones) || 0;
   const pct = pctCumplimiento(v, o);
-  return `${c.coach || ''}: ${v}/${o} inst${pct !== '' ? ` (${pct}%)` : ''}${c.comentario ? ' — ' + c.comentario : ''}`;
+  const vend = c.vendedores || [];
+  const bono = vend.filter(x => x.nivel === 'objetivo' || x.nivel === 'minimo').length;
+  const alObjetivo = vend.filter(x => x.nivel === 'objetivo').length;
+  return `${c.coach || ''}: ${v}/${o} inst${pct !== '' ? ` (${pct}%)` : ''}${vend.length ? ` · bono ${bono} de ${vend.length} (${alObjetivo} a su objetivo)` : ''}${c.comentario ? ' — ' + c.comentario : ''}`;
+}
+// Un vendedor del resultado del plan. La app lo lee de vuelta con vendedoresDeHoja (index.html),
+// así que el formato tiene que quedarse igual: "Coach › Vendedor · ORO · 5 de 5 inst (mín 4) · Objetivo".
+function lineaVendedorResultado(v, coach) {
+  const nivel = { objetivo: 'Objetivo', minimo: 'Mínimo (bono)', no: 'Sin mínimo' }[v.nivel] || '';
+  return `${coach ? coach + ' › ' : ''}${v.nombre || ''} · ${v.ranking || 'SIN RANKING'} · ${Number(v.inst) || 0} de ${Number(v.meta) || 0} inst (mín ${Number(v.minimo) || 0})${nivel ? ' · ' + nivel : ''}`;
 }
 
 // ─── Configuración de pestañas y columnas ───
@@ -1270,7 +1279,9 @@ const SHEET_CONFIG = {
       'Obj. ARPU', '% ARPU',
       'A destiempo',
       // El porqué del resultado (obligatorio) y, del líder, un coach por línea con su resultado.
-      'Comentario', 'Detalle por coach'
+      'Comentario', 'Detalle por coach',
+      // Cada vendedor contra su ranking, uno por línea (en el del líder, con su coach adelante).
+      'Detalle por vendedor'
     ]
   },
   FEEDBACK: {
@@ -1525,7 +1536,11 @@ function buildRow(type, d) {
         // Capturado el martes en vez del lunes (ver ventanaResultadoPlan en la app).
         d.aDestiempo ? 'Sí' : 'No',
         d.comentario || '',
-        (d.porCoach || []).map(lineaCoachResultado).join('\n')
+        (d.porCoach || []).map(lineaCoachResultado).join('\n'),
+        (d.porCoach && d.porCoach.length
+          ? [].concat.apply([], d.porCoach.map(c => (c.vendedores || []).map(v => lineaVendedorResultado(v, c.coach))))
+          : (d.porVendedor || []).map(v => lineaVendedorResultado(v, ''))
+        ).join('\n')
       ] };
     }
 
