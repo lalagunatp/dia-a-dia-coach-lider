@@ -3496,7 +3496,7 @@ function registrarRevision({data,setData,session,toast,c,rev}){
 }
 
 // ─── Feedback ───
-function FeedbackTab({data,setData,team,toast,session,refreshKey,compromisos=[]}){
+function FeedbackTab({data,setData,team,toast,session,refreshKey,compromisos=[],recordsSemaforo=data.records}){
   const esLider=session.role==='lider';
   const[form,setForm]=useState({date:today(),vendedor:'',tipo:TIPO_CAMPO,hallazgos:'',compromisos:'',fecha_revision:'',semaforo:'',photo:null,fotos:[],campo:campoVacio()});
   const esAcompanamiento=form.tipo===TIPO_CAMPO;
@@ -3548,7 +3548,7 @@ function FeedbackTab({data,setData,team,toast,session,refreshKey,compromisos=[]}
   const selectedMember=form.vendedor?team.find(m=>m.nombre===form.vendedor):null;
   // El semáforo ya no se elige aquí: se lee el vigente (puesto desde Dashboard → Equipo) y se
   // guarda con el hallazgo tal cual estaba, sin poder cambiarlo desde esta pantalla.
-  const semaforoVigente=construirSemaforoMap(data.records)[form.vendedor]?.valor||'';
+  const semaforoVigente=construirSemaforoMap(recordsSemaforo)[form.vendedor]?.valor||'';
   // Líder: el hallazgo/feedback lo documenta sobre coaches, no directamente sobre vendedores
   // (eso le toca a cada coach) — la lista de integrantes se limita a sus coaches.
   const integrantesDisponibles=esLider?team.filter(m=>isCoach(m.posicion)):team;
@@ -3798,7 +3798,7 @@ function PanelCompromisosEquipo({items,session}){
     <p style={{fontSize:12,color:'var(--dim)',margin:'8px 0 0'}}>"A tiempo" = revisado a más tardar un día después de la fecha comprometida, de los que vencieron en los últimos 30 días.</p>
   </PanelAcordeon>;
 }
-function DashboardTab({data,setData,team,coaches,session,setTab,toast,recordsPlan=data.records,compromisos=[]}){
+function DashboardTab({data,setData,team,coaches,session,setTab,toast,recordsPlan=data.records,compromisos=[],recordsSemaforo=data.records}){
   const{role}=session;
   const now=new Date();
   const mesActual=now.getMonth();const anioActual=now.getFullYear();
@@ -4131,7 +4131,7 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast,recordsPla
   const coachesOrdenadosPendientes=esLider?Object.values(porCoachLider).filter(c=>c.pendientesTotal>0).sort((a,b)=>b.pendientesTotal-a.pendientesTotal):[];
   const coachesOrdenadosSinPagar=esLider?Object.values(porCoachLider).filter(c=>c.sinPagarTotal>0).sort((a,b)=>b.sinPagarTotal-a.sinPagarTotal):[];
 
-  const semaforoMap=construirSemaforoMap(recs);
+  const semaforoMap=construirSemaforoMap(recordsSemaforo);
   const semColor=n=>semaforoMap[n]?.valor||'';
   const verdes=vendedores.filter(m=>semColor(m.nombre)==='verde').length;
   const amarillos=vendedores.filter(m=>semColor(m.nombre)==='amarillo').length;
@@ -6493,6 +6493,23 @@ function MainApp({session:sesionRecibida,setSession,onLogout,sessionBase,vistas,
     fetchRegistrosPropiosDelSheet(session,['plan','plan_resultado']).then(recs=>{if(!cancelado)setPlanesSheet(recs);});
     return()=>{cancelado=true;};
   },[session.verComo,refreshKey]);
+  // Semáforos: cada coach los pone en SU teléfono, así que con solo lo local el líder y el director
+  // veían a todos sus vendedores en ⚪ (y el coach, si lo había marcado en otro teléfono). Se juntan
+  // los del Sheet — hoja SEMAFORO y los hallazgos que traen semáforo — con lo de este teléfono; el
+  // servidor ya filtra por jerarquía (lo propio + lo de sus coaches/líderes).
+  const[semaforosSheet,setSemaforosSheet]=useState([]);
+  useEffect(()=>{setSemaforosSheet([]);},[session.verComo]);
+  useEffect(()=>{
+    let cancelado=false;
+    fetchHistorialHoja('SEMAFORO',session.token,session.verComo).then(res=>{
+      // Si la lectura falla se conserva la anterior en vez de dejar a todos en ⚪.
+      if(!cancelado&&res.ok)setSemaforosSheet(res.registros.map(f=>recordDesdeFila('semaforo',f)).filter(Boolean));
+    });
+    return()=>{cancelado=true;};
+  },[session.verComo,refreshKey]);
+  const recordsSemaforo=useMemo(()=>unirPorId(
+    data.records.filter(r=>r.type==='feedback'||r.type==='semaforo'),
+    [...compromisosSheet.feedback,...semaforosSheet]),[data.records,compromisosSheet,semaforosSheet]);
   const actualizarInfo=async()=>{
     if(refreshing)return;
     setRefreshing(true);
@@ -6641,12 +6658,12 @@ function MainApp({session:sesionRecibida,setSession,onLogout,sessionBase,vistas,
         <div key={session.verComo||'propia'} ref={contenidoRef} className="app-contenido"><div className={anchoContenido}>
           {tab==='dashboard'&&estadoResultado.pendiente&&<RenglonResultadoPendiente plan={estadoResultado.pendiente}
             aDestiempo={estadoResultado.ventana.aDestiempo} onClick={()=>irATab('plan',{abrirResultado:true})}/>}
-          {tab==='dashboard'&&<DashboardTab data={data} setData={setData} team={allTeam} coaches={coaches} session={session} setTab={irATab} toast={toast} recordsPlan={recordsPlan} compromisos={compromisos}/>}
+          {tab==='dashboard'&&<DashboardTab data={data} setData={setData} team={allTeam} coaches={coaches} session={session} setTab={irATab} toast={toast} recordsPlan={recordsPlan} compromisos={compromisos} recordsSemaforo={recordsSemaforo}/>}
           {tab==='arranque'&&<ArranqueTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
           {tab==='permisos'&&<PermisosTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
           {tab==='cierre'&&<CierreTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
           {tab==='plan'&&<PlanTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey} abrirResultado={abrirResultado} recordsPlan={recordsPlan} planesListos={planesListos}/>}
-          {tab==='feedback'&&<FeedbackTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey} compromisos={compromisos}/>}
+          {tab==='feedback'&&<FeedbackTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey} compromisos={compromisos} recordsSemaforo={recordsSemaforo}/>}
           {tab==='historial'&&<HistorialTab data={data} session={session} refreshKey={refreshKey} seguimientos={seguimientos}/>}
           {/* El puesto propio (no el de la vista prestada): el manual abre en el de quien entró. */}
           {tab==='manual'&&<ManualTab rolPropio={sessionBase?.role||role}/>}
