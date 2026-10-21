@@ -1606,8 +1606,11 @@ function semaforoAutomatico(m,ref){
   const suma=conDato.reduce((s,x)=>s+x.peso,0);
   const puntaje=Math.round(conDato.reduce((s,x)=>s+x.peso*PUNTOS_SEMAFORO[x.color],0)/suma);
   let final=puntaje>=CORTE_SEM_VERDE?'verde':puntaje>=CORTE_SEM_AMARILLO?'amarillo':'rojo',motivo='';
-  const mesesCond=m.rankingEnt?0:Number(m.rankingMen?.mesesCondicionado)||0;
-  if(esCondicionado(m.badge)&&mesesCond>=MESES_CONDICIONADO_NEGRO){
+  // Negro: 2+ meses seguidos como CONDICIONADO en la hoja de ranking mensual, contando el actual
+  // (el servidor solo lo manda si el mes actual dice CONDICIONADO). Se toma de ahí aunque su ranking
+  // en la app venga de la pestaña de Entrenamiento: antes eso lo dejaba en 0 y nunca salía negro.
+  const mesesCond=Number(m.rankingMen?.mesesCondicionado)||0;
+  if(mesesCond>=MESES_CONDICIONADO_NEGRO){
     final='negro';
     motivo=`Lleva ${mesesCond} meses seguidos como condicionado`;
   }else if(esCondicionado(m.badge)){

@@ -688,9 +688,13 @@ function guardarFoto(foto, snap, etiqueta) {
 function actualizarSnapshotVentas() {
   return guardarFoto(FOTO_VENTAS, calcularVentasDistrito(), 'ventas');
 }
+// Subir este número cuando cambie lo que lleva cada vendedor en la foto de ranking: una foto armada
+// con el código anterior no lo trae, y sin esto se seguía sirviendo hasta la siguiente corrida del
+// activador (o hasta que cambiara la BASE). Con él, la primera lectura la rearma al momento.
+const FORMATO_FOTO_RANKING = 2; // 2: campos del semáforo (mesesCondicionado, medirComo…)
 function actualizarSnapshotRanking() {
   const inicio = Date.now(); // mismo criterio que calcularVentasDistrito
-  return guardarFoto(FOTO_RANKING, { generado: inicio, rankEnt: leerRankingEntrenamiento(), rankMen: leerRankingMensual() }, 'ranking');
+  return guardarFoto(FOTO_RANKING, { generado: inicio, formato: FORMATO_FOTO_RANKING, rankEnt: leerRankingEntrenamiento(), rankMen: leerRankingMensual() }, 'ranking');
 }
 
 // Activador: cada 30 minutos entre las 6:00 y las 22:00 (de noche no se captura nada y así el
@@ -1030,7 +1034,9 @@ function obtenerRanking(params) {
     // De la foto de cada 30 minutos (ver actualizarSnapshotRanking), rearmada si la BASE cambió
     // después (fotoAlDia). Espera corta: esta lectura tiene 15s en el cliente, y si ventas tiene el
     // candado se usa la foto anterior.
-    const snap = fotoAlDia(FOTO_RANKING, actualizarSnapshotRanking, 5000);
+    let snap = fotoAlDia(FOTO_RANKING, actualizarSnapshotRanking, 5000);
+    // Foto armada con un código anterior (le faltan campos nuevos): se rearma una vez, ya.
+    if (snap.formato !== FORMATO_FOTO_RANKING) snap = actualizarSnapshotRanking();
 
     const rankEnt = {};
     const rankEntFull = snap.rankEnt;
