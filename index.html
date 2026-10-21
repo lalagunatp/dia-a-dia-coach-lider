@@ -28,7 +28,7 @@
    Casi todo el texto trae su tamaño en línea, pero esto fija el piso de lo que no lo trae y evita
    que algo herede los 16px del navegador y se vea fuera de escala. */
 body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:#f0f2f8;color:#1a1d29;-webkit-font-smoothing:antialiased;font-size:15px;line-height:1.45}
-:root{--bg:#f0f2f8;--card:#fff;--text:#1a1d29;--dim:#6b7086;--border:#e2e4ec;--accent:#1e40af;--accent2:#3b82f6;--accent-light:#dbeafe;--input:#f8f9fc;--green:#16a34a;--yellow:#ca8a04;--red:#dc2626;--gbg:#f0fdf4;--ybg:#fefce8;--rbg:#fef2f2;--nest-bg:#f7f3ec;--nest-border:#d9c9a8}
+:root{--bg:#f0f2f8;--card:#fff;--text:#1a1d29;--dim:#6b7086;--border:#e2e4ec;--accent:#1e40af;--accent2:#3b82f6;--accent-light:#dbeafe;--input:#f8f9fc;--green:#16a34a;--yellow:#ca8a04;--red:#dc2626;--gbg:#f0fdf4;--ybg:#fefce8;--rbg:#fef2f2;--black:#111827;--kbg:#e5e7eb;--nest-bg:#f7f3ec;--nest-border:#d9c9a8}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
 @keyframes spin{to{transform:rotate(360deg)}}
 @keyframes fadeIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
@@ -271,10 +271,12 @@ const STATUS={
   verde:{bg:'var(--gbg)',border:'var(--green)',label:'Verde'},
   amarillo:{bg:'var(--ybg)',border:'var(--yellow)',label:'Amarillo'},
   rojo:{bg:'var(--rbg)',border:'var(--red)',label:'Rojo'},
+  // Solo lo pone el cálculo automático: condicionado 2 meses o más seguidos (ver semaforoAutomatico).
+  negro:{bg:'var(--kbg)',border:'var(--black)',label:'Negro'},
 };
 // El color solo no dice qué hacer. Cada uno lleva su significado y su emoji para que marcarlo no
 // dependa de que cada coach se acuerde del criterio.
-const SEM_EMOJI={verde:'🟢',amarillo:'🟡',rojo:'🔴'};
+const SEM_EMOJI={verde:'🟢',amarillo:'🟡',rojo:'🔴',negro:'⚫'};
 const SEM_OPCIONES=[
   {valor:'verde',emoji:'🟢',titulo:'Va bien',ayuda:'Cumple meta y ritmo'},
   {valor:'amarillo',emoji:'🟡',titulo:'Ojo',ayuda:'Se está quedando corto'},
@@ -1454,6 +1456,167 @@ function semanaMenos(semana,n,ref){
 // cuentan en ninguna: se sabe que ya se pagaron, pero no cuándo.
 function pagadasEnSemana(pagadas,semana){
   return pagadas.filter(c=>c.semanaPago===semana).length;
+}
+
+// ═══ SEMÁFORO AUTOMÁTICO ═══
+// El semáforo de cada vendedor ya no lo elige el coach: sale de siete rubros, cada uno con su base y
+// su meta. Cada rubro queda 🟢 (llega a la meta, 100 pts), 🟡 (entre la base y la meta, 50) o 🔴 (no
+// llega a la base, 0). La calificación es el promedio ponderado, con peso 1 ÷ prioridad (prioridad 1
+// es lo más importante): 🟢 de 80 para arriba, 🟡 de 50 a 79, 🔴 abajo de 50. Un rubro sin datos
+// (sin instaladas no hay ARPU, por ejemplo) no cuenta y su peso se reparte entre los demás.
+// Los rubros que se miden "en el mes" son del mes en curso, hasta hoy.
+const RUBROS_SEMAFORO=[
+  {k:'objetivo',icon:'🎯',label:'Objetivo de instalaciones',prioridad:1},
+  {k:'nppf',icon:'💰',label:'Cuentas sin pagar (NPPF)',prioridad:2},
+  {k:'conversion',icon:'🔄',label:'Conversión validado → instalado',prioridad:2.5},
+  {k:'arpu',icon:'💵',label:'ARPU (sin IVA)',prioridad:3},
+  {k:'ranking',icon:'🏅',label:'Ranking',prioridad:5},
+  {k:'cert',icon:'📚',label:'Certificaciones',prioridad:5},
+  {k:'semanas',icon:'📅',label:'Semanas con bono en el mes',prioridad:6},
+];
+const PUNTOS_SEMAFORO={verde:100,amarillo:50,rojo:0};
+const CORTE_SEM_VERDE=80,CORTE_SEM_AMARILLO=50;
+const ARPU_BASE=460,ARPU_META=480;
+const NPPF_BASE=10,NPPF_META=5; // % sin pagar: aquí menos es mejor
+const CONV_BASE=85,CONV_META=90; // instaladas ÷ validadas del mes, en %
+const SEMANAS_BONO_BASE=3; // la meta es todas las semanas del mes (4 o 5)
+// No debe haber condicionados: uno queda en 🟡 solo si al menos el 80% de sus otros rubros (todos
+// menos el de ranking) está en 🟢; si no, en 🔴. Nunca en 🟢. Con 2 meses o más seguidos como
+// condicionado (contando el actual, ver leerRankingMensual) es ⚫ negro, sin importar lo demás.
+const PCT_RUBROS_CONDICIONADO=0.8;
+const MESES_CONDICIONADO_NEGRO=2;
+const esCondicionado=b=>String(b||'').includes('CONDICIONADO');
+const RANKING_VERDE=['ORO','PLATINO','DIAMANTE'],RANKING_AMARILLO=['BRONCE','PLATA'];
+const nombreRanking=b=>b?b.charAt(0)+b.slice(1).toLowerCase():'';
+// Las ventas, cuentas y ranking ya llegaron (no es la sesión mínima del login ni una guardada sin
+// ventas, y no falló la lectura): sin esto el semáforo saldría rojo para todos mientras cargan.
+const ventasListas=s=>!s.cargandoDatos&&!s.sinVentasGuardadas&&!s.avisoDatos;
+
+// Quien bajó de ORO a PLATA o de PLATA a BRONCE después de al menos 3 meses en el ranking anterior
+// se sigue midiendo con ese ranking hasta que vuelva a subir (lo decide el servidor, que tiene el
+// historial de la hoja: ver leerRankingMensual). Aplica al objetivo de instalaciones, a las semanas
+// con bono y a las certificaciones; el rubro "Ranking" sigue siendo el ranking real.
+function rankingMedicion(m){
+  const rm=m.rankingMen;
+  if(!m.rankingEnt&&rm?.medirComo&&m.badge!==rm.medirComo)return{badge:rm.medirComo,bajada:{de:rm.medirComo,mes:rm.bajoEn||'',meses:rm.mesesAntes||0}};
+  return{badge:m.badge,bajada:null};
+}
+// Cuentas sin pagar: las instaladas en los 30 días anteriores a la semana pasada (ni la semana en
+// curso ni la anterior entran, porque todavía no les toca pagarse).
+function ventanaNPPF(ref){
+  const corte=startOfWeek(ref);corte.setDate(corte.getDate()-7); // lunes de la semana pasada
+  const ini=new Date(corte);ini.setDate(ini.getDate()-30);
+  return{ini,fin:new Date(corte.getTime()-1)};
+}
+// Lunes de las semanas del mes: cada semana es del mes de su lunes.
+function semanasDelMes(ref){
+  const ini=startOfMonth(ref),fin=endOfMonth(ref);
+  const l=startOfWeek(ini);if(l<ini)l.setDate(l.getDate()+7);
+  const out=[];
+  for(const d=new Date(l);d<=fin;d.setDate(d.getDate()+7))out.push(new Date(d));
+  return out;
+}
+function semaforoAutomatico(m,ref){
+  const{badge:R,bajada}=rankingMedicion(m);
+  const iniMes=startOfMonth(ref),finMes=endOfMonth(ref);
+  const fMes=funnelPeriodo(m.ventas,iniMes,ref);
+  const color=(meta,base)=>meta?'verde':base?'amarillo':'rojo';
+  const r={};
+  // Objetivo de instalaciones por ranking, prorrateado a los días que van del mes: a media
+  // quincena no se le puede pedir la meta del mes completo.
+  {
+    const dia=ref.getDate(),dias=finMes.getDate();
+    const metaMes=metaMensual(R),minMes=Math.round(minimoBono(R)*4.33);
+    const meta=Math.floor(metaMes*dia/dias),min=Math.floor(minMes*dia/dias);
+    r.objetivo={color:color(fMes.instaladas>=meta,fMes.instaladas>=min),valor:`${fMes.instaladas} inst.`,
+      detalle:`al día ${dia}: objetivo ${meta}, mínimo ${min} (del mes completo: ${metaMes})`};
+  }
+  {
+    const{ini,fin}=ventanaNPPF(ref);
+    const ctas=(m.cuentasCom||[]).filter(c=>enRango(c.fechaInstalacion,ini,fin));
+    if(ctas.length){
+      const sin=ctas.filter(c=>!/^YA COMISIONADA/i.test(c.estatusPago)).length,pct=sin/ctas.length*100;
+      r.nppf={color:color(pct<=NPPF_META,pct<=NPPF_BASE),valor:`${Math.round(pct)}%`,
+        detalle:`${sin} sin pagar de ${ctas.length} instaladas del ${fmtDateObj(ini)} al ${fmtDateObj(fin)} · base ${NPPF_BASE}%, meta ${NPPF_META}%`};
+    }
+  }
+  if(fMes.validadas){
+    const pct=fMes.instaladas/fMes.validadas*100;
+    r.conversion={color:color(pct>=CONV_META,pct>=CONV_BASE),valor:`${Math.round(pct)}%`,
+      detalle:`${fMes.instaladas} instaladas ÷ ${fMes.validadas} validadas del mes · base ${CONV_BASE}%, meta ${CONV_META}%`};
+  }
+  {
+    const arpu=arpuPromedioPeriodo(m.ventas,iniMes,ref);
+    if(arpu>0)r.arpu={color:color(arpu>=ARPU_META,arpu>=ARPU_BASE),valor:fmtMoney(arpu),
+      detalle:`promedio de las instaladas del mes · base ${fmtMoney(ARPU_BASE)}, meta ${fmtMoney(ARPU_META)}`};
+  }
+  if(tieneRanking(m.badge)){
+    r.ranking={color:RANKING_VERDE.includes(m.badge)?'verde':RANKING_AMARILLO.includes(m.badge)?'amarillo':'rojo',valor:nombreRanking(m.badge),
+      detalle:esCondicionado(m.badge)?'no debe haber condicionados':'base Bronce, meta Oro'};
+  }
+  // Certificaciones: todas las que pide su ranking (o el ranking con el que se le mide).
+  if(m.rankingEnt||m.rankingMen?.certTotal!=null){
+    const faltan=(bajada&&m.rankingMen?.certFaltantesMedicion)||m.certFaltantes||[];
+    r.cert={color:faltan.length?'rojo':'verde',valor:faltan.length?`faltan ${faltan.length}`:'100%',
+      detalle:faltan.length?faltan.join(', '):`completas para ${nombreRanking(R)||'su ranking'}`};
+  }
+  // Semanas con bono: de las semanas del mes que ya cerraron, en cuántas llegó al mínimo del bono.
+  // 🟢 si no ha fallado ninguna; 🟡 mientras todavía pueda juntar 3 en el mes; 🔴 si ya no.
+  {
+    const semanas=semanasDelMes(ref),cerradas=semanas.filter(l=>endOfWeek(l)<ref);
+    if(cerradas.length){
+      const minimo=minimoBono(R);
+      const conBono=cerradas.filter(l=>funnelPeriodo(m.ventas,l,endOfWeek(l)).instaladas>=minimo).length;
+      const fallo=cerradas.length-conBono;
+      r.semanas={color:fallo===0?'verde':fallo<=semanas.length-SEMANAS_BONO_BASE?'amarillo':'rojo',valor:`${conBono} de ${cerradas.length}`,
+        detalle:`semanas cerradas con bono (mín. ${minimo} inst.) · el mes tiene ${semanas.length}: base ${SEMANAS_BONO_BASE}, meta todas`};
+    }
+  }
+  const rubros=RUBROS_SEMAFORO.map(x=>({...x,peso:1/x.prioridad,color:null,...r[x.k]}));
+  const conDato=rubros.filter(x=>x.color);
+  if(!conDato.length)return{color:null,puntaje:null,rubros,medidoComo:R,bajada,motivo:''};
+  const suma=conDato.reduce((s,x)=>s+x.peso,0);
+  const puntaje=Math.round(conDato.reduce((s,x)=>s+x.peso*PUNTOS_SEMAFORO[x.color],0)/suma);
+  let final=puntaje>=CORTE_SEM_VERDE?'verde':puntaje>=CORTE_SEM_AMARILLO?'amarillo':'rojo',motivo='';
+  const mesesCond=m.rankingEnt?0:Number(m.rankingMen?.mesesCondicionado)||0;
+  if(esCondicionado(m.badge)&&mesesCond>=MESES_CONDICIONADO_NEGRO){
+    final='negro';
+    motivo=`Lleva ${mesesCond} meses seguidos como condicionado`;
+  }else if(esCondicionado(m.badge)){
+    const otros=conDato.filter(x=>x.k!=='ranking');
+    const necesita=Math.ceil(otros.length*PCT_RUBROS_CONDICIONADO-1e-9);
+    const verdes=otros.filter(x=>x.color==='verde').length;
+    final=otros.length&&verdes>=necesita?'amarillo':'rojo';
+    motivo=`Condicionado: ${verdes} de ${otros.length} rubros en verde (necesita ${necesita} para quedar en amarillo)`;
+  }
+  return{color:final,puntaje,rubros,medidoComo:R,bajada,motivo};
+}
+// El coach puede cambiar el color, pero con motivo: se guarda como registro 'semaforo' con el motivo
+// en la Nota, y vale solo en el mes en que se puso. Los registros que deja el cálculo automático
+// (foto semanal, nota "Automático · …") no son ajustes; "Regresó al automático" quita el ajuste.
+const PREFIJO_SEM_AUTO='Automático';
+const NOTA_SIN_AJUSTE='Regresó al automático';
+const esNotaSemAuto=n=>String(n||'').startsWith(PREFIJO_SEM_AUTO);
+function ajustesSemaforo(records,ref){
+  const mes=ymdLocal(ref).slice(0,7);
+  const map={};
+  (records||[])
+    .filter(r=>r.type==='semaforo'&&r.vendedor&&STATUS[r.semaforo]&&String(r.date||'').startsWith(mes)&&String(r.nota||'').trim()&&!esNotaSemAuto(r.nota))
+    .sort((a,b)=>String(a.savedAt||'').localeCompare(String(b.savedAt||'')))
+    .forEach(r=>{map[r.vendedor]=r.nota===NOTA_SIN_AJUSTE?null:{valor:r.semaforo,motivo:r.nota,fecha:r.date||'',porQuien:r.registradoPor||''};});
+  return map;
+}
+// Semáforo que vale para un vendedor: el ajuste del coach si lo hay, si no el automático. El negro
+// (condicionado 2 meses o más) es regla fija: ahí no vale ningún ajuste.
+function semaforoDeVendedor(m,ajustes,ref,listo){
+  const auto=listo?semaforoAutomatico(m,ref):null;
+  const ajuste=auto?.color==='negro'?null:(ajustes||{})[m.nombre]||null;
+  return{auto,ajuste,valor:ajuste?.valor||auto?.color||''};
+}
+// Resumen de una línea para la Nota de la foto semanal (hoja SEMAFORO e Historial).
+function notaSemaforoAuto(auto){
+  const partes=auto.rubros.filter(x=>x.color).map(x=>`${x.label} ${SEM_EMOJI[x.color]} ${x.valor}`);
+  return `${PREFIJO_SEM_AUTO} · ${auto.puntaje}/100${auto.bajada?` · medido como ${nombreRanking(auto.medidoComo)}`:''} · ${partes.join(' · ')}${auto.motivo?' · '+auto.motivo:''}`;
 }
 
 // Enrich team with ranking data
@@ -3546,9 +3709,12 @@ function FeedbackTab({data,setData,team,toast,session,refreshKey,compromisos=[],
     setForm({date:today(),vendedor:'',tipo:TIPO_CAMPO,hallazgos:'',compromisos:'',fecha_revision:'',semaforo:'',photo:null,fotos:[],campo:campoVacio()});
   };
   const selectedMember=form.vendedor?team.find(m=>m.nombre===form.vendedor):null;
-  // El semáforo ya no se elige aquí: se lee el vigente (puesto desde Dashboard → Equipo) y se
-  // guarda con el hallazgo tal cual estaba, sin poder cambiarlo desde esta pantalla.
-  const semaforoVigente=construirSemaforoMap(recordsSemaforo)[form.vendedor]?.valor||'';
+  // El semáforo ya no se elige aquí: se lee el vigente y se guarda con el hallazgo tal cual estaba,
+  // sin poder cambiarlo desde esta pantalla. A un vendedor le toca el automático (o el ajuste de su
+  // coach); a un coach, que el líder documenta, el último que se le haya puesto a mano.
+  const semaforoVigente=!selectedMember?''
+    :isVendedor(selectedMember.posicion)?semaforoDeVendedor(selectedMember,ajustesSemaforo(recordsSemaforo,new Date()),new Date(),ventasListas(session)).valor
+    :construirSemaforoMap(recordsSemaforo)[form.vendedor]?.valor||'';
   // Líder: el hallazgo/feedback lo documenta sobre coaches, no directamente sobre vendedores
   // (eso le toca a cada coach) — la lista de integrantes se limita a sus coaches.
   const integrantesDisponibles=esLider?team.filter(m=>isCoach(m.posicion)):team;
@@ -3659,7 +3825,7 @@ function FeedbackTab({data,setData,team,toast,session,refreshKey,compromisos=[],
               ? <StatusBadge status={semaforoVigente}/>
               : <span style={{fontSize:14,color:'var(--yellow)',fontWeight:600}}>⚪ Sin semáforo</span>)
           : <span style={{fontSize:14,color:'var(--dim)'}}>Selecciona un integrante</span>}
-        <span style={{fontSize:13,color:'var(--dim)'}}>· se pone en Dashboard → Equipo</span>
+        <span style={{fontSize:13,color:'var(--dim)'}}>· se calcula solo; el desglose está en Dashboard → Equipo</span>
       </div>
     </Card>
     {esEvidenciaExterna&&<Card title="📷 Evidencia (obligatoria)">
@@ -3798,6 +3964,65 @@ function PanelCompromisosEquipo({items,session}){
     <p style={{fontSize:12,color:'var(--dim)',margin:'8px 0 0'}}>"A tiempo" = revisado a más tardar un día después de la fecha comprometida, de los que vencieron en los últimos 30 días.</p>
   </PanelAcordeon>;
 }
+// Desglose del semáforo automático de un vendedor (rubro por rubro) y, debajo, el ajuste del coach:
+// puede ponerle otro color, pero con motivo obligatorio, y se siguen viendo los dos. Va fuera de
+// DashboardTab para que el motivo que se está escribiendo no se pierda en cada tecla.
+function PanelSemaforo({m,info,listo,puedeAjustar,onAjustar,onQuitarAjuste}){
+  const{auto,ajuste}=info||{};
+  const[valor,setValor]=useState('');
+  const[motivo,setMotivo]=useState('');
+  const fila={display:'flex',justifyContent:'space-between',gap:8,alignItems:'baseline'};
+  return <div style={{fontSize:13}}>
+    {!listo&&<p style={{color:'var(--dim)',marginBottom:8}}>⏳ Esperando las ventas y el ranking para calcular el semáforo…</p>}
+    {listo&&!auto?.color&&<p style={{color:'var(--dim)',marginBottom:8}}>⚪ No hay datos suficientes para calcularlo.</p>}
+    {auto?.color&&<>
+      <div style={{...fila,marginBottom:6}}>
+        <span style={{fontWeight:700,color:'var(--dim)'}}>🤖 Automático</span>
+        <span style={{fontWeight:800,color:STATUS[auto.color].border}}>{SEM_EMOJI[auto.color]} {STATUS[auto.color].label} · {auto.puntaje}/100</span>
+      </div>
+      {auto.bajada&&<p style={{color:'var(--yellow)',marginBottom:6,lineHeight:1.4}}>
+        ⬇️ Bajó a {nombreRanking(m.badge)}{auto.bajada.mes?` en ${auto.bajada.mes.toLowerCase()}`:''} después de {auto.bajada.meses} meses en {nombreRanking(auto.bajada.de)}: se le mide como <b>{nombreRanking(auto.bajada.de)}</b> hasta que vuelva a subir.
+      </p>}
+      {auto.rubros.map(x=><div key={x.k} style={{padding:'5px 0',borderBottom:'1px solid var(--border)'}}>
+        <div style={fila}>
+          <span>{x.icon} {x.label} <span style={{color:'var(--dim)',fontSize:12}}>(prioridad {x.prioridad})</span></span>
+          <b style={{whiteSpace:'nowrap',color:x.color?STATUS[x.color].border:'var(--dim)'}}>{x.color?`${SEM_EMOJI[x.color]} ${x.valor}`:'— sin dato'}</b>
+        </div>
+        {x.detalle&&<div style={{fontSize:12,color:'var(--dim)',lineHeight:1.35,marginTop:1}}>{x.detalle}</div>}
+      </div>)}
+      {auto.motivo&&<p style={{color:'var(--red)',fontWeight:600,marginTop:6,lineHeight:1.4}}>⚠️ {auto.motivo}</p>}
+      <p style={{fontSize:12,color:'var(--dim)',marginTop:6,lineHeight:1.4}}>Calificación ponderada (peso = 1 ÷ prioridad): 🟢 {CORTE_SEM_VERDE} o más · 🟡 {CORTE_SEM_AMARILLO} a {CORTE_SEM_VERDE-1} · 🔴 menos de {CORTE_SEM_AMARILLO}.</p>
+    </>}
+    {ajuste&&<div style={{marginTop:8,padding:'8px 10px',borderRadius:8,background:STATUS[ajuste.valor].bg,border:`1px solid ${STATUS[ajuste.valor].border}`}}>
+      <div style={{fontWeight:700}}>✋ Ajustado a {SEM_EMOJI[ajuste.valor]} {STATUS[ajuste.valor].label}{ajuste.porQuien?` por ${nombreCorto(ajuste.porQuien)}`:''}{ajuste.fecha?` · ${fmt(ajuste.fecha)}`:''}</div>
+      <div style={{color:'var(--dim)',marginTop:2}}>Motivo: {ajuste.motivo}</div>
+      {puedeAjustar&&<Btn variant="ghost" style={{fontSize:13,padding:'6px 0',marginTop:4}} onClick={onQuitarAjuste}>↩️ Regresar al automático</Btn>}
+    </div>}
+    {puedeAjustar&&auto?.color==='negro'&&<p style={{fontSize:12,color:'var(--dim)',marginTop:8}}>El negro no se puede ajustar: sale por llevar 2 meses o más como condicionado.</p>}
+    {puedeAjustar&&auto?.color!=='negro'&&<div style={{marginTop:10}}>
+      <div style={{fontWeight:700,color:'var(--dim)',marginBottom:6}}>{ajuste?'Cambiar el ajuste':'¿No refleja cómo va? Ajústalo'} (con motivo)</div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:8}}>
+        {SEM_OPCIONES.map(o=>{
+          const activo=valor===o.valor;
+          return <button key={o.valor} onClick={()=>setValor(o.valor)}
+            style={{display:'flex',flexDirection:'column',alignItems:'center',gap:2,padding:'10px 6px',borderRadius:10,cursor:'pointer',
+              border:`2px solid ${activo?STATUS[o.valor].border:'var(--border)'}`,
+              background:activo?STATUS[o.valor].bg:'var(--input)'}}>
+            <span style={{fontSize:20,lineHeight:1}}>{o.emoji}</span>
+            <span style={{fontSize:13,fontWeight:800,color:STATUS[o.valor].border}}>{o.titulo}</span>
+          </button>;
+        })}
+      </div>
+      <Textarea value={motivo} onChange={e=>setMotivo(e.target.value)} placeholder="Motivo del ajuste (obligatorio)" style={{minHeight:60,fontSize:14}}/>
+      <Btn style={{marginTop:8,fontSize:14,width:'100%'}} disabled={!valor||!motivo.trim()}
+        onClick={()=>{const t=motivo.trim();if(!valor||!t)return;if(esNotaSemAuto(t)||t===NOTA_SIN_AJUSTE){alert('Escribe el motivo con tus palabras');return;}onAjustar(valor,t);}}>
+        Guardar ajuste
+      </Btn>
+      <p style={{fontSize:12,color:'var(--dim)',marginTop:6}}>El ajuste vale para este mes. Se siguen viendo los dos: el automático y el tuyo.</p>
+    </div>}
+  </div>;
+}
+
 function DashboardTab({data,setData,team,coaches,session,setTab,toast,recordsPlan=data.records,compromisos=[],recordsSemaforo=data.records}){
   const{role}=session;
   const now=new Date();
@@ -4131,21 +4356,32 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast,recordsPla
   const coachesOrdenadosPendientes=esLider?Object.values(porCoachLider).filter(c=>c.pendientesTotal>0).sort((a,b)=>b.pendientesTotal-a.pendientesTotal):[];
   const coachesOrdenadosSinPagar=esLider?Object.values(porCoachLider).filter(c=>c.sinPagarTotal>0).sort((a,b)=>b.sinPagarTotal-a.sinPagarTotal):[];
 
-  const semaforoMap=construirSemaforoMap(recordsSemaforo);
-  const semColor=n=>semaforoMap[n]?.valor||'';
+  // Semáforo automático (ver semaforoAutomatico) o, si el coach lo cambió este mes, su ajuste.
+  const listoSem=ventasListas(session);
+  const ajustesSem=ajustesSemaforo(recordsSemaforo,now);
+  const semPorVendedor={};
+  vendedores.forEach(m=>{semPorVendedor[m.nombre]=semaforoDeVendedor(m,ajustesSem,now,listoSem);});
+  const semColor=n=>semPorVendedor[n]?.valor||'';
   const verdes=vendedores.filter(m=>semColor(m.nombre)==='verde').length;
   const amarillos=vendedores.filter(m=>semColor(m.nombre)==='amarillo').length;
   const rojos=vendedores.filter(m=>semColor(m.nombre)==='rojo').length;
-  const sinEval=vendedores.length-verdes-amarillos-rojos;
-  // Marcar el semáforo es un toque: se guarda un registro propio, sin abrir formulario.
-  const marcarSemaforo=(nombre,valor)=>{
+  const negros=vendedores.filter(m=>semColor(m.nombre)==='negro').length;
+  const sinEval=vendedores.length-verdes-amarillos-rojos-negros;
+  // Ajustar el semáforo pide motivo; "regresar al automático" deja un registro que quita el ajuste.
+  const guardarSemaforo=(nombre,valor,nota)=>{
     if(session.soloLectura)return; // vista prestada: solo consulta
-    if(semColor(nombre)===valor)return; // mismo color: no se guarda un registro de más
-    const rec={id:uid(),type:'semaforo',date:today(),vendedor:nombre,semaforo:valor,nota:'',
+    const rec={id:uid(),type:'semaforo',date:today(),vendedor:nombre,semaforo:valor,nota,
       registradoPor:session.user.nombre,token:session.token,savedAt:new Date().toISOString()};
     const upd={...data,records:[...data.records,rec]};
     setData(upd);saveAndSync(upd,rec,toast,setData);
-    toast(`${SEM_EMOJI[valor]} ${nombreCorto(nombre)} en ${STATUS[valor].label.toLowerCase()}`);
+  };
+  const ajustarSemaforo=(nombre,valor,motivo)=>{
+    guardarSemaforo(nombre,valor,motivo);
+    toast(`${SEM_EMOJI[valor]} ${nombreCorto(nombre)} ajustado a ${STATUS[valor].label.toLowerCase()}`);
+  };
+  const quitarAjusteSemaforo=(nombre,valorAuto)=>{
+    guardarSemaforo(nombre,valorAuto,NOTA_SIN_AJUSTE);
+    toast(`${nombreCorto(nombre)} regresó al semáforo automático`);
   };
   const hoy=today();
   // Los compromisos que documentó esta persona (los de su equipo van en PanelCompromisosEquipo).
@@ -4169,6 +4405,7 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast,recordsPla
     {verdes>0&&<div style={{flex:verdes,background:'var(--green)',display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:13,fontWeight:700}}>{verdes}</div>}
     {amarillos>0&&<div style={{flex:amarillos,background:'var(--yellow)',display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:13,fontWeight:700}}>{amarillos}</div>}
     {rojos>0&&<div style={{flex:rojos,background:'var(--red)',display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:13,fontWeight:700}}>{rojos}</div>}
+    {negros>0&&<div style={{flex:negros,background:'var(--black)',display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:13,fontWeight:700}}>{negros}</div>}
     {sinEval>0&&<div style={{flex:sinEval,background:'#d1d5db',display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:13,fontWeight:700}}>{sinEval}</div>}
   </div>;
 
@@ -4311,8 +4548,8 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast,recordsPla
   // nested=true: esta fila se muestra dentro de un coach expandido (vista líder) — usa un tono
   // cálido/orgánico distinto al de la tarjeta del coach, para que se note el cambio de nivel.
   const VendedorRow=({m,nested})=>{
-    const semInfo=semaforoMap[m.nombre];
-    const sem=semInfo?.valor||'';
+    const semInfo=semPorVendedor[m.nombre]||{};
+    const sem=semInfo.valor||'';
     const isExp=expanded===m.nombre;
     const abiertoSem=semAbierto===m.nombre;
     const lastFb=recs.filter(r=>r.type==='feedback'&&r.vendedor===m.nombre).sort((a,b)=>b.savedAt.localeCompare(a.savedAt))[0];
@@ -4326,7 +4563,7 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast,recordsPla
         display:'flex',alignItems:'center',justifyContent:'space-between',
         padding:'10px 12px',borderRadius:isExp?'10px 10px 0 0':10,marginBottom:isExp?0:5,cursor:'pointer',
         borderLeft:`5px solid ${franja}`,
-        background:sem==='rojo'?'var(--rbg)':sem==='amarillo'?'var(--ybg)':sem==='verde'?'var(--gbg)':nested?'var(--nest-bg)':'transparent',
+        background:sem==='negro'?'var(--kbg)':sem==='rojo'?'var(--rbg)':sem==='amarillo'?'var(--ybg)':sem==='verde'?'var(--gbg)':nested?'var(--nest-bg)':'transparent',
         border:`1px solid ${sem?STATUS[sem].border:nested?'var(--nest-border)':'var(--border)'}`,
         borderLeftWidth:5,borderLeftColor:franja,
         borderBottom:isExp?'none':undefined,
@@ -4356,38 +4593,23 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast,recordsPla
         </div>
         <div style={{display:'flex',alignItems:'center',gap:6}}>
           {/* El botón del semáforo NO abre el detalle del vendedor: stopPropagation, si no, cada
-              intento de marcar terminaría desplegando la ficha. En vista prestada no
-              se puede capturar nada, así que ahí se muestra el color pero sin invitar a tocarlo. */}
-          <button onClick={e=>{e.stopPropagation();if(!session.soloLectura)setSemAbierto(abiertoSem?null:m.nombre);}}
-            title={session.soloLectura?(sem?STATUS[sem].label:'Sin semáforo'):sem?`${STATUS[sem].label} — toca para cambiar`:'Sin semáforo — toca para marcar'}
-            style={{display:'inline-flex',alignItems:'center',gap:5,padding:'7px 11px',borderRadius:20,cursor:session.soloLectura?'default':'pointer',
-              border:`2px solid ${sem?STATUS[sem].border:'var(--yellow)'}`,
-              background:sem?STATUS[sem].bg:'var(--ybg)',
-              color:sem?STATUS[sem].border:'var(--yellow)',fontSize:14,fontWeight:700,whiteSpace:'nowrap'}}>
-            {sem?<>{SEM_EMOJI[sem]} {STATUS[sem].label}</>:session.soloLectura?<>⚪ Sin marcar</>:<>⚪ Marcar</>}
+              toque terminaría desplegando la ficha. Abre el desglose del cálculo (y, si se puede
+              capturar, el ajuste con motivo). ✋ = el coach lo ajustó a mano este mes. */}
+          <button onClick={e=>{e.stopPropagation();setSemAbierto(abiertoSem?null:m.nombre);}}
+            title={sem?`${STATUS[sem].label}${semInfo.ajuste?' (ajustado por el coach)':''} — toca para ver por qué`:'Sin semáforo — toca para ver por qué'}
+            style={{display:'inline-flex',alignItems:'center',gap:5,padding:'7px 11px',borderRadius:20,cursor:'pointer',
+              border:`2px solid ${sem?STATUS[sem].border:'var(--border)'}`,
+              background:sem?STATUS[sem].bg:'var(--input)',
+              color:sem?STATUS[sem].border:'var(--dim)',fontSize:14,fontWeight:700,whiteSpace:'nowrap'}}>
+            {sem?<>{SEM_EMOJI[sem]} {semInfo.ajuste?'✋':semInfo.auto?.puntaje??''}</>:listoSem?<>⚪ Sin datos</>:<>⏳ Calculando</>}
           </button>
           <span style={{fontSize:14,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
         </div>
       </div>
       {abiertoSem&&<div style={{border:`1px solid ${franja}`,borderTop:'none',borderRadius:'0 0 10px 10px',padding:10,marginBottom:5,background:'var(--card)'}}>
-        <div style={{fontSize:13,fontWeight:700,color:'var(--dim)',marginBottom:8}}>¿Cómo va {nombreCorto(m.nombre)}?</div>
-        <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8}}>
-          {SEM_OPCIONES.map(o=>{
-            const activo=sem===o.valor;
-            return <button key={o.valor} onClick={e=>{e.stopPropagation();marcarSemaforo(m.nombre,o.valor);setSemAbierto(null);}}
-              style={{display:'flex',flexDirection:'column',alignItems:'center',gap:2,padding:'12px 6px',borderRadius:10,cursor:'pointer',
-                border:`2px solid ${activo?STATUS[o.valor].border:'var(--border)'}`,
-                background:activo?STATUS[o.valor].bg:'var(--input)',
-                boxShadow:activo?`0 0 0 3px ${STATUS[o.valor].bg}`:'none'}}>
-              <span style={{fontSize:22,lineHeight:1}}>{o.emoji}</span>
-              <span style={{fontSize:14,fontWeight:800,color:STATUS[o.valor].border}}>{o.titulo}</span>
-              <span style={{fontSize:13,color:'var(--dim)',textAlign:'center',lineHeight:1.25}}>{o.ayuda}</span>
-            </button>;
-          })}
-        </div>
-        {semInfo&&<p style={{fontSize:13,color:'var(--dim)',marginTop:8}}>
-          Actual: <b>{STATUS[sem]?.label}</b>{semInfo.fecha?` · ${fmt(semInfo.fecha)}`:''}{semInfo.porQuien?` · ${nombreCorto(semInfo.porQuien)}`:''}
-        </p>}
+        <PanelSemaforo m={m} info={semInfo} listo={listoSem} puedeAjustar={!session.soloLectura}
+          onAjustar={(valor,motivo)=>{ajustarSemaforo(m.nombre,valor,motivo);setSemAbierto(null);}}
+          onQuitarAjuste={()=>{quitarAjusteSemaforo(m.nombre,semInfo.auto?.color||semInfo.ajuste.valor);setSemAbierto(null);}}/>
       </div>}
       {isExp&&<div style={{border:'1px solid var(--border)',borderTop:'none',borderRadius:'0 0 8px 8px',marginBottom:4}}>
         <ContextCard m={m}/>
@@ -4504,11 +4726,13 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast,recordsPla
           <Card title="🚦 Semáforo del equipo">
             <SemBar/>
             <div style={{display:'flex',justifyContent:'space-around',marginTop:10,fontSize:14,color:'var(--dim)',fontWeight:600}}>
-              <span>🟢 {verdes}</span><span>🟡 {amarillos}</span><span>🔴 {rojos}</span><span>⚪ {sinEval}</span>
+              <span>🟢 {verdes}</span><span>🟡 {amarillos}</span><span>🔴 {rojos}</span>{negros>0&&<span>⚫ {negros}</span>}<span>⚪ {sinEval}</span>
             </div>
-            {sinEval>0&&<p style={{fontSize:14,color:'var(--yellow)',marginTop:10,fontWeight:600}}>
-              ⚠️ Falta{sinEval!==1?'n':''} <b>{sinEval}</b> por semaforizar — márcalos abajo, en Equipo.
+            {!listoSem?<p style={{fontSize:13,color:'var(--dim)',marginTop:10}}>⏳ Calculando con las ventas y el ranking…</p>
+              :sinEval>0&&<p style={{fontSize:13,color:'var(--dim)',marginTop:10}}>
+              ⚪ {sinEval} sin datos suficientes para calcular.
             </p>}
+            <p style={{fontSize:12,color:'var(--dim)',marginTop:8}}>Se calcula solo con 7 rubros (objetivo, NPPF, conversión, ARPU, ranking, certificaciones y semanas con bono). Toca la pastilla de cada vendedor para ver por qué.</p>
           </Card>
       </div>
     </div>
@@ -4898,14 +5122,8 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast,recordsPla
           :esLider?`👥 Equipo por Coach (${(coaches||[]).length})`
           :`👥 Equipo (${vendedores.length})`}>
           <p style={{fontSize:14,color:'var(--dim)',marginBottom:10,lineHeight:1.45}}>
-            Toca el <b>nombre</b> para ver el detalle · toca la <b>pastilla de color</b> para poner el semáforo.
+            Toca el <b>nombre</b> para ver el detalle · toca la <b>pastilla de color</b> para ver cómo se calculó su semáforo{session.soloLectura?'':' o ajustarlo con motivo'}.
           </p>
-          {sinEval>0&&<div style={{display:'flex',gap:8,alignItems:'center',padding:'10px 12px',borderRadius:10,background:'var(--ybg)',border:'1.5px solid var(--yellow)',marginBottom:10}}>
-            <span style={{fontSize:18}}>⚪</span>
-            <span style={{fontSize:14,fontWeight:600,color:'var(--yellow)',lineHeight:1.4}}>
-              {sinEval} {sinEval===1?'vendedor sigue':'vendedores siguen'} sin semáforo. Todos deben tener uno.
-            </span>
-          </div>}
           {esLider?(coaches||[]).map(c=>{
             const vendCoach=vendedoresPorCoach[c.nombre]||[];
             const key=c.nombre;
@@ -4913,7 +5131,8 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast,recordsPla
             const v=vendCoach.filter(m=>semColor(m.nombre)==='verde').length;
             const a=vendCoach.filter(m=>semColor(m.nombre)==='amarillo').length;
             const r=vendCoach.filter(m=>semColor(m.nombre)==='rojo').length;
-            const sinEv2=vendCoach.length-v-a-r;
+            const ng=vendCoach.filter(m=>semColor(m.nombre)==='negro').length;
+            const sinEv2=vendCoach.length-v-a-r-ng;
             // Mismos totales que la caja "🛒 Ventas" de cada vendedor (ContextCard), pero sumados entre
             // todos los vendedores del coach.
             let opSemana=0,valSemana=0,instSemana=0,opMes=0,valMes=0,instMes=0,metaMesCoach=0;
@@ -4929,15 +5148,15 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast,recordsPla
               <div onClick={()=>setExpandedCoachEquipo(isExp?null:key)} style={{
                 display:'flex',alignItems:'center',justifyContent:'space-between',
                 padding:'8px 10px',borderRadius:isExp?'8px 8px 0 0':8,marginBottom:isExp?0:4,cursor:'pointer',
-                background:r>0?'var(--rbg)':a>0?'var(--ybg)':'transparent',
-                border:`1px solid ${r>0?'var(--red)':a>0?'var(--yellow)':'var(--border)'}`,
+                background:ng>0?'var(--kbg)':r>0?'var(--rbg)':a>0?'var(--ybg)':'transparent',
+                border:`1px solid ${ng>0?'var(--black)':r>0?'var(--red)':a>0?'var(--yellow)':'var(--border)'}`,
                 borderBottom:isExp?'none':undefined,
               }}>
                 <div style={{flex:1}}>
                   <div style={{fontSize:14,fontWeight:700}}>{c.nombre.split(' ').slice(0,3).join(' ')}</div>
                   {/* El director ve coaches de varios líderes juntos: sin esto no se sabe de quién es cuál. */}
                   {esDirector&&c.reportaA&&<div style={{fontSize:12,color:'var(--accent)',fontWeight:600,marginTop:1}}>⭐ {nombreCorto(c.reportaA)}</div>}
-                  <div style={{fontSize:12,color:'var(--dim)',marginTop:1}}>{vendCoach.length} vendedor{vendCoach.length!==1?'es':''} · 🟢{v} 🟡{a} 🔴{r} ⚪{sinEv2}</div>
+                  <div style={{fontSize:12,color:'var(--dim)',marginTop:1}}>{vendCoach.length} vendedor{vendCoach.length!==1?'es':''} · 🟢{v} 🟡{a} 🔴{r}{ng>0?` ⚫${ng}`:''} ⚪{sinEv2}</div>
                   <div style={{fontSize:12,color:'var(--dim)',marginTop:2}}>Semana ({labelSemEq}): {opSemana} op · {valSemana} val · {instSemana} inst</div>
                   <div style={{fontSize:12,color:'var(--dim)',marginTop:1}}>Mes ({labelMesEq}): {opMes} op · {valMes} val · {instMes} inst</div>
                   {metaMesCoach>0&&<div style={{fontSize:12,color:'var(--dim)',marginTop:1}}>🎯 Meta del mes: <b>{instMes}/{metaMesCoach}</b></div>}
@@ -5083,7 +5302,8 @@ function resumenDe(r,vendedor){
     case'permiso':return vendedor?`${r.tipo||''}${r.motivo?' — '+r.motivo:''}`:`${nombreCorto(r.vendedor)} · ${r.tipo||''}`;
     case'feedback':return vendedor?(r.tipo||'Hallazgo'):`${nombreCorto(r.vendedor)} · ${r.tipo||''}`;
     case'semaforo':{
-      const s=`${SEM_EMOJI[r.semaforo]||'⚪'} ${STATUS[r.semaforo]?.label||r.semaforo||''}`;
+      const origen=esNotaSemAuto(r.nota)?' · automático':r.nota===NOTA_SIN_AJUSTE?' · regresó al automático':r.nota?' · ajuste del coach':'';
+      const s=`${SEM_EMOJI[r.semaforo]||'⚪'} ${STATUS[r.semaforo]?.label||r.semaforo||''}${origen}`;
       return vendedor?s:`${nombreCorto(r.vendedor)} → ${s}`;
     }
     case'plan':return `Semana ${r.semanaLabel||''}${r.objetivos?` · obj. ${n(r.objetivos.instalaciones)} inst`:''}`;
@@ -5146,7 +5366,7 @@ function rangoPeriodo(periodo,offset,rango,base){
 // Contadores de un conjunto de registros. Con `vendedor`, las ausencias y los cierres cuentan solo lo
 // de esa persona — es el resumen de su expediente.
 function resumirEventos(eventos,vendedor){
-  const res={total:eventos.length,porTipo:{},colores:{rojo:0,amarillo:0,verde:0},ausencias:0,motivos:{},fueraRuta:0,
+  const res={total:eventos.length,porTipo:{},colores:{negro:0,rojo:0,amarillo:0,verde:0},ausencias:0,motivos:{},fueraRuta:0,
     cierre:{dias:0,op:0,val:0,inst:0},semaforo:null,pendientes:0};
   const n=v=>Number(v)||0;
   eventos.forEach(e=>{
@@ -5554,7 +5774,7 @@ function ResumenHistorial({res,vendedor,tipoActivo,onTipo,imprimir}){
       pt('plan_resultado')?c('plan_resultado','🏁',pt('plan_resultado'),'Resultados de plan'):null]
   ).filter(Boolean);
   const motivos=Object.entries(res.motivos).sort((a,b)=>b[1]-a[1]);
-  const colores=['rojo','amarillo','verde'].filter(k=>res.colores[k]);
+  const colores=['negro','rojo','amarillo','verde'].filter(k=>res.colores[k]);
   const interactivo=!imprimir&&!!onTipo;
   const extras=motivos.length>0||colores.length>0||(vendedor&&res.cierre.dias>0)||(vendedor&&res.semaforo)||(!imprimir&&res.pendientes>0);
   return <div>
@@ -5967,7 +6187,50 @@ ${cuerpo||'<p style="text-align:center;color:#6b7086;padding:40px">Sin registros
 // actualizar aquí lo que dice de ella — el manual promete botones y reglas exactos.
 // Bloques: {p} párrafo · {sub} subtítulo · {pasos} lista numerada · {lista} viñetas ·
 // {ok}/{ojo}/{alto} avisos verde/amarillo/rojo · {colores:[[icono,nombre,qué significa]]}.
+// Los colores del semáforo salen igual en su lección y en "Qué quiere decir cada color".
+const SEM_COLORES_MANUAL=[
+  ['🟢','Va bien','Saca **80 o más** de 100.'],
+  ['🟡','Ojo','Saca **de 50 a 79**. Se está quedando corto.'],
+  ['🔴','Urgente','Saca **menos de 50**. Necesita un plan de acción.'],
+  ['⚫','Negro','Lleva **2 meses o más seguidos como Condicionado**. Sin importar lo demás, y no se puede ajustar.'],
+  ['✋','Ajustado','Su coach le cambió el color este mes, con un motivo.'],
+  ['⚪','Sin datos','Todavía no hay números para calcularlo.'],
+];
 const MANUAL_COMUNES={
+  semaforo:{icon:'🚦',titulo:'El semáforo de tus vendedores',cuando:'Para entender por qué alguien tiene su color.',bloques:[
+    {p:'Nadie lo pone a mano: **la app lo calcula sola** con los números de cada vendedor, y se actualiza cada vez que entran ventas nuevas.'},
+    {sub:'Qué quiere decir cada color'},
+    {colores:SEM_COLORES_MANUAL},
+    {sub:'Qué se revisa'},
+    {p:'Se revisan **7 cosas**. Cada una sale 🟢 si llega a la **meta**, 🟡 si pasa la **base** pero no llega a la meta, y 🔴 si no llega ni a la base. Van de **la que más pesa** a la que menos:'},
+    {colores:[
+      ['🎯','1. Instalaciones','Lo que lleva **en el mes hasta hoy** contra el objetivo de su ranking. Meta: su objetivo. Base: el mínimo del bono.'],
+      ['💰','2. Cuentas sin pagar','De lo que instaló en los 30 días **antes de la semana pasada**, cuánto sigue sin pagarse. Meta: **5% o menos**. Base: **10% o menos**.'],
+      ['🔄','3. Conversión','Instaladas ÷ validadas del mes. Meta: **90%**. Base: **85%**.'],
+      ['💵','4. ARPU','Lo que paga en promedio cada cliente que instaló en el mes, sin IVA. Meta: **$480**. Base: **$460**.'],
+      ['🏅','5. Ranking','🟢 Oro o Platino · 🟡 Bronce o Plata · 🔴 Condicionado o Entrenamiento.'],
+      ['📚','6. Certificaciones','🟢 si tiene **todas** las de su ranking · 🔴 si le falta alguna.'],
+      ['📅','7. Semanas con bono','De las semanas del mes que ya terminaron, en cuántas llegó al mínimo del bono. Meta: **todas**. Base: **3 en el mes**.'],
+    ]},
+    {ojo:'Lo de arriba pesa mucho más que lo de abajo: **las instalaciones cuentan 6 veces más** que las semanas con bono. Por eso alguien puede tener casi todo en 🟢 y aun así salir 🟡.'},
+    {sub:'Un ejemplo'},
+    {p:'Ana es Plata. Sus instalaciones van 🟡, el ARPU 🔴 y su ranking 🟡. Todo lo demás (sin pagar, conversión, cursos y semanas con bono) va 🟢. Saca **67**: queda en 🟡, porque lo que más pesa, las instalaciones, no va en verde.'},
+    {sub:'Casos especiales'},
+    {lista:[
+      '**Condicionado**: nunca sale 🟢. Queda 🟡 solo si casi todo lo demás (**5 de sus otras 6 cosas**) va en 🟢; si no, 🔴.',
+      '**Condicionado 2 meses o más seguidos**: ⚫ negro, sin importar lo demás.',
+      '**Bajó de ranking** (de Oro a Plata o de Plata a Bronce) después de estar **3 meses o más** arriba: se le sigue pidiendo lo de su ranking anterior (instalaciones, bono y cursos) **hasta que vuelva a subir**.',
+      '**Sin con qué medir**: si algo no se puede medir (por ejemplo, no ha instalado y no hay ARPU), esa cosa no cuenta y no le baja la calificación.',
+    ]},
+    {sub:'Dónde lo ves'},
+    {lista:[
+      'En **📈 Dashboard → 👥 Equipo**, la pastilla de cada vendedor trae su color y su calificación (por ejemplo **🟡 67**).',
+      '**Toca la pastilla** y ves las 7 cosas: cuánto lleva en cada una y contra qué se mide.',
+      'Cada semana la app guarda sola el semáforo en el **📁 Historial**, para ver cómo ha ido cambiando.',
+    ]},
+    {sub:'Si el color no refleja cómo va'},
+    {p:'El **coach** puede cambiarlo, pero **siempre con un motivo**. Sale con ✋, vale **solo ese mes** y se siguen viendo los dos: el que calculó la app y el del coach. Los pasos están en la lección **📈 Dashboard** del coach.'},
+  ]},
   entrar:{icon:'🔑',titulo:'Entrar a la app',cuando:'La primera vez, o si saliste.',bloques:[
     {pasos:['Escribe tu **número de empleado** (por ejemplo: 17091931).','Escribe tu **PIN**: son **4 números**.','Toca **Iniciar sesión**.']},
     {ok:'Si sale un aviso **azul** que dice "Ya entraste. Cargando las ventas…", no hagas nada: espera. Los números aparecen solos.'},
@@ -5988,12 +6251,13 @@ const MANUAL_COMUNES={
     {p:'Aquí está todo lo que se ha guardado: lo tuyo y lo de tu equipo.'},
     {pasos:['Toca **📁 Historial**.','Elige el tiempo: **Día**, **Semana**, **Mes** o **Rango** (en Rango tú pones las fechas).','Con **‹** te vas para atrás y con **›** para adelante.','En **Todos los tipos** elige qué quieres ver: Arranque, Cierre, Permiso, Hallazgo, Semáforo, Plan o Resultado del plan.','En **🔎 Buscar persona** escribe un nombre y elige. Si dice **actividad**, ves lo que esa persona guardó. Si dice **expediente**, ves todo lo que se dijo de esa persona: faltas, permisos, hallazgos, semáforos y ventas de los cierres.','Toca un renglón para abrir todo el detalle. Toca una foto para verla grande.']},
     {lista:['**Agrupar** acomoda la lista por Día, Vendedor, Coach o Tipo.','Si eliges **Hallazgo**, puedes escoger hasta **3 subtipos** (por ejemplo, solo Trabajo en campo).','Los cuadros con números también son botones: tócalos para ver solo ese tipo.','**🖨️ Informe PDF** arma un documento con lo que tengas en pantalla, listo para imprimir o guardar como PDF.','El **🔄** del cuadro Historial vuelve a leer todo del Sheet.']},
-    {colores:[['🔴','Renglón rojo','Falta injustificada, semáforo rojo o plan cumplido a menos del 60%.'],['🟡','Renglón amarillo','Falta justificada, incapacidad, retardo o cierre con incidencias.'],['⏳','Pendiente','Se guardó en el teléfono y todavía no sube al Sheet.']]},
+    {colores:[['⚫','Renglón negro','Semáforo negro: condicionado 2 meses o más.'],['🔴','Renglón rojo','Falta injustificada, semáforo rojo o plan cumplido a menos del 60%.'],['🟡','Renglón amarillo','Falta justificada, incapacidad, retardo o cierre con incidencias.'],['⏳','Pendiente','Se guardó en el teléfono y todavía no sube al Sheet.']]},
     {ojo:'Abajo del cuadro dice "Actualizado a las…". Si dice "**Sin conexión con el Sheet**", solo estás viendo lo de tu teléfono.'},
   ]},
   colores:{icon:'🎨',titulo:'Qué quiere decir cada color',cuando:'Cuando veas un color y no sepas qué significa.',bloques:[
-    {sub:'Semáforo de una persona'},
-    {colores:[['🟢','Va bien','Cumple su meta y su ritmo.'],['🟡','Ojo','Se está quedando corto.'],['🔴','Urgente','Necesita un plan de acción.'],['⚪','Sin semáforo','Nadie lo ha marcado. Todos deben tener uno.']]},
+    {sub:'Semáforo de un vendedor'},
+    {colores:SEM_COLORES_MANUAL},
+    {p:'Cómo se calcula: abre la lección **🚦 El semáforo de tus vendedores**.'},
     {sub:'Avance contra el plan (%)'},
     {colores:[['🟢','95% o más','Va cumpliendo.'],['🟡','60% a 94%','Va atrasado.'],['🔴','Menos de 60%','Va muy atrasado.']]},
     {sub:'Tu compromiso contra la meta (en el Plan)'},
@@ -6020,7 +6284,7 @@ const MANUAL_ROLES={
       ['En la calle','💬','Acompaña a tu gente y guarda **Hallazgos**.'],
       ['Si alguien sale','📋','Guarda el **Permiso** con su prueba.'],
       ['Cada noche','🌙','Guarda tu **Cierre** y mándalo por WhatsApp.'],
-      ['Siempre','🚦','En el **Dashboard**: pon el semáforo a cada vendedor y revisa tus compromisos.'],
+      ['Siempre','🚦','En el **Dashboard**: revisa el semáforo de cada vendedor y tus compromisos.'],
     ],
     secciones:[
       {icon:'☀️',titulo:'Arranque (cada mañana)',cuando:'Todos los días, al empezar.',bloques:[
@@ -6068,7 +6332,7 @@ const MANUAL_ROLES={
         {pasos:['En **Casas tocadas** usa **+** y **−** para poner cuántas puertas tocaron.','En **Abrieron** pon cuántas abrieron. Sale la **tasa de apertura**: verde 40% o más, amarillo 20% o más, rojo menos.','Toca **+ Agregar casa que abrió** por cada casa. Marca con quién tiene el servicio, cuánto paga, si tiene apps de streaming (cuáles y cuánto paga) y **en qué terminó**: ✅ Venta, 🕒 Seguimiento o ✖️ Rechazo.','Si fue **Rechazo**, marca el motivo (puede ser más de uno).','Toma la **foto con sello**: es obligatoria.']},
         {sub:'Compromisos'},
         {p:'Escribe **Qué + Quién + Cuándo**. Si escribes un compromiso, **tienes que** poner la **Fecha de revisión**. Ese día te sale en el Dashboard para revisarlo. Al guardar se abre WhatsApp para mandarle el compromiso a la persona.'},
-        {ojo:'Aquí el **semáforo** solo se muestra. Se pone en **Dashboard → Equipo**.'},
+        {ojo:'Aquí el **semáforo** solo se muestra. Se calcula solo; el desglose está en **Dashboard → Equipo**.'},
         {alto:'No se guarda si: falta el integrante · en Trabajo en campo faltan casas tocadas, proveedor, resultado, motivo del rechazo, respuesta de streaming o la foto · en Evidencia de asignación externa no hay ninguna foto · hay un compromiso sin fecha de revisión.'},
       ]},
       {icon:'⏰',titulo:'Revisar compromisos',cuando:'El día que vence cada compromiso.',bloques:[
@@ -6086,9 +6350,12 @@ const MANUAL_ROLES={
         {lista:['Toca **Semana** o **Mes**. Con **‹** ves la anterior; con **Volver** regresas a la de hoy.','🕒 dice a qué hora se tomaron los datos.','Ves **Oportunidades**, **Validadas** e **Instaladas**, y abajo el **% de avance** contra tu Plan.','El reloj 🎯 compara las instalaciones contra la meta.']},
         {sub:'Paneles que se abren al tocarlos'},
         {lista:['❌ **Motivos de rechazo** de las oportunidades.','📦 **Instalaciones por plan**.','⏳ **Cuentas por instalar** (últimos 30 días). Las puedes mandar por WhatsApp.','💵 **ARPU** por vendedor.','💰 **Cuentas sin pagar**: instaladas hace 25 a 90 días y sin pagar. Entre más días, más urge.','✅ **Cuentas pagadas**: la semana pasada contra la anterior.']},
-        {sub:'🚦 Poner el semáforo'},
-        {pasos:['Baja hasta **👥 Equipo**.','Toca el **nombre** de alguien para ver su detalle.','Toca su **pastilla de color** (o **⚪ Marcar**) y elige **🟢 Va bien**, **🟡 Ojo** o **🔴 Urgente**.']},
-        {alto:'**Todos** tus vendedores deben tener semáforo. Si falta alguno, sale un aviso amarillo.'},
+        {sub:'🚦 El semáforo de tus vendedores'},
+        {p:'Ya **no lo pones tú**: la app lo calcula sola. Cómo lo calcula está en la lección **🚦 El semáforo de tus vendedores**.'},
+        {pasos:['Baja hasta **👥 Equipo**.','Toca la **pastilla de color** de un vendedor: ves sus 7 cosas, cuánto lleva en cada una y contra qué se mide.']},
+        {sub:'Cambiar el color (solo si de verdad no refleja cómo va)'},
+        {pasos:['Toca su **pastilla de color**.','Abajo, en **¿No refleja cómo va? Ajústalo**, elige 🟢, 🟡 o 🔴.','Escribe el **motivo**. Es obligatorio.','Toca **Guardar ajuste**. Su pastilla sale con ✋.','Para quitarlo, toca la pastilla y luego **↩️ Regresar al automático**.']},
+        {ojo:'Tu cambio vale **solo este mes**. Tu líder ve los dos colores: el de la app y el tuyo, con tu motivo.'},
       ]},
     ],
   },
@@ -6135,7 +6402,7 @@ const MANUAL_ROLES={
       ]},
       {icon:'📈',titulo:'Dashboard (tu tablero)',cuando:'Siempre que quieras saber cómo va tu equipo.',bloques:[
         {p:'Es igual al del coach, pero todo viene **agrupado por coach**.'},
-        {lista:['En **🛒 Ventas del equipo** el % se mide contra **la suma de los planes de tus coaches** (dice cuántos tienen plan).','Toca **📋 Avance vs plan por coach** para ver a cada uno: Op., Val. e Inst. contra su plan.','En los paneles (rechazos, planes, cuentas por instalar, ARPU, sin pagar, pagadas) primero tocas al **coach** y luego al **vendedor**.','En **👥 Equipo por Coach** cada coach dice cuántos vendedores tiene, su semáforo (🟢🟡🔴⚪), la semana, el mes y su meta. Tócalo para ver a sus vendedores.']},
+        {lista:['En **🛒 Ventas del equipo** el % se mide contra **la suma de los planes de tus coaches** (dice cuántos tienen plan).','Toca **📋 Avance vs plan por coach** para ver a cada uno: Op., Val. e Inst. contra su plan.','En los paneles (rechazos, planes, cuentas por instalar, ARPU, sin pagar, pagadas) primero tocas al **coach** y luego al **vendedor**.','En **👥 Equipo por Coach** cada coach dice cuántos vendedores tiene, cuántos vendedores lleva en cada color del semáforo (🟢🟡🔴⚫⚪), la semana, el mes y su meta. Tócalo para ver a sus vendedores.']},
       ]},
       {icon:'👁️',titulo:'Ver la app como uno de tus coaches',cuando:'Para ver exactamente lo que ve un coach.',bloques:[
         {pasos:['Arriba dice **⭐ Estás en tu vista de líder**. Toca **👁️ Ver un coach**.','Elige al coach.','La barra se pone amarilla: **👁️ Viendo como …· solo consulta**. Puedes mirar todo, pero **no puedes guardar nada**.','Toca **← Regresar** para volver a tu vista.']},
@@ -6158,10 +6425,10 @@ const MANUAL_ROLES={
       {icon:'🙅',titulo:'Lo que no llenas',cuando:'Para que no te confundas.',bloques:[
         {p:'En tu menú también salen **Arranque**, **Permisos**, **Cierre**, **Plan** y **Hallazgos**. Esas pantallas son para **coaches y líderes**: tú no las llenas.'},
         {ok:'Si quieres ver cómo las llenó alguien, usa **👁️ Ver como líder** o el **📁 Historial**.'},
-        {ojo:'El **semáforo** de cada vendedor lo ponen sus coaches.'},
+        {ojo:'El **semáforo** de cada vendedor se calcula solo; sus coaches pueden ajustarlo con motivo (✋).'},
       ]},
       {icon:'📈',titulo:'Dashboard del distrito',cuando:'Siempre que quieras saber cómo va el distrito.',bloques:[
-        {lista:['**🛒 Ventas del equipo**: Oportunidades, Validadas e Instaladas de todo el distrito. Toca **Semana** o **Mes**; con **‹** ves las anteriores.','El % de avance se mide contra **la suma de los planes de todos**.','Toca **📋 Avance vs plan por líder**: cada líder con sus números y cuántos de sus coaches tienen plan (verde = todos, amarillo = algunos, rojo = ninguno).','**👥 Distrito por Coach**: todos los coaches. Cada uno dice de qué líder es (⭐), su semáforo, semana, mes y meta. Tócalo para ver a sus vendedores.','Los paneles (rechazos, planes, cuentas por instalar, ARPU, sin pagar, pagadas) se abren primero por coach y luego por vendedor.','**🚦 Semáforo del equipo**: cuántos hay en 🟢 🟡 🔴 y cuántos faltan ⚪.']},
+        {lista:['**🛒 Ventas del equipo**: Oportunidades, Validadas e Instaladas de todo el distrito. Toca **Semana** o **Mes**; con **‹** ves las anteriores.','El % de avance se mide contra **la suma de los planes de todos**.','Toca **📋 Avance vs plan por líder**: cada líder con sus números y cuántos de sus coaches tienen plan (verde = todos, amarillo = algunos, rojo = ninguno).','**👥 Distrito por Coach**: todos los coaches. Cada uno dice de qué líder es (⭐), su semáforo, semana, mes y meta. Tócalo para ver a sus vendedores.','Los paneles (rechazos, planes, cuentas por instalar, ARPU, sin pagar, pagadas) se abren primero por coach y luego por vendedor.','**🚦 Semáforo del equipo**: cuántos vendedores hay en 🟢 🟡 🔴 ⚫ y cuántos están sin datos ⚪. Cómo se calcula está en la lección **🚦 El semáforo de tus vendedores**.']},
         {sub:'Compromisos'},
         {p:'Toca **📋 Compromisos del equipo**: de cada persona ves cuántos compromisos tiene **vencidos sin revisar** y su **% revisados a tiempo**.'},
       ]},
@@ -6198,10 +6465,10 @@ const MANUAL_ROLES={
 // Gestor CH y Auditor ven y hacen lo mismo en la app (ver ROLES_CONSULTA).
 const MANUAL_CONSULTA=[
   {icon:'👀',titulo:'Lo que puedes hacer',cuando:'Para saber qué sí y qué no.',bloques:[
-    {lista:['Tu menú tiene **📈 Dashboard**, **📁 Historial** y **📖 Manual**.','Ves **todo el distrito**: todos los líderes, coaches y vendedores.','**No puedes guardar ni cambiar nada**. El semáforo sale como **⚪ Sin marcar** si nadie lo ha puesto, y no se puede tocar.']},
+    {lista:['Tu menú tiene **📈 Dashboard**, **📁 Historial** y **📖 Manual**.','Ves **todo el distrito**: todos los líderes, coaches y vendedores.','**No puedes guardar ni cambiar nada**. El semáforo se calcula solo; tocando la pastilla ves por qué tiene ese color, pero no lo puedes ajustar.']},
   ]},
   {icon:'📈',titulo:'Dashboard del distrito',cuando:'Para ver cómo va todo.',bloques:[
-    {lista:['**🛒 Ventas del equipo**: Oportunidades, Validadas e Instaladas. Toca **Semana** o **Mes**; con **‹** ves las anteriores.','**👥 Distrito por Coach**: cada coach dice de qué líder es (⭐), su semáforo y sus números. Tócalo para ver a sus vendedores, y toca un vendedor para ver su detalle.','**🚦 Semáforo del equipo**: cuántos hay en 🟢 🟡 🔴 y cuántos faltan ⚪.','**📋 Compromisos del equipo**: quién tiene compromisos vencidos sin revisar y su % revisados a tiempo.']},
+    {lista:['**🛒 Ventas del equipo**: Oportunidades, Validadas e Instaladas. Toca **Semana** o **Mes**; con **‹** ves las anteriores.','**👥 Distrito por Coach**: cada coach dice de qué líder es (⭐), su semáforo y sus números. Tócalo para ver a sus vendedores, y toca un vendedor para ver su detalle.','**🚦 Semáforo del equipo**: cuántos vendedores hay en 🟢 🟡 🔴 ⚫ y cuántos están sin datos ⚪. Cómo se calcula está en la lección **🚦 El semáforo de tus vendedores**.','**📋 Compromisos del equipo**: quién tiene compromisos vencidos sin revisar y su % revisados a tiempo.']},
   ]},
   {icon:'🗂️',titulo:'Sacar el expediente de una persona',cuando:'Cuando te pidan la historia de alguien.',bloques:[
     {pasos:['Toca **📁 Historial**.','Toca **Mes** o **Rango** y elige las fechas.','En **🔎 Buscar persona** escribe el nombre y elige la opción que dice **expediente**.','Arriba ves sus cuadros: ✅ Asistencias, 🚫 Ausencias, 📋 Permisos, 💬 Hallazgos y 🌙 Cierres. Abajo, sus ausencias por motivo y su último semáforo.','Toca cada renglón para ver el detalle y las fotos.','Toca **🖨️ Informe PDF** y luego guarda o imprime.']},
@@ -6248,7 +6515,7 @@ function ManualTab({rolPropio}){
   const guia=MANUAL_ROLES[nivel];
   const propias=guia.secciones==='consulta'?MANUAL_CONSULTA:guia.secciones;
   const C=MANUAL_COMUNES;
-  const lecciones=[C.entrar,C.pantalla,...propias,C.historial,C.colores,C.senal,C.palabras];
+  const lecciones=[C.entrar,C.pantalla,...propias,C.semaforo,C.historial,C.colores,C.senal,C.palabras];
   const cambiarNivel=n=>{setNivel(n);setAbierta(null);};
   return <div>
     <Card>
@@ -6498,18 +6765,52 @@ function MainApp({session:sesionRecibida,setSession,onLogout,sessionBase,vistas,
   // los del Sheet — hoja SEMAFORO y los hallazgos que traen semáforo — con lo de este teléfono; el
   // servidor ya filtra por jerarquía (lo propio + lo de sus coaches/líderes).
   const[semaforosSheet,setSemaforosSheet]=useState([]);
-  useEffect(()=>{setSemaforosSheet([]);},[session.verComo]);
+  const[semaforosSheetListos,setSemaforosSheetListos]=useState(false);
+  useEffect(()=>{setSemaforosSheet([]);setSemaforosSheetListos(false);},[session.verComo]);
   useEffect(()=>{
     let cancelado=false;
     fetchHistorialHoja('SEMAFORO',session.token,session.verComo).then(res=>{
       // Si la lectura falla se conserva la anterior en vez de dejar a todos en ⚪.
-      if(!cancelado&&res.ok)setSemaforosSheet(res.registros.map(f=>recordDesdeFila('semaforo',f)).filter(Boolean));
+      if(!cancelado&&res.ok){setSemaforosSheet(res.registros.map(f=>recordDesdeFila('semaforo',f)).filter(Boolean));setSemaforosSheetListos(true);}
     });
     return()=>{cancelado=true;};
   },[session.verComo,refreshKey]);
   const recordsSemaforo=useMemo(()=>unirPorId(
     data.records.filter(r=>r.type==='feedback'||r.type==='semaforo'),
     [...compromisosSheet.feedback,...semaforosSheet]),[data.records,compromisosSheet,semaforosSheet]);
+  // Foto semanal del semáforo automático: la primera vez en la semana que el coach abre la app con
+  // las ventas ya cargadas, se guarda el semáforo de cada uno de sus vendedores en la hoja SEMAFORO
+  // (con el desglose en la Nota). Así el Historial, el expediente y el PDF tienen la evolución
+  // semana a semana. El ID es fijo por semana y vendedor, y antes se revisa lo que ya está en el
+  // Sheet (por si lo guardó otro teléfono), así que no se duplica.
+  const fotosSemEnviadas=useRef(new Set());
+  useEffect(()=>{
+    if(role!=='coach'||session.soloLectura||!semaforosSheetListos||!ventasListas(session))return;
+    const ahora=new Date(),lunes=ymdLocal(startOfWeek(ahora));
+    const ids=new Set(recordsSemaforo.map(r=>r.id));
+    const ajustes=ajustesSemaforo(recordsSemaforo,ahora);
+    const nuevos=team.filter(m=>isVendedor(m.posicion)).map(m=>{
+      const id=`semauto-${lunes}-${m.numEmp||m.nombre.replace(/\s+/g,'_')}`;
+      if(ids.has(id)||fotosSemEnviadas.current.has(id))return null;
+      const auto=semaforoDeVendedor(m,ajustes,ahora,true).auto;
+      if(!auto?.color)return null;
+      return{id,type:'semaforo',date:today(),vendedor:m.nombre,semaforo:auto.color,nota:notaSemaforoAuto(auto),
+        registradoPor:user.nombre,token:session.token,savedAt:new Date().toISOString()};
+    }).filter(Boolean);
+    if(!nuevos.length)return;
+    nuevos.forEach(r=>fotosSemEnviadas.current.add(r.id));
+    const upd={...datosLocales,records:[...datosLocales.records,...nuevos]};
+    setDatosLocales(upd);saveData(upd);
+    // Uno por uno; el que no suba se va a la cola de pendientes, como cualquier otro registro.
+    (async()=>{
+      for(const r of nuevos){
+        const res=await sendToSheet(r);
+        if(res.ok)continue;
+        try{const p=JSON.parse(localStorage.getItem('sv2-pending')||'[]');p.push(r);localStorage.setItem('sv2-pending',JSON.stringify(p));}
+        catch(e){console.error('No se pudo encolar la foto del semáforo:',e);}
+      }
+    })();
+  },[role,session,semaforosSheetListos,recordsSemaforo,team]);
   const actualizarInfo=async()=>{
     if(refreshing)return;
     setRefreshing(true);

@@ -955,6 +955,35 @@ function leerRankingMensual() {
       certFaltantes = b.courses.filter(function (c) { return String(r[c.idx] || '').trim().toUpperCase() !== 'APROBADO'; }).map(function (c) { return c.label; });
     }
 
+    // Semáforo automático — regla de la bajada: quien bajó de ORO a PLATA o de PLATA a BRONCE se
+    // sigue midiendo con el ranking del que bajó, siempre que haya durado al menos 3 meses en él, y
+    // así se queda hasta que vuelva a subir. Las columnas "RANKING <mes>" van en orden de mes (se
+    // agregan a la derecha cada mes), así que la última es la actual. Una celda vacía corta la racha.
+    // De PLATINO a ORO no aplica (la hoja de todos modos dice ORO en los dos).
+    const histRanking = rankingCols.map(function (i) { return String(r[i] || '').trim().toUpperCase(); });
+    let medirComo = null, bajoEn = '', mesesAntes = 0;
+    if (histRanking.length && (badgeHoja === 'PLATA' || badgeHoja === 'BRONCE')) {
+      let j = histRanking.length - 1;
+      while (j >= 0 && histRanking[j] === badgeHoja) j--;
+      const previo = j >= 0 ? histRanking[j] : '';
+      if ((badgeHoja === 'PLATA' && previo === 'ORO') || (badgeHoja === 'BRONCE' && previo === 'PLATA')) {
+        let k = j;
+        while (k >= 0 && histRanking[k] === previo) k--;
+        if (j - k >= 3) {
+          medirComo = previo;
+          mesesAntes = j - k;
+          bajoEn = String(h2[rankingCols[j + 1]] || '').trim().replace(/^RANKING\s+/i, '');
+        }
+      }
+    }
+    // Meses seguidos como condicionado, contando el actual: con 2 o más, su semáforo es negro.
+    let mesesCondicionado = 0;
+    for (let k = histRanking.length - 1; k >= 0 && histRanking[k].indexOf('CONDICIONADO') !== -1; k--) mesesCondicionado++;
+    // Las certificaciones que pide el ranking con el que se le mide (si no es el suyo).
+    const certFaltantesMedicion = (medirComo && blocks[medirComo])
+      ? blocks[medirComo].courses.filter(function (c) { return String(r[c.idx] || '').trim().toUpperCase() !== 'APROBADO'; }).map(function (c) { return c.label; })
+      : null;
+
     const ventaSanaVal = idxVentaSana != null ? String(r[idxVentaSana] || '').trim() : '';
     const mesCap = ventaSanaMes ? ventaSanaMes.charAt(0) + ventaSanaMes.slice(1).toLowerCase() : '';
     const ventaSana = (ventaSanaVal && ventaSanaVal !== '-') ? { mes: mesCap, valor: ventaSanaVal } : null;
@@ -969,6 +998,11 @@ function leerRankingMensual() {
       certFaltantes: certFaltantes,
       certTotal: certTotal,
       ventaSana: ventaSana,
+      medirComo: medirComo,
+      bajoEn: bajoEn,
+      mesesAntes: mesesAntes,
+      mesesCondicionado: mesesCondicionado,
+      certFaltantesMedicion: certFaltantesMedicion,
     };
     [numA, numB, numC].forEach(function (k) {
       if (k && k !== 'INTERNO' && k !== 'EXTERNO' && k !== 'VACANTE') map[k] = entry;
