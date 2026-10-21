@@ -1563,30 +1563,37 @@ function semaforoAutomatico(m,ref){
     const dia=ref.getDate(),dias=finMes.getDate();
     const metaMes=metaMensual(R),minMes=Math.round(minimoBono(R)*4.33);
     const meta=Math.floor(metaMes*dia/dias),min=Math.floor(minMes*dia/dias);
-    r.objetivo={color:color(fMes.instaladas>=meta,fMes.instaladas>=min),valor:`${fMes.instaladas} inst.`,
-      detalle:`al día ${dia}: objetivo ${meta}, mínimo ${min} (del mes completo: ${metaMes})`};
+    // `accion`: lo que tendría que pasar para que el rubro llegue a 🟢, dicho para "Si ___, sube a…"
+    // (ver sugerenciaSemaforo). Solo en los rubros que se pueden mover en lo que queda del mes.
+    r.objetivo={color:color(fMes.instaladas>=meta,fMes.instaladas>=min),valor:`${fMes.instaladas} de ${meta} inst.`,
+      detalle:`Lo que debería llevar al día ${dia} según su ranking: objetivo ${meta}, mínimo del bono ${min}. Del mes completo: ${metaMes}.`,
+      accion:`llega a ${meta} instalaciones`};
   }
   if(d.cuentas){
-    const pct=d.sinPagar/d.cuentas*100;
-    r.nppf={color:color(pct<=NPPF_META,pct<=NPPF_BASE),valor:`${Math.round(pct)}%`,
-      detalle:`${d.sinPagar} sin pagar de ${d.cuentas} instaladas del ${fmtDateObj(d.nppf.ini)} al ${fmtDateObj(d.nppf.fin)} · base ${NPPF_BASE}%, meta ${NPPF_META}%`};
+    const pct=d.sinPagar/d.cuentas*100,cobrar=d.sinPagar-Math.floor(d.cuentas*NPPF_META/100);
+    r.nppf={color:color(pct<=NPPF_META,pct<=NPPF_BASE),valor:`${d.sinPagar} de ${d.cuentas} (${Math.round(pct)}%)`,
+      detalle:`Cuentas que instaló del ${fmtDateObj(d.nppf.ini)} al ${fmtDateObj(d.nppf.fin)} y siguen sin pagar. Meta: ${NPPF_META}% o menos. Base: ${NPPF_BASE}% o menos.`,
+      accion:cobrar>0?`se cobra${cobrar===1?' 1 de sus cuentas':`n ${cobrar} de sus cuentas`} sin pagar`:''};
   }
   if(fMes.validadas){
-    const pct=fMes.instaladas/fMes.validadas*100;
+    const pct=fMes.instaladas/fMes.validadas*100,faltan=Math.ceil(fMes.validadas*CONV_META/100)-fMes.instaladas;
     r.conversion={color:color(pct>=CONV_META,pct>=CONV_BASE),valor:`${Math.round(pct)}%`,
-      detalle:`${fMes.instaladas} instaladas ÷ ${fMes.validadas} validadas del mes · base ${CONV_BASE}%, meta ${CONV_META}%`};
+      detalle:`${fMes.instaladas} instaladas de ${fMes.validadas} validadas en el mes. Meta: ${CONV_META}%. Base: ${CONV_BASE}%.`,
+      accion:faltan>0?`instala ${faltan} más de lo que ya tiene validado`:''};
   }
   if(d.arpu>0)r.arpu={color:color(d.arpu>=ARPU_META,d.arpu>=ARPU_BASE),valor:fmtMoney(d.arpu),
-    detalle:`promedio de las instaladas del mes · base ${ARPU_BASE_TXT}, meta ${ARPU_META_TXT}`};
+    detalle:`Lo que paga en promedio cada cliente que instaló en el mes, sin IVA. Meta: ${ARPU_META_TXT}. Base: ${ARPU_BASE_TXT}.`,
+    accion:`su ARPU sube a ${ARPU_META_TXT}`};
   if(tieneRanking(m.badge)){
     r.ranking={color:RANKING_VERDE.includes(m.badge)?'verde':RANKING_AMARILLO.includes(m.badge)?'amarillo':'rojo',valor:nombreRanking(m.badge),
-      detalle:esCondicionado(m.badge)?'no debe haber condicionados':'base Bronce, meta Oro'};
+      detalle:esCondicionado(m.badge)?'No debe haber condicionados.':'🟢 Oro o Platino · 🟡 Bronce o Plata · 🔴 Condicionado o Entrenamiento.'};
   }
   // Certificaciones: todas las que pide su ranking (o el ranking con el que se le mide).
   if(m.rankingEnt||m.rankingMen?.certTotal!=null){
     const faltan=(bajada&&m.rankingMen?.certFaltantesMedicion)||m.certFaltantes||[];
-    r.cert={color:faltan.length?'rojo':'verde',valor:faltan.length?`faltan ${faltan.length}`:'100%',
-      detalle:faltan.length?faltan.join(', '):`completas para ${nombreRanking(R)||'su ranking'}`};
+    r.cert={color:faltan.length?'rojo':'verde',valor:faltan.length?`le falta${faltan.length===1?' 1':`n ${faltan.length}`}`:'completas',
+      detalle:faltan.length?`Le falta: ${faltan.join(', ')}.`:`Tiene todas las de ${nombreRanking(R)||'su ranking'}.`,
+      accion:faltan.length?`termina ${faltan.length===1?'su curso pendiente':`sus ${faltan.length} cursos pendientes`}`:''};
   }
   // Semanas con bono: de las semanas del mes que ya cerraron, en cuántas llegó al mínimo del bono.
   // 🟢 si no ha fallado ninguna; 🟡 mientras todavía pueda juntar 3 en el mes; 🔴 si ya no.
@@ -1596,15 +1603,29 @@ function semaforoAutomatico(m,ref){
       const minimo=minimoBono(R);
       const conBono=cerradas.filter(s=>s.inst>=minimo).length;
       const fallo=cerradas.length-conBono;
-      r.semanas={color:fallo===0?'verde':fallo<=semanas.length-SEMANAS_BONO_BASE?'amarillo':'rojo',valor:`${conBono} de ${cerradas.length}`,
-        detalle:`semanas cerradas con bono (mín. ${minimo} inst.) · el mes tiene ${semanas.length}: base ${SEMANAS_BONO_BASE}, meta todas`};
+      r.semanas={color:fallo===0?'verde':fallo<=semanas.length-SEMANAS_BONO_BASE?'amarillo':'rojo',valor:`${conBono} de ${cerradas.length} con bono`,
+        detalle:`Semanas del mes que ya terminaron y en las que llegó al mínimo del bono (${minimo} inst.). El mes tiene ${semanas.length}. Meta: todas. Base: ${SEMANAS_BONO_BASE}.`};
     }
   }
-  const rubros=RUBROS_SEMAFORO.map(x=>({...x,peso:1/x.prioridad,color:null,...r[x.k]}));
+  const base=RUBROS_SEMAFORO.map(x=>({...x,color:null,...r[x.k]}));
+  const cal=calificarSemaforo(m,base);
+  return{...cal,medidoComo:R,bajada,sugerencia:cal.color?sugerenciaSemaforo(m,base,cal):''};
+}
+// Cada rubro vale puntos enteros: su peso (1 ÷ prioridad) repartido sobre 100 entre los rubros que
+// tienen dato, redondeado para que sumen exactamente 100. 🟢 da todos, 🟡 la mitad y 🔴 cero, y la
+// calificación ES la suma de lo que dio cada uno: así el desglose de la pantalla siempre cuadra.
+function calificarSemaforo(m,rubros){
   const conDato=rubros.filter(x=>x.color);
-  if(!conDato.length)return{color:null,puntaje:null,rubros,medidoComo:R,bajada,motivo:''};
-  const suma=conDato.reduce((s,x)=>s+x.peso,0);
-  const puntaje=Math.round(conDato.reduce((s,x)=>s+x.peso*PUNTOS_SEMAFORO[x.color],0)/suma);
+  if(!conDato.length)return{color:null,puntaje:null,motivo:'',rubros:rubros.map(x=>({...x,max:0,pts:0}))};
+  const suma=conDato.reduce((s,x)=>s+1/x.prioridad,0);
+  const exactos=conDato.map(x=>100/x.prioridad/suma),max=exactos.map(Math.floor);
+  let sobran=100-max.reduce((a,b)=>a+b,0);
+  exactos.map((e,i)=>[e-Math.floor(e),i]).sort((a,b)=>b[0]-a[0]).forEach(([,i])=>{if(sobran>0){max[i]++;sobran--;}});
+  const out=rubros.map(x=>{
+    const i=conDato.indexOf(x);
+    return i<0?{...x,max:0,pts:0}:{...x,max:max[i],pts:Math.round(max[i]*PUNTOS_SEMAFORO[x.color]/100)};
+  });
+  const puntaje=out.reduce((s,x)=>s+x.pts,0);
   let final=puntaje>=CORTE_SEM_VERDE?'verde':puntaje>=CORTE_SEM_AMARILLO?'amarillo':'rojo',motivo='';
   // Negro: 2+ meses seguidos como CONDICIONADO en la hoja de ranking mensual, contando el actual
   // (el servidor solo lo manda si el mes actual dice CONDICIONADO). Se toma de ahí aunque su ranking
@@ -1618,9 +1639,29 @@ function semaforoAutomatico(m,ref){
     const necesita=Math.ceil(otros.length*PCT_RUBROS_CONDICIONADO-1e-9);
     const verdes=otros.filter(x=>x.color==='verde').length;
     final=otros.length&&verdes>=necesita?'amarillo':'rojo';
-    motivo=`Condicionado: ${verdes} de ${otros.length} rubros en verde (necesita ${necesita} para quedar en amarillo)`;
+    motivo=`Es condicionado: nunca sale en verde. Tiene ${verdes} de ${otros.length} rubros en verde y necesita ${necesita} para quedar en amarillo.`;
   }
-  return{color:final,puntaje,rubros,medidoComo:R,bajada,motivo};
+  return{color:final,puntaje,motivo,rubros:out};
+}
+// Una línea para el coach: el rubro que, si llegara a 🟢, más lo sube (de preferencia, que le cambie
+// el color). Solo rubros que todavía se pueden mover este mes (los que traen `accion`). El negro es
+// regla fija y el verde ya está arriba: ahí no se sugiere nada.
+const ORDEN_COLOR_SEM={negro:0,rojo:1,amarillo:2,verde:3};
+function sugerenciaSemaforo(m,base,cal){
+  if(cal.color==='negro'||cal.color==='verde')return'';
+  let mejor=null;
+  base.forEach((x,i)=>{
+    if(!x.accion||!x.color||x.color==='verde')return;
+    const p=calificarSemaforo(m,base.map((y,j)=>j===i?{...y,color:'verde'}:y));
+    if(!mejor||ORDEN_COLOR_SEM[p.color]>ORDEN_COLOR_SEM[mejor.color]||(p.color===mejor.color&&p.puntaje>mejor.puntaje))mejor={accion:x.accion,color:p.color,puntaje:p.puntaje};
+  });
+  if(!mejor)return'';
+  if(ORDEN_COLOR_SEM[mejor.color]>ORDEN_COLOR_SEM[cal.color])return `Si ${mejor.accion}, sube a ${SEM_EMOJI[mejor.color]} ${mejor.puntaje}`;
+  return mejor.puntaje>cal.puntaje?`Lo que más lo sube: si ${mejor.accion}, llega a ${mejor.puntaje}`:'';
+}
+// El rubro que más puntos le está quitando (para la línea corta de la lista).
+function loQueMasResta(auto){
+  return(auto?.rubros||[]).filter(x=>x.color&&x.max>x.pts).sort((a,b)=>(b.max-b.pts)-(a.max-a.pts))[0]||null;
 }
 // El coach puede cambiar el color, pero con motivo: se guarda como registro 'semaforo' con el motivo
 // en la Nota, y vale solo en el mes en que se puso. Los registros que deja el cálculo automático
@@ -3995,43 +4036,76 @@ function PanelCompromisosEquipo({items,session}){
     <p style={{fontSize:12,color:'var(--dim)',margin:'8px 0 0'}}>"A tiempo" = revisado a más tardar un día después de la fecha comprometida, de los que vencieron en los últimos 30 días.</p>
   </PanelAcordeon>;
 }
-// Desglose del semáforo automático de un vendedor (rubro por rubro) y, debajo, el ajuste del coach:
-// puede ponerle otro color, pero con motivo obligatorio, y se siguen viendo los dos. Va fuera de
-// DashboardTab para que el motivo que se está escribiendo no se pierda en cada tecla.
+// Por qué un vendedor tiene su color, en capas para no saturar el celular: arriba el color, la
+// calificación y una sugerencia; luego solo los rubros que le RESTAN puntos (de más a menos); lo que
+// va bien, resumido en un renglón que se abre; y el detalle de cada rubro, solo al tocarlo. Cada
+// rubro dice "X de Y" puntos y la suma da la calificación (ver calificarSemaforo). El ajuste del
+// coach queda detrás de un botón. Va fuera de DashboardTab para que el motivo no se pierda al teclear.
+const TITULO_SEM={verde:'Va bien',amarillo:'Ojo',rojo:'Urgente',negro:'Negro'};
 function PanelSemaforo({m,info,listo,puedeAjustar,onAjustar,onQuitarAjuste}){
   const{auto,ajuste}=info||{};
   const[valor,setValor]=useState('');
   const[motivo,setMotivo]=useState('');
+  const[abierto,setAbierto]=useState(null); // rubro con su detalle a la vista
+  const[verBien,setVerBien]=useState(false);
+  const[ajustando,setAjustando]=useState(false);
   const fila={display:'flex',justifyContent:'space-between',gap:8,alignItems:'baseline'};
-  return <div style={{fontSize:13}}>
-    {!listo&&<p style={{color:'var(--dim)',marginBottom:8}}>⏳ Esperando las ventas y el ranking para calcular el semáforo…</p>}
-    {listo&&!auto?.color&&<p style={{color:'var(--dim)',marginBottom:8}}>⚪ No hay datos suficientes para calcularlo.</p>}
-    {auto?.color&&<>
-      <div style={{...fila,marginBottom:6}}>
-        <span style={{fontWeight:700,color:'var(--dim)'}}>🤖 Automático</span>
-        <span style={{fontWeight:800,color:STATUS[auto.color].border}}>{SEM_EMOJI[auto.color]} {STATUS[auto.color].label} · {auto.puntaje}/100</span>
+  const rubros=auto?.rubros||[];
+  const restan=rubros.filter(x=>x.color&&x.pts<x.max).sort((a,b)=>(b.max-b.pts)-(a.max-a.pts));
+  const bien=rubros.filter(x=>x.color&&x.pts>=x.max);
+  const sinDato=rubros.filter(x=>!x.color);
+  const rubro=x=>{const ab=abierto===x.k;
+    return <div key={x.k} onClick={()=>setAbierto(ab?null:x.k)} style={{padding:'7px 0',borderBottom:'1px solid var(--border)',cursor:'pointer'}}>
+      <div style={fila}>
+        <span style={{fontWeight:600}}>{x.icon} {x.label}</span>
+        <b style={{whiteSpace:'nowrap',color:STATUS[x.color].border}}>{SEM_EMOJI[x.color]} {x.pts} de {x.max}</b>
       </div>
-      {auto.bajada&&<p style={{color:'var(--yellow)',marginBottom:6,lineHeight:1.4}}>
-        ⬇️ Bajó a {nombreRanking(m.badge)}{auto.bajada.mes?` en ${auto.bajada.mes.toLowerCase()}`:''} después de {auto.bajada.meses} meses en {nombreRanking(auto.bajada.de)}: se le mide como <b>{nombreRanking(auto.bajada.de)}</b> hasta que vuelva a subir.
-      </p>}
-      {auto.rubros.map(x=><div key={x.k} style={{padding:'5px 0',borderBottom:'1px solid var(--border)'}}>
-        <div style={fila}>
-          <span>{x.icon} {x.label} <span style={{color:'var(--dim)',fontSize:12}}>(prioridad {x.prioridad})</span></span>
-          <b style={{whiteSpace:'nowrap',color:x.color?STATUS[x.color].border:'var(--dim)'}}>{x.color?`${SEM_EMOJI[x.color]} ${x.valor}`:'— sin dato'}</b>
-        </div>
-        {x.detalle&&<div style={{fontSize:12,color:'var(--dim)',lineHeight:1.35,marginTop:1}}>{x.detalle}</div>}
-      </div>)}
-      {auto.motivo&&<p style={{color:'var(--red)',fontWeight:600,marginTop:6,lineHeight:1.4}}>⚠️ {auto.motivo}</p>}
-      <p style={{fontSize:12,color:'var(--dim)',marginTop:6,lineHeight:1.4}}>Calificación ponderada (peso = 1 ÷ prioridad): 🟢 {CORTE_SEM_VERDE} o más · 🟡 {CORTE_SEM_AMARILLO} a {CORTE_SEM_VERDE-1} · 🔴 menos de {CORTE_SEM_AMARILLO}.</p>
-    </>}
-    {ajuste&&<div style={{marginTop:8,padding:'8px 10px',borderRadius:8,background:STATUS[ajuste.valor].bg,border:`1px solid ${STATUS[ajuste.valor].border}`}}>
-      <div style={{fontWeight:700}}>✋ Ajustado a {SEM_EMOJI[ajuste.valor]} {STATUS[ajuste.valor].label}{ajuste.porQuien?` por ${nombreCorto(ajuste.porQuien)}`:''}{ajuste.fecha?` · ${fmt(ajuste.fecha)}`:''}</div>
+      <div style={{...fila,fontSize:12,color:'var(--dim)',marginTop:1}}><span>{x.valor}</span><span style={{whiteSpace:'nowrap'}}>{ab?'▲':'ver más ▼'}</span></div>
+      {ab&&<div style={{fontSize:12,color:'var(--dim)',lineHeight:1.4,marginTop:5,padding:'6px 8px',background:'var(--bg)',borderRadius:6}}>{x.detalle}</div>}
+    </div>;};
+  const sub=t=><div style={{fontSize:12,fontWeight:800,color:'var(--dim)',textTransform:'uppercase',letterSpacing:'.4px',margin:'12px 0 2px'}}>{t}</div>;
+  return <div style={{fontSize:13}}>
+    {ajuste&&<div style={{marginBottom:10,padding:'8px 10px',borderRadius:8,background:STATUS[ajuste.valor].bg,border:`1px solid ${STATUS[ajuste.valor].border}`}}>
+      <div style={{fontWeight:700}}>✋ Su coach lo puso en {SEM_EMOJI[ajuste.valor]} {TITULO_SEM[ajuste.valor]}{ajuste.porQuien?` · ${nombreCorto(ajuste.porQuien)}`:''}{ajuste.fecha?` · ${fmt(ajuste.fecha)}`:''}</div>
       <div style={{color:'var(--dim)',marginTop:2}}>Motivo: {ajuste.motivo}</div>
-      {puedeAjustar&&<Btn variant="ghost" style={{fontSize:13,padding:'6px 0',marginTop:4}} onClick={onQuitarAjuste}>↩️ Regresar al automático</Btn>}
+      {puedeAjustar&&<Btn variant="ghost" style={{fontSize:13,padding:'6px 0',marginTop:2}} onClick={onQuitarAjuste}>↩️ Regresar al automático</Btn>}
+      {auto?.color&&<div style={{fontSize:12,color:'var(--dim)',marginTop:2}}>Abajo, lo que calcula la app.</div>}
     </div>}
-    {puedeAjustar&&auto?.color==='negro'&&<p style={{fontSize:12,color:'var(--dim)',marginTop:8}}>El negro no se puede ajustar: sale por llevar 2 meses o más como condicionado.</p>}
-    {puedeAjustar&&auto?.color!=='negro'&&<div style={{marginTop:10}}>
-      <div style={{fontWeight:700,color:'var(--dim)',marginBottom:6}}>{ajuste?'Cambiar el ajuste':'¿No refleja cómo va? Ajústalo'} (con motivo)</div>
+    {!listo&&<p style={{color:'var(--dim)'}}>⏳ Esperando las ventas y el ranking para calcular el semáforo…</p>}
+    {listo&&!auto?.color&&<p style={{color:'var(--dim)'}}>⚪ Todavía no hay números para calcularlo.</p>}
+    {auto?.color&&<>
+      <div style={fila}>
+        <span style={{fontSize:17,fontWeight:800,color:STATUS[auto.color].border}}>{SEM_EMOJI[auto.color]} {auto.puntaje} de 100</span>
+        <span style={{fontWeight:800,color:STATUS[auto.color].border}}>{TITULO_SEM[auto.color]}</span>
+      </div>
+      {/* Barra de 0 a 100 con las dos rayas de corte (50 y 80): se ve qué tan lejos está del siguiente color. */}
+      <div style={{position:'relative',height:8,background:'var(--border)',borderRadius:4,margin:'6px 0 3px',overflow:'hidden'}}>
+        <div style={{width:`${auto.puntaje}%`,height:'100%',background:STATUS[auto.color].border}}/>
+        {[CORTE_SEM_AMARILLO,CORTE_SEM_VERDE].map(c=><div key={c} style={{position:'absolute',left:`${c}%`,top:0,bottom:0,width:2,background:'var(--card)'}}/>)}
+      </div>
+      <div style={{fontSize:11,color:'var(--dim)'}}>🔴 menos de {CORTE_SEM_AMARILLO} · 🟡 {CORTE_SEM_AMARILLO} a {CORTE_SEM_VERDE-1} · 🟢 {CORTE_SEM_VERDE} o más</div>
+      {auto.motivo&&<p style={{marginTop:8,padding:'7px 9px',borderRadius:8,background:STATUS[auto.color].bg,lineHeight:1.4}}>
+        {auto.color==='negro'?'⚫':'⚠️'} {auto.motivo}{auto.color==='negro'?'. Es regla fija: sale en negro sin importar lo demás.':''}
+      </p>}
+      {auto.sugerencia&&<p style={{marginTop:8,padding:'7px 9px',borderRadius:8,background:'var(--gbg)',lineHeight:1.4,fontWeight:600}}>💡 {auto.sugerencia}</p>}
+      {restan.length>0?<>{sub('Lo que le resta')}{restan.map(rubro)}</>:<p style={{marginTop:10,fontWeight:600,color:'var(--green)'}}>✓ Todo lo que se mide va en verde.</p>}
+      {bien.length>0&&restan.length>0&&<>
+        <div onClick={()=>setVerBien(!verBien)} style={{...fila,padding:'9px 0',cursor:'pointer',borderBottom:verBien?'none':'1px solid var(--border)'}}>
+          <span style={{color:'var(--green)',fontWeight:600}}>✓ Va bien en {bien.length} <span style={{color:'var(--dim)',fontWeight:400}}>({bien.map(x=>x.icon).join(' ')})</span></span>
+          <span style={{color:'var(--dim)',whiteSpace:'nowrap'}}>{verBien?'▲':'ver ▼'}</span>
+        </div>
+        {verBien&&bien.map(rubro)}
+      </>}
+      {restan.length===0&&bien.map(rubro)}
+      {sinDato.length>0&&<p style={{fontSize:12,color:'var(--dim)',marginTop:8}}>Sin datos por ahora, no cuentan: {sinDato.map(x=>x.label).join(', ')}.</p>}
+      {auto.bajada&&<p style={{fontSize:12,color:'var(--yellow)',marginTop:6,lineHeight:1.4}}>
+        ⬇️ Bajó a {nombreRanking(m.badge)}{auto.bajada.mes?` en ${auto.bajada.mes.toLowerCase()}`:''} tras {auto.bajada.meses} meses en {nombreRanking(auto.bajada.de)}: se le pide lo de <b>{nombreRanking(auto.bajada.de)}</b> hasta que vuelva a subir.
+      </p>}
+    </>}
+    {puedeAjustar&&auto?.color==='negro'&&<p style={{fontSize:12,color:'var(--dim)',marginTop:8}}>El negro no se puede ajustar.</p>}
+    {puedeAjustar&&auto?.color!=='negro'&&!ajustando&&<Btn variant="secondary" style={{marginTop:10,fontSize:14,width:'100%'}} onClick={()=>setAjustando(true)}>✋ {ajuste?'Cambiar el ajuste':'Ajustar color'}</Btn>}
+    {puedeAjustar&&auto?.color!=='negro'&&ajustando&&<div style={{marginTop:10}}>
+      <div style={{fontWeight:700,color:'var(--dim)',marginBottom:6}}>¿No refleja cómo va? Elige el color y escribe por qué.</div>
       <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:8}}>
         {SEM_OPCIONES.map(o=>{
           const activo=valor===o.valor;
@@ -4045,11 +4119,14 @@ function PanelSemaforo({m,info,listo,puedeAjustar,onAjustar,onQuitarAjuste}){
         })}
       </div>
       <Textarea value={motivo} onChange={e=>setMotivo(e.target.value)} placeholder="Motivo del ajuste (obligatorio)" style={{minHeight:60,fontSize:14}}/>
-      <Btn style={{marginTop:8,fontSize:14,width:'100%'}} disabled={!valor||!motivo.trim()}
-        onClick={()=>{const t=motivo.trim();if(!valor||!t)return;if(esNotaSemAuto(t)||t===NOTA_SIN_AJUSTE){alert('Escribe el motivo con tus palabras');return;}onAjustar(valor,t);}}>
-        Guardar ajuste
-      </Btn>
-      <p style={{fontSize:12,color:'var(--dim)',marginTop:6}}>El ajuste vale para este mes. Se siguen viendo los dos: el automático y el tuyo.</p>
+      <div style={{display:'flex',gap:8,marginTop:8}}>
+        <Btn variant="secondary" style={{fontSize:14,flex:1}} onClick={()=>setAjustando(false)}>Cancelar</Btn>
+        <Btn style={{fontSize:14,flex:2}} disabled={!valor||!motivo.trim()}
+          onClick={()=>{const t=motivo.trim();if(!valor||!t)return;if(esNotaSemAuto(t)||t===NOTA_SIN_AJUSTE){alert('Escribe el motivo con tus palabras');return;}onAjustar(valor,t);}}>
+          Guardar ajuste
+        </Btn>
+      </div>
+      <p style={{fontSize:12,color:'var(--dim)',marginTop:6}}>Vale solo este mes. Se siguen viendo los dos: el de la app y el tuyo.</p>
     </div>}
   </div>;
 }
@@ -4626,6 +4703,18 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast,recordsPla
           </div>}
           {lastFb&&<div style={{fontSize:13,color:'var(--dim)',marginTop:2,lineHeight:1.4}}>Último: {fmt(lastFb.date)} · {lastFb.tipo}</div>}
           {!lastFb&&<div style={{fontSize:13,color:'var(--yellow)',marginTop:2,lineHeight:1.4}}>Sin evaluación</div>}
+          {/* El porqué del color en una línea, sin tener que abrir nada (en verde no hace falta). */}
+          {(()=>{
+            const a=semInfo.auto;let txt='';
+            if(semInfo.ajuste)txt=`✋ Ajustado por su coach: ${semInfo.ajuste.motivo}`;
+            else if(a?.color==='negro')txt=`⚫ ${a.motivo}`;
+            else if(a?.color&&a.color!=='verde'){
+              const top=loQueMasResta(a);
+              txt=[esCondicionado(m.badge)&&'Condicionado',top&&`lo que más le resta: ${top.icon} ${top.label}`].filter(Boolean).join(' · ');
+              txt=txt.charAt(0).toUpperCase()+txt.slice(1);
+            }
+            return txt&&<div style={{fontSize:13,fontWeight:600,color:STATUS[sem]?.border||'var(--dim)',marginTop:3,lineHeight:1.4,display:'-webkit-box',WebkitLineClamp:2,WebkitBoxOrient:'vertical',overflow:'hidden'}}>{txt}</div>;
+          })()}
         </div>
         <div style={{display:'flex',alignItems:'center',gap:6}}>
           {/* El botón del semáforo NO abre el detalle del vendedor: stopPropagation, si no, cada
@@ -6238,19 +6327,20 @@ const MANUAL_COMUNES={
     {sub:'Qué quiere decir cada color'},
     {colores:SEM_COLORES_MANUAL},
     {sub:'Qué se revisa'},
-    {p:'Se revisan **7 cosas**. Cada una sale 🟢 si llega a la **meta**, 🟡 si pasa la **base** pero no llega a la meta, y 🔴 si no llega ni a la base. Van de **la que más pesa** a la que menos:'},
+    {p:'Se revisan **7 cosas** y cada una **vale puntos**: entre todas suman 100. Si llega a la **meta** (🟢) se lleva todos sus puntos; si pasa la **base** pero no llega a la meta (🟡), la mitad; si no llega ni a la base (🔴), cero. **La calificación es la suma.** Van de la que más vale a la que menos:'},
     {colores:[
-      ['🎯','1. Instalaciones','Lo que lleva **en el mes hasta hoy** contra el objetivo de su ranking. Meta: su objetivo. Base: el mínimo del bono.'],
-      ['💰','2. Cuentas sin pagar','De lo que instaló en los 30 días **antes de la semana pasada**, cuánto sigue sin pagarse. Meta: **5% o menos**. Base: **10% o menos**.'],
-      ['📅','3. Semanas con bono','De las semanas del mes que ya terminaron, en cuántas llegó al mínimo del bono. Meta: **todas**. Base: **3 en el mes**.'],
-      ['💵','4. ARPU','Lo que paga en promedio cada cliente que instaló en el mes, sin IVA. Meta: **$480**. Base: **$460**.'],
-      ['🏅','5. Ranking','🟢 Oro o Platino · 🟡 Bronce o Plata · 🔴 Condicionado o Entrenamiento.'],
-      ['📚','6. Certificaciones','🟢 si tiene **todas** las de su ranking · 🔴 si le falta alguna.'],
-      ['🔄','7. Conversión','Instaladas ÷ validadas del mes. Meta: **90%**. Base: **85%**.'],
+      ['🎯','1. Instalaciones · 39 pts','Lo que lleva **en el mes hasta hoy** contra el objetivo de su ranking. Meta: su objetivo. Base: el mínimo del bono.'],
+      ['💰','2. Cuentas sin pagar · 19 pts','De lo que instaló en los 30 días **antes de la semana pasada**, cuánto sigue sin pagarse. Meta: **5% o menos**. Base: **10% o menos**.'],
+      ['📅','3. Semanas con bono · 13 pts','De las semanas del mes que ya terminaron, en cuántas llegó al mínimo del bono. Meta: **todas**. Base: **3 en el mes**.'],
+      ['💵','4. ARPU · 10 pts','Lo que paga en promedio cada cliente que instaló en el mes, sin IVA. Meta: **$480**. Base: **$460**.'],
+      ['🏅','5. Ranking · 8 pts','🟢 Oro o Platino · 🟡 Bronce o Plata · 🔴 Condicionado o Entrenamiento.'],
+      ['📚','6. Certificaciones · 6 pts','🟢 si tiene **todas** las de su ranking · 🔴 si le falta alguna.'],
+      ['🔄','7. Conversión · 5 pts','Instaladas ÷ validadas del mes. Meta: **90%**. Base: **85%**.'],
     ]},
-    {ojo:'Lo de arriba pesa mucho más que lo de abajo: **las instalaciones cuentan 7 veces más** que la conversión. Por eso alguien puede tener casi todo en 🟢 y aun así salir 🟡.'},
+    {ojo:'Las instalaciones valen **39 puntos** y la conversión solo **5**. Por eso alguien puede tener casi todo en 🟢 y aun así salir 🟡.'},
     {sub:'Un ejemplo'},
-    {p:'Ana es Plata. Sus instalaciones van 🟡, el ARPU 🔴 y su ranking 🟡. Todo lo demás (sin pagar, semanas con bono, cursos y conversión) va 🟢. Saca **67**: queda en 🟡, porque lo que más pesa, las instalaciones, no va en verde.'},
+    {p:'Ana es Plata. Sus instalaciones van 🟡 (**20 de 39**), el ARPU 🔴 (**0 de 10**) y su ranking 🟡 (**4 de 8**). Lo demás va 🟢 y se lleva todos sus puntos (19 + 13 + 6 + 5). Suma **67**: queda en 🟡. La app le dice al coach: **"Si llega a 14 instalaciones, sube a 🟢 86"**.'},
+    {p:'Si algo no se puede medir todavía (por ejemplo, sin instaladas no hay ARPU), sus puntos se reparten entre las demás y siempre se califica sobre 100.'},
     {sub:'Casos especiales'},
     {lista:[
       '**Condicionado**: nunca sale 🟢. Queda 🟡 solo si casi todo lo demás (**5 de sus otras 6 cosas**) va en 🟢; si no, 🔴.',
@@ -6260,8 +6350,9 @@ const MANUAL_COMUNES={
     ]},
     {sub:'Dónde lo ves'},
     {lista:[
-      'En **📈 Dashboard → 👥 Equipo**, la pastilla de cada vendedor trae su color y su calificación (por ejemplo **🟡 67**).',
-      '**Toca la pastilla** y ves las 7 cosas: cuánto lleva en cada una y contra qué se mide.',
+      'En **📈 Dashboard → 👥 Equipo**, la pastilla de cada vendedor trae su color y su calificación (por ejemplo **🟡 67**). Debajo de su nombre dice **lo que más le resta**.',
+      '**Toca la pastilla** y ves: su calificación, **💡 qué le haría subir de color**, y **lo que le resta** con sus puntos (por ejemplo "🎯 Instalaciones 🟡 20 de 39"). Lo que va bien sale resumido en **✓ Va bien en…**; tócalo si lo quieres ver.',
+      'Toca cualquier cosa de la lista para ver **contra qué se mide**.',
       'Cada semana la app guarda sola el semáforo en el **📁 Historial**, para ver cómo ha ido cambiando.',
     ]},
     {sub:'Si el color no refleja cómo va'},
@@ -6388,9 +6479,9 @@ const MANUAL_ROLES={
         {lista:['❌ **Motivos de rechazo** de las oportunidades.','📦 **Instalaciones por plan**.','⏳ **Cuentas por instalar** (últimos 30 días). Las puedes mandar por WhatsApp.','💵 **ARPU** por vendedor.','💰 **Cuentas sin pagar**: instaladas hace 25 a 90 días y sin pagar. Entre más días, más urge.','✅ **Cuentas pagadas**: la semana pasada contra la anterior.']},
         {sub:'🚦 El semáforo de tus vendedores'},
         {p:'Ya **no lo pones tú**: la app lo calcula sola. Cómo lo calcula está en la lección **🚦 El semáforo de tus vendedores**.'},
-        {pasos:['Baja hasta **👥 Equipo**.','Toca la **pastilla de color** de un vendedor: ves sus 7 cosas, cuánto lleva en cada una y contra qué se mide.']},
+        {pasos:['Baja hasta **👥 Equipo**. Debajo de cada vendedor dice **lo que más le resta**.','Toca su **pastilla de color**: ves su calificación, **💡 qué le haría subir de color** y lo que le resta, con sus puntos.','Toca una línea para ver contra qué se mide. Usa el 💡 para platicar con tu vendedor qué hacer esta semana.']},
         {sub:'Cambiar el color (solo si de verdad no refleja cómo va)'},
-        {pasos:['Toca su **pastilla de color**.','Abajo, en **¿No refleja cómo va? Ajústalo**, elige 🟢, 🟡 o 🔴.','Escribe el **motivo**. Es obligatorio.','Toca **Guardar ajuste**. Su pastilla sale con ✋.','Para quitarlo, toca la pastilla y luego **↩️ Regresar al automático**.']},
+        {pasos:['Toca su **pastilla de color**.','Hasta abajo toca **✋ Ajustar color** y elige 🟢, 🟡 o 🔴.','Escribe el **motivo**. Es obligatorio.','Toca **Guardar ajuste**. Su pastilla sale con ✋.','Para quitarlo, toca la pastilla y luego **↩️ Regresar al automático**.']},
         {ojo:'Tu cambio vale **solo este mes**. Tu líder ve los dos colores: el de la app y el tuyo, con tu motivo.'},
       ]},
     ],
