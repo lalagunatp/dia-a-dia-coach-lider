@@ -423,12 +423,13 @@ const qsVerComo=verComo=>verComo?`&verComo=${encodeURIComponent(verComo)}`:'';
 // el historial por jerarquía ahí mismo, ya no confía en que el cliente se autolimite.
 // Regresa también si la lectura funcionó: el Historial necesita distinguir "no hay registros" de
 // "no hubo conexión", porque en el segundo caso tiene que avisar que lo que muestra está incompleto.
-async function fetchHistorialHoja(hoja,token,verComo){
+// desde (yyyy-mm-dd, opcional): solo los registros de esa fecha en adelante (ver obtenerHistorial).
+async function fetchHistorialHoja(hoja,token,verComo,desde){
   if(!DOPOST_URL||!token)return{ok:false,registros:[],error:'Sin sesión'};
   try{
     // 25s por intento: para el Director la hoja de ARRANQUE pesa ~700KB, que con datos móviles
     // tarda en bajar aunque el servidor la arme en un segundo.
-    const json=await leerServidor(`${DOPOST_URL}?accion=historial&hoja=${encodeURIComponent(hoja||'ARRANQUE')}&token=${encodeURIComponent(token)}${qsVerComo(verComo)}`,{cache:true,ms:25000});
+    const json=await leerServidor(`${DOPOST_URL}?accion=historial&hoja=${encodeURIComponent(hoja||'ARRANQUE')}&token=${encodeURIComponent(token)}${qsVerComo(verComo)}${desde?`&desde=${desde}`:''}`,{cache:true,ms:25000});
     if(!json.ok)return{ok:false,registros:[],error:json.error||'El servidor no pudo leer la hoja'};
     return{ok:true,registros:json.registros||[]};
   }catch(e){console.error('Historial equipo fetch error:',e);return{ok:false,registros:[],error:e.message};}
@@ -695,13 +696,20 @@ function textoPermisoCompromiso({vendedor,date,tipo,motivo,compromiso,colonia,re
   if(registradoPor)l.push(`— ${nombreNatural(registradoPor)}`);
   return l.join('\n');
 }
+// Desde cuándo hacen falta los semáforos fuera del Historial: los ajustes valen el mes en curso y
+// la foto automática es de esta semana, que puede haber empezado el mes pasado. La hoja SEMAFORO
+// crece cada semana, así que no se baja completa más que en el Historial.
+function desdeSemaforo(){
+  const hoy=new Date(),lunes=startOfWeek(hoy),mes=startOfMonth(hoy);
+  return ymdLocal(lunes<mes?lunes:mes);
+}
 // Los registros que capturó ESA persona (los suyos, no los de su equipo), de todas las hojas o
 // solo de las de `tipos` (p.ej. ['plan','plan_resultado']).
 async function fetchRegistrosPropiosDelSheet(session,tipos){
   const nombre=session?.user?.nombre;
   if(!nombre||!session?.token)return[];
   const listas=await Promise.all(Object.entries(HOJA_POR_TIPO).filter(([tipo])=>!tipos||tipos.includes(tipo)).map(([tipo,hoja])=>
-    fetchHistorialEquipo(hoja,session.token,session.verComo)
+    fetchHistorialHoja(hoja,session.token,session.verComo,tipo==='semaforo'?desdeSemaforo():'').then(res=>res.registros)
       .then(filas=>filas.filter(f=>f['Registrado por']===nombre).map(f=>recordDesdeFila(tipo,f)).filter(Boolean))
       .catch(e=>{console.error('Registros del Sheet:',hoja,e);return[];})));
   return listas.flat().sort((a,b)=>a.savedAt.localeCompare(b.savedAt));
@@ -734,7 +742,10 @@ function etiquetaMes(ini,anioRef){
 }
 // yyyy-mm-dd en hora LOCAL (a diferencia de toISOString, que es UTC y puede recorrer la fecha un día).
 const ymdLocal=d=>d?`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`:'';
-const fmtMoney=n=>'$'+Number(n||0).toLocaleString('es-MX',{minimumFractionDigits:2,maximumFractionDigits:2});
+// Un solo formateador para toda la app: toLocaleString con opciones arma uno nuevo en cada llamada
+// (~60 µs cada una), y en listas de cientos de vendedores eso se nota. Mismo resultado.
+const FMT_DINERO=new Intl.NumberFormat('es-MX',{minimumFractionDigits:2,maximumFractionDigits:2});
+const fmtMoney=n=>'$'+FMT_DINERO.format(Number(n||0));
 // api.whatsapp.com y no wa.me: la redirección de wa.me a WhatsApp Web convierte los emojis en "�".
 const whatsappUrl=text=>`https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`;
 // Este estatus es la espera normal del primer pago del cliente, no algo accionable — no se muestra.
@@ -1516,10 +1527,34 @@ function semanasDelMes(ref){
   for(const d=new Date(l);d<=fin;d.setDate(d.getDate()+7))out.push(new Date(d));
   return out;
 }
+// Las cuentas del semáforo, en UNA sola pasada por las ventas y otra por las cuentas, comparando
+// milisegundos y no objetos Date: con funnelPeriodo por cada rubro y cada semana, el Director
+// (cientos de vendedores) tardaba medio segundo en PC — varios segundos en el teléfono — en cada
+// redibujo del Dashboard. Cuenta exactamente lo mismo que funnelPeriodo/arpuPromedioPeriodo.
+const msFecha=d=>d?d.getTime():NaN; // NaN: cualquier comparación da false, como enRango con fecha vacía
+function datosSemaforo(m,ref){
+  const ini=startOfMonth(ref).getTime(),hoy=ref.getTime();
+  const semanas=semanasDelMes(ref).map(l=>({ini:l.getTime(),fin:endOfWeek(l).getTime(),inst:0}));
+  const nppf=ventanaNPPF(ref),nIni=nppf.ini.getTime(),nFin=nppf.fin.getTime();
+  let validadas=0,instaladas=0,sumaArpu=0,cuentas=0,sinPagar=0;
+  for(const v of m.ventas||[]){
+    const a=msFecha(v.activacion),val=msFecha(v.validacion);
+    if(val>=ini&&val<=hoy)validadas++;
+    if(a>=ini&&a<=hoy){instaladas++;sumaArpu+=Number(v.arpu)||0;}
+    for(const s of semanas)if(a>=s.ini&&a<=s.fin){s.inst++;break;}
+  }
+  for(const c of m.cuentasCom||[]){
+    const f=msFecha(c.fechaInstalacion);
+    if(f>=nIni&&f<=nFin){cuentas++;if(!/^YA COMISIONADA/i.test(c.estatusPago))sinPagar++;}
+  }
+  return{validadas,instaladas,arpu:instaladas?sumaArpu/instaladas/1.16:0,semanas,nppf,cuentas,sinPagar};
+}
+const ARPU_BASE_TXT=fmtMoney(ARPU_BASE),ARPU_META_TXT=fmtMoney(ARPU_META);
 function semaforoAutomatico(m,ref){
   const{badge:R,bajada}=rankingMedicion(m);
-  const iniMes=startOfMonth(ref),finMes=endOfMonth(ref);
-  const fMes=funnelPeriodo(m.ventas,iniMes,ref);
+  const finMes=endOfMonth(ref);
+  const d=datosSemaforo(m,ref);
+  const fMes={validadas:d.validadas,instaladas:d.instaladas};
   const color=(meta,base)=>meta?'verde':base?'amarillo':'rojo';
   const r={};
   // Objetivo de instalaciones por ranking, prorrateado a los días que van del mes: a media
@@ -1531,25 +1566,18 @@ function semaforoAutomatico(m,ref){
     r.objetivo={color:color(fMes.instaladas>=meta,fMes.instaladas>=min),valor:`${fMes.instaladas} inst.`,
       detalle:`al día ${dia}: objetivo ${meta}, mínimo ${min} (del mes completo: ${metaMes})`};
   }
-  {
-    const{ini,fin}=ventanaNPPF(ref);
-    const ctas=(m.cuentasCom||[]).filter(c=>enRango(c.fechaInstalacion,ini,fin));
-    if(ctas.length){
-      const sin=ctas.filter(c=>!/^YA COMISIONADA/i.test(c.estatusPago)).length,pct=sin/ctas.length*100;
-      r.nppf={color:color(pct<=NPPF_META,pct<=NPPF_BASE),valor:`${Math.round(pct)}%`,
-        detalle:`${sin} sin pagar de ${ctas.length} instaladas del ${fmtDateObj(ini)} al ${fmtDateObj(fin)} · base ${NPPF_BASE}%, meta ${NPPF_META}%`};
-    }
+  if(d.cuentas){
+    const pct=d.sinPagar/d.cuentas*100;
+    r.nppf={color:color(pct<=NPPF_META,pct<=NPPF_BASE),valor:`${Math.round(pct)}%`,
+      detalle:`${d.sinPagar} sin pagar de ${d.cuentas} instaladas del ${fmtDateObj(d.nppf.ini)} al ${fmtDateObj(d.nppf.fin)} · base ${NPPF_BASE}%, meta ${NPPF_META}%`};
   }
   if(fMes.validadas){
     const pct=fMes.instaladas/fMes.validadas*100;
     r.conversion={color:color(pct>=CONV_META,pct>=CONV_BASE),valor:`${Math.round(pct)}%`,
       detalle:`${fMes.instaladas} instaladas ÷ ${fMes.validadas} validadas del mes · base ${CONV_BASE}%, meta ${CONV_META}%`};
   }
-  {
-    const arpu=arpuPromedioPeriodo(m.ventas,iniMes,ref);
-    if(arpu>0)r.arpu={color:color(arpu>=ARPU_META,arpu>=ARPU_BASE),valor:fmtMoney(arpu),
-      detalle:`promedio de las instaladas del mes · base ${fmtMoney(ARPU_BASE)}, meta ${fmtMoney(ARPU_META)}`};
-  }
+  if(d.arpu>0)r.arpu={color:color(d.arpu>=ARPU_META,d.arpu>=ARPU_BASE),valor:fmtMoney(d.arpu),
+    detalle:`promedio de las instaladas del mes · base ${ARPU_BASE_TXT}, meta ${ARPU_META_TXT}`};
   if(tieneRanking(m.badge)){
     r.ranking={color:RANKING_VERDE.includes(m.badge)?'verde':RANKING_AMARILLO.includes(m.badge)?'amarillo':'rojo',valor:nombreRanking(m.badge),
       detalle:esCondicionado(m.badge)?'no debe haber condicionados':'base Bronce, meta Oro'};
@@ -1563,10 +1591,10 @@ function semaforoAutomatico(m,ref){
   // Semanas con bono: de las semanas del mes que ya cerraron, en cuántas llegó al mínimo del bono.
   // 🟢 si no ha fallado ninguna; 🟡 mientras todavía pueda juntar 3 en el mes; 🔴 si ya no.
   {
-    const semanas=semanasDelMes(ref),cerradas=semanas.filter(l=>endOfWeek(l)<ref);
+    const semanas=d.semanas,hoy=ref.getTime(),cerradas=semanas.filter(s=>s.fin<hoy);
     if(cerradas.length){
       const minimo=minimoBono(R);
-      const conBono=cerradas.filter(l=>funnelPeriodo(m.ventas,l,endOfWeek(l)).instaladas>=minimo).length;
+      const conBono=cerradas.filter(s=>s.inst>=minimo).length;
       const fallo=cerradas.length-conBono;
       r.semanas={color:fallo===0?'verde':fallo<=semanas.length-SEMANAS_BONO_BASE?'amarillo':'rojo',valor:`${conBono} de ${cerradas.length}`,
         detalle:`semanas cerradas con bono (mín. ${minimo} inst.) · el mes tiene ${semanas.length}: base ${SEMANAS_BONO_BASE}, meta todas`};
@@ -4358,9 +4386,14 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast,recordsPla
 
   // Semáforo automático (ver semaforoAutomatico) o, si el coach lo cambió este mes, su ajuste.
   const listoSem=ventasListas(session);
-  const ajustesSem=ajustesSemaforo(recordsSemaforo,now);
-  const semPorVendedor={};
-  vendedores.forEach(m=>{semPorVendedor[m.nombre]=semaforoDeVendedor(m,ajustesSem,now,listoSem);});
+  // Se recalcula solo si cambian el equipo (ventas/ranking), los registros de semáforo o el día; no
+  // en cada toque del Dashboard (abrir un panel, expandir un coach…).
+  const hoySem=today();
+  const semPorVendedor=useMemo(()=>{
+    const ref=new Date(),ajustes=ajustesSemaforo(recordsSemaforo,ref),out={};
+    team.filter(m=>isVendedor(m.posicion)).forEach(m=>{out[m.nombre]=semaforoDeVendedor(m,ajustes,ref,listoSem);});
+    return out;
+  },[team,recordsSemaforo,listoSem,hoySem]);
   const semColor=n=>semPorVendedor[n]?.valor||'';
   const verdes=vendedores.filter(m=>semColor(m.nombre)==='verde').length;
   const amarillos=vendedores.filter(m=>semColor(m.nombre)==='amarillo').length;
@@ -6672,7 +6705,8 @@ function MainApp({session:sesionRecibida,setSession,onLogout,sessionBase,vistas,
   },[session.verComo,refreshKey]);
   const seguimientos=useMemo(()=>unirPorId(data.records.filter(r=>r.type==='seguimiento'),compromisosSheet.seguimiento),[data.records,compromisosSheet]);
   const compromisos=useMemo(()=>estadoCompromisos(unirPorId(data.records.filter(r=>r.type==='feedback'),compromisosSheet.feedback),seguimientos,today()),[data.records,compromisosSheet,seguimientos]);
-  const allTeam=[...(coaches||[]),...team];
+  // Memorizado: es la entrada de cálculos pesados (semáforo del Dashboard) que se rehacen al cambiar.
+  const allTeam=useMemo(()=>[...(coaches||[]),...team],[coaches,team]);
   // Líder y Director supervisan a través de coaches (el director, los de todos sus líderes).
   const supervisaCoaches=role==='lider'||role==='director'||esRolConsulta(role);
   const chipsEquipo=role==='director'||esRolConsulta(role)?(session.lideres||[]):role==='lider'?(coaches||[]):[];
@@ -6769,7 +6803,7 @@ function MainApp({session:sesionRecibida,setSession,onLogout,sessionBase,vistas,
   useEffect(()=>{setSemaforosSheet([]);setSemaforosSheetListos(false);},[session.verComo]);
   useEffect(()=>{
     let cancelado=false;
-    fetchHistorialHoja('SEMAFORO',session.token,session.verComo).then(res=>{
+    fetchHistorialHoja('SEMAFORO',session.token,session.verComo,desdeSemaforo()).then(res=>{
       // Si la lectura falla se conserva la anterior en vez de dejar a todos en ⚪.
       if(!cancelado&&res.ok){setSemaforosSheet(res.registros.map(f=>recordDesdeFila('semaforo',f)).filter(Boolean));setSemaforosSheetListos(true);}
     });

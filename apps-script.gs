@@ -998,12 +998,15 @@ function leerRankingMensual() {
       certFaltantes: certFaltantes,
       certTotal: certTotal,
       ventaSana: ventaSana,
-      medirComo: medirComo,
-      bajoEn: bajoEn,
-      mesesAntes: mesesAntes,
-      mesesCondicionado: mesesCondicionado,
-      certFaltantesMedicion: certFaltantesMedicion,
     };
+    // Semáforo: solo cuando aplican (casi nadie), para no engordar la respuesta del ranking.
+    if (medirComo) {
+      entry.medirComo = medirComo;
+      entry.bajoEn = bajoEn;
+      entry.mesesAntes = mesesAntes;
+      if (certFaltantesMedicion) entry.certFaltantesMedicion = certFaltantesMedicion;
+    }
+    if (mesesCondicionado) entry.mesesCondicionado = mesesCondicionado;
     [numA, numB, numC].forEach(function (k) {
       if (k && k !== 'INTERNO' && k !== 'EXTERNO' && k !== 'VACANTE') map[k] = entry;
     });
@@ -1694,7 +1697,22 @@ function obtenerHistorial(params) {
     const lastRow = sheet.getLastRow();
     if (lastRow < 2) return { ok: true, registros: [] };
 
-    const values = sheet.getRange(2, 1, lastRow - 1, cfg.headers.length).getValues();
+    // ?desde=yyyy-MM-dd: solo los registros de esa fecha en adelante. La hoja SEMAFORO crece cada
+    // semana (una foto por vendedor) y el Dashboard solo necesita el mes en curso: sin esto se bajaba
+    // completa en cada entrada. Mismo truco que en BASE DE DATOS: primero se lee SOLO la columna
+    // Fecha para ubicar el primer renglón que entra, y después se leen las filas de ahí al final.
+    // El filtro real se hace renglón por renglón abajo; el tramo solo acota la lectura.
+    const desde = /^\d{4}-\d{2}-\d{2}$/.test(String((params && params.desde) || '')) ? params.desde : '';
+    const idxFecha = cfg.headers.indexOf('Fecha');
+    const fechaTxt = v => (v instanceof Date) ? Utilities.formatDate(v, Session.getScriptTimeZone(), 'yyyy-MM-dd') : String(v || '').slice(0, 10);
+    let primera = 0;
+    if (desde && idxFecha !== -1) {
+      const fechas = sheet.getRange(2, idxFecha + 1, lastRow - 1, 1).getValues();
+      primera = fechas.findIndex(function (f) { return fechaTxt(f[0]) >= desde; });
+      if (primera === -1) return { ok: true, registros: [] };
+    }
+    const values = sheet.getRange(2 + primera, 1, lastRow - 1 - primera, cfg.headers.length).getValues()
+      .filter(function (row) { return !desde || idxFecha === -1 || fechaTxt(row[idxFecha]) >= desde; });
     const registros = values.map(row => {
       const obj = {};
       cfg.headers.forEach((h, i) => {
