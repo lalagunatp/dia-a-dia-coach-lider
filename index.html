@@ -1479,11 +1479,11 @@ function pagadasEnSemana(pagadas,semana){
 const RUBROS_SEMAFORO=[
   {k:'objetivo',icon:'🎯',label:'Objetivo de instalaciones',prioridad:1},
   {k:'nppf',icon:'💰',label:'Cuentas sin pagar (NPPF)',prioridad:2},
-  {k:'conversion',icon:'🔄',label:'Conversión validado → instalado',prioridad:2.5},
-  {k:'arpu',icon:'💵',label:'ARPU (sin IVA)',prioridad:3},
+  {k:'semanas',icon:'📅',label:'Semanas con bono en el mes',prioridad:3},
+  {k:'arpu',icon:'💵',label:'ARPU (sin IVA)',prioridad:4},
   {k:'ranking',icon:'🏅',label:'Ranking',prioridad:5},
-  {k:'cert',icon:'📚',label:'Certificaciones',prioridad:5},
-  {k:'semanas',icon:'📅',label:'Semanas con bono en el mes',prioridad:6},
+  {k:'cert',icon:'📚',label:'Certificaciones',prioridad:6},
+  {k:'conversion',icon:'🔄',label:'Conversión validado → instalado',prioridad:7},
 ];
 const PUNTOS_SEMAFORO={verde:100,amarillo:50,rojo:0};
 const CORTE_SEM_VERDE=80,CORTE_SEM_AMARILLO=50;
@@ -6242,15 +6242,15 @@ const MANUAL_COMUNES={
     {colores:[
       ['🎯','1. Instalaciones','Lo que lleva **en el mes hasta hoy** contra el objetivo de su ranking. Meta: su objetivo. Base: el mínimo del bono.'],
       ['💰','2. Cuentas sin pagar','De lo que instaló en los 30 días **antes de la semana pasada**, cuánto sigue sin pagarse. Meta: **5% o menos**. Base: **10% o menos**.'],
-      ['🔄','3. Conversión','Instaladas ÷ validadas del mes. Meta: **90%**. Base: **85%**.'],
+      ['📅','3. Semanas con bono','De las semanas del mes que ya terminaron, en cuántas llegó al mínimo del bono. Meta: **todas**. Base: **3 en el mes**.'],
       ['💵','4. ARPU','Lo que paga en promedio cada cliente que instaló en el mes, sin IVA. Meta: **$480**. Base: **$460**.'],
       ['🏅','5. Ranking','🟢 Oro o Platino · 🟡 Bronce o Plata · 🔴 Condicionado o Entrenamiento.'],
       ['📚','6. Certificaciones','🟢 si tiene **todas** las de su ranking · 🔴 si le falta alguna.'],
-      ['📅','7. Semanas con bono','De las semanas del mes que ya terminaron, en cuántas llegó al mínimo del bono. Meta: **todas**. Base: **3 en el mes**.'],
+      ['🔄','7. Conversión','Instaladas ÷ validadas del mes. Meta: **90%**. Base: **85%**.'],
     ]},
-    {ojo:'Lo de arriba pesa mucho más que lo de abajo: **las instalaciones cuentan 6 veces más** que las semanas con bono. Por eso alguien puede tener casi todo en 🟢 y aun así salir 🟡.'},
+    {ojo:'Lo de arriba pesa mucho más que lo de abajo: **las instalaciones cuentan 7 veces más** que la conversión. Por eso alguien puede tener casi todo en 🟢 y aun así salir 🟡.'},
     {sub:'Un ejemplo'},
-    {p:'Ana es Plata. Sus instalaciones van 🟡, el ARPU 🔴 y su ranking 🟡. Todo lo demás (sin pagar, conversión, cursos y semanas con bono) va 🟢. Saca **67**: queda en 🟡, porque lo que más pesa, las instalaciones, no va en verde.'},
+    {p:'Ana es Plata. Sus instalaciones van 🟡, el ARPU 🔴 y su ranking 🟡. Todo lo demás (sin pagar, semanas con bono, cursos y conversión) va 🟢. Saca **67**: queda en 🟡, porque lo que más pesa, las instalaciones, no va en verde.'},
     {sub:'Casos especiales'},
     {lista:[
       '**Condicionado**: nunca sale 🟢. Queda 🟡 solo si casi todo lo demás (**5 de sus otras 6 cosas**) va en 🟢; si no, 🔴.',
