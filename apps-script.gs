@@ -1474,6 +1474,11 @@ function editarAusenteArranque(d, autor) {
   if (String(sheet.getRange(fila, col('Registrado por')).getValue()) !== autor.nombre) {
     return { ok: false, error: 'Solo quien guardó el arranque puede editarlo' };
   }
+  // Si ya tiene foto de llegada (se resolvió desde otro teléfono), un "no llegó" o la falta
+  // automática de fin de día no la borra: la foto es la evidencia y gana.
+  const yaLlego = String(sheet.getRange(fila, col('Fotos llegada retardo')).getValue() || '').split(';')
+    .some(s => s.split(':')[0].trim() === d.name);
+  if (yaLlego && !(d.llegada && d.llegada.photo)) return { ok: true, type: d.type, id: d.id, fotoLlegada: null };
   // La foto primero: si no sube, no se toca nada y la app lo reintenta.
   let fotoLlegada = null;
   if (d.llegada && d.llegada.photo) {

@@ -12,6 +12,34 @@
 <link rel="manifest" href="./manifest.json">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📋</text></svg>">
 <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='18' fill='%231e40af'/><text x='50' y='68' font-size='60' text-anchor='middle'>📋</text></svg>">
+<script>
+// Limpieza del primer inicio del día: como la app cambia seguido, una vez al día se tira la copia
+// guardada de la app (caché del service worker y el service worker mismo) y los catálogos guardados,
+// y se recarga para bajar la versión publicada. NO se tocan la sesión (sv2-session), lo capturado
+// (supervision-v2) ni la cola de pendientes (sv2-pending). Solo con señal y después de confirmar que
+// el servidor responde: sin red, la copia guardada es lo que deja abrir la app en campo. Si no se
+// pudo, se intenta en el siguiente inicio.
+(function(){
+  var K='sv2-limpieza-dia';
+  try{
+    var d=new Date(),hoy=d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate();
+    if(localStorage.getItem(K)===hoy||navigator.onLine===false||!window.fetch)return;
+    var ctl=window.AbortController?new AbortController():null;
+    if(ctl)setTimeout(function(){ctl.abort();},5000);
+    fetch('./index.html?limpieza='+Date.now(),{cache:'no-store',signal:ctl&&ctl.signal}).then(function(r){
+      if(!r.ok)return;
+      return Promise.all([
+        window.caches?caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return caches.delete(k);}));}):null,
+        navigator.serviceWorker?navigator.serviceWorker.getRegistrations().then(function(rs){return Promise.all(rs.map(function(x){return x.unregister();}));}):null
+      ]).then(function(){
+        Object.keys(localStorage).forEach(function(k){if(k.indexOf('sv2-cat-')===0)localStorage.removeItem(k);});
+        localStorage.setItem(K,hoy);
+        location.reload();
+      });
+    }).catch(function(){});
+  }catch(e){}
+})();
+</script>
 <!-- React/ReactDOM/Babel vendorizados en ./vendor (mismo origen que este archivo, servidos por
      GitHub Pages) en vez de bajarlos de unpkg.com en cada arranque. Antes, aunque el HTML cargara
      bien desde GitHub Pages, el arranque completo dependía de que el navegador TAMBIÉN pudiera
@@ -1029,29 +1057,63 @@ function textoArranque(rec){
   return lineas.join('\n');
 }
 // ─── Arranque: retardos ───
-// Un retardo se guarda en el arranque como pendiente de llegada (`pendienteLlegada`). Cuando el
-// vendedor llega, el coach sube la foto sellada de los dos; si no llega, o se acaba el día sin esa
-// foto, queda como falta injustificada. Solo los arranques nuevos traen la marca: los retardos
-// guardados antes de esto se quedan como estaban.
-const esRetardoPendiente=a=>a.reason==='Retardo'&&a.pendienteLlegada;
+// Un retardo queda pendiente de llegada al guardar el arranque. Cuando el vendedor llega, el coach
+// sube la foto sellada de los dos; si no llega, o se acaba el día sin esa foto, queda como falta
+// injustificada. Pendiente = sigue como "Retardo" y sin foto de llegada; se lee igual del teléfono
+// que del Sheet, así que se resuelve desde cualquier teléfono. Solo cuenta desde que existe esto:
+// los retardos de antes se quedan como estaban.
+const RETARDOS_DESDE='2026-10-21';
+const esRetardoPendiente=(rec,a)=>rec.date>=RETARDOS_DESDE&&a.reason==='Retardo'&&!a.llegada;
 const juntarDetalle=(...partes)=>partes.filter(Boolean).join(' · ');
 const llegadaRetardo=(a,photo)=>{const hora=now();return{detail:juntarDetalle(a.detail,`Llegó ${hora} (foto con sello)`),llegada:{photo,hora},pendienteLlegada:false};};
 const faltaPorRetardo=a=>({reason:'Falta injustificada',detail:juntarDetalle(a.detail,'Retardo sin evidencia de llegada'),pendienteLlegada:false});
-// Cambia a una persona de un arranque ya guardado: en el teléfono y, como 'arranque_ausente', en
-// el Sheet (el servidor reescribe ese renglón — editarAusenteArranque en apps-script.gs). Va por
-// saveAndSync, así que sin señal queda en la cola de pendientes detrás del propio arranque.
-// `ediciones`: [{rec,nombre,cambios}] — varias de un jalón para guardar una sola vez.
-function editarAusentesArranque(data,setData,ediciones,token,toast){
+// Los arranques propios de la última semana que están en el Sheet (guardados en este o en otro
+// teléfono). `ok` dice si se pudieron leer: sin eso no se pasa nada a falta, porque el retardo
+// pudo haberse resuelto en otro teléfono.
+async function fetchArranquesPropios(session){
+  const d=new Date();d.setDate(d.getDate()-7);
+  const desde=[ymdLocal(d),RETARDOS_DESDE].sort()[1];
+  const res=await fetchHistorialHoja('ARRANQUE',session.token,session.verComo,desde);
+  return{ok:res.ok,records:res.registros.filter(f=>f['Registrado por']===session.user.nombre).map(f=>recordDesdeFila('arranque',f))};
+}
+// Los arranques de este teléfono más los del Sheet que no están aquí (mismo id en los dos lados).
+// Si un retardo sigue pendiente aquí pero en el Sheet ya se resolvió (desde otro teléfono), se
+// toma lo del Sheet. Un registro sin cambios regresa el mismo objeto.
+function juntarArranques(locales,delSheet){
+  const sheetPorId=new Map((delSheet||[]).map(r=>[r.id,r]));
+  const propios=locales.map(r=>{
+    const s=sheetPorId.get(r.id);
+    if(!s)return r;
+    let cambio=false;
+    const ausentes=(r.ausentes||[]).map(a=>{
+      const b=(s.ausentes||[]).find(x=>x.name===a.name);
+      if(!b||!esRetardoPendiente(r,a)||esRetardoPendiente(s,b))return a;
+      cambio=true;
+      return{...a,reason:b.reason,detail:b.detail,llegada:b.llegada||null};
+    });
+    return cambio?{...r,ausentes}:r;
+  });
+  const ids=new Set(locales.map(r=>r.id));
+  return[...propios,...(delSheet||[]).filter(r=>!ids.has(r.id))];
+}
+// `ediciones`: [{rec,nombre,cambios}] aplicadas sobre una lista de arranques.
+function aplicarEdicionesAusentes(records,ediciones){
   const porId={};
   ediciones.forEach(e=>{(porId[e.rec.id]=porId[e.rec.id]||[]).push(e);});
-  const records=data.records.map(r=>!porId[r.id]?r:{...r,ausentes:(r.ausentes||[]).map(a=>{
+  return records.map(r=>!porId[r.id]?r:{...r,ausentes:(r.ausentes||[]).map(a=>{
     const e=porId[r.id].find(x=>x.nombre===a.name);
     return e?{...a,...e.cambios}:a;
   })});
-  const upd={...data,records};
+}
+// Cambia a una persona de un arranque ya guardado: en el teléfono y, como 'arranque_ausente', en
+// el Sheet (el servidor reescribe ese renglón — editarAusenteArranque en apps-script.gs). Va por
+// saveAndSync, así que sin señal queda en la cola de pendientes detrás del propio arranque. El
+// arranque puede ser de otro teléfono (solo está en el Sheet): entonces solo se manda al Sheet.
+function editarAusentesArranque(data,setData,ediciones,token,toast){
+  const upd={...data,records:aplicarEdicionesAusentes(data.records,ediciones)};
   setData(upd);
-  ediciones.forEach(({rec,nombre})=>{
-    const a=records.find(r=>r.id===rec.id).ausentes.find(x=>x.name===nombre);
+  ediciones.forEach(({rec,nombre,cambios})=>{
+    const a={...(rec.ausentes||[]).find(x=>x.name===nombre),...cambios};
     saveAndSync(upd,{type:'arranque_ausente',id:rec.id,date:rec.date,name:nombre,reason:a.reason,detail:a.detail,llegada:a.llegada||null,token},toast,setData);
   });
 }
@@ -2261,7 +2323,7 @@ function RetardoPendiente({a,coachName,toast,onLlego,onFalta}){
     </div>
   </div>;
 }
-function ArranqueTab({data,setData,team,toast,session,refreshKey,recordsPlan=data.records}){
+function ArranqueTab({data,setData,team,toast,session,refreshKey,recordsPlan=data.records,arranquesPropios=[],editarRetardos}){
   const esLider=session.role==='lider';
   // Coach Promovendedor Punto de Venta: arranca en un punto de venta, oficina o con su líder
   // (foto de grupo normal), pero además cada vendedor a su cargo tiene que quedar resuelto: o sube
@@ -2341,18 +2403,22 @@ function ArranqueTab({data,setData,team,toast,session,refreshKey,recordsPlan=dat
   // Trabajaron en su día de descanso y todavía no dicen cuándo descansan (o pusieron el mismo día).
   const sinFechaDescanso=Object.entries(form.cambiosDescanso||{}).filter(([,f])=>!f||f===form.date).map(([n])=>n);
 
-  // Retardos de arranques ya guardados en este teléfono que esperan la llegada del vendedor. Los de
-  // días anteriores ya no salen: MainApp los pasa a falta al abrir la app.
-  const retardosPendientes=esLider?[]:data.records
-    .filter(r=>r.type==='arranque'&&r.registradoPor===session.user.nombre&&r.date===hoyStr)
-    .flatMap(r=>(r.ausentes||[]).filter(esRetardoPendiente).map(a=>({rec:r,a})));
+  // Retardos de los arranques de hoy (de este teléfono o de otro, vía el Sheet) que esperan la
+  // llegada del vendedor. Los de días anteriores ya no salen: MainApp los pasa a falta.
+  const retardosPendientes=esLider?[]:arranquesPropios
+    .filter(r=>r.date===hoyStr)
+    .flatMap(r=>(r.ausentes||[]).filter(a=>esRetardoPendiente(r,a)).map(a=>({rec:r,a})));
   const resolverRetardo=(rec,a,cambios,msg)=>{
-    editarAusentesArranque(data,setData,[{rec,nombre:a.name,cambios}],session.token,toast);
+    editarRetardos([{rec,nombre:a.name,cambios}]);
     toast(msg);
   };
+  // Un solo arranque por día: si ya hay uno de hoy (en este teléfono o en otro), ya no se ofrece
+  // el formulario hasta mañana.
+  const arranqueDeHoy=masReciente(arranquesPropios.filter(r=>r.date===hoyStr),'savedAt');
 
   const guardar=async()=>{
     if(session.soloLectura)return; // vista prestada: solo consulta
+    if(arranquesPropios.some(r=>r.date===form.date)){alert(`Ya registraste el arranque del ${fmt(form.date)}. Solo se guarda uno por día.`);return;}
     if(!form.photo){alert(esLider?'Agrega la foto con el coach prioridad del día para poder guardar el arranque':'Agrega la foto de grupo para poder guardar el arranque');return;}
     if(pendientesPDV.length){alert('Falta resolver a: '+pendientesPDV.map(m=>m.nombre).join(', ')+'. De cada vendedor sube su foto de entrada o márcalo ausente con el motivo (falta, descanso, etc.) para poder guardar el arranque.');return;}
     if(sinFechaDescanso.length){alert('Indica cuándo fue o será el día de descanso de: '+sinFechaDescanso.join(', ')+' (trabajó hoy en vez de descansar).');return;}
@@ -2361,7 +2427,7 @@ function ArranqueTab({data,setData,team,toast,session,refreshKey,recordsPlan=dat
       registradoPor:session.user.nombre,rolRegistro:session.role,token:session.token,savedAt:new Date().toISOString()};
     compartirEvidencia(textoArranque(rec),fotosArranque(rec));
     const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast,setData);
-    toast(rec.ausentes.some(esRetardoPendiente)?'✅ Arranque guardado — cuando llegue quien tiene retardo, sube su foto aquí arriba':'✅ Arranque guardado');
+    toast(rec.ausentes.some(a=>esRetardoPendiente(rec,a))?'✅ Arranque guardado — cuando llegue quien tiene retardo, sube su foto aquí arriba':'✅ Arranque guardado');
     setUltimoGuardado(rec);
     setForm({date:today(),time:now(),photo:null,photoSubida:null,...asistenciaInicial(today()),fotosVendedores:{},notas:''});
     window.scrollTo({top:0,behavior:'smooth'});
@@ -2381,6 +2447,10 @@ function ArranqueTab({data,setData,team,toast,session,refreshKey,recordsPlan=dat
         onLlego={foto=>resolverRetardo(rec,a,llegadaRetardo(a,foto),`✅ Llegada de ${nombreCorto(a.name)} guardada`)}
         onFalta={()=>resolverRetardo(rec,a,faltaPorRetardo(a),`❌ ${nombreCorto(a.name)} quedó con falta`)}/>)}
     </Card>}
+    {arranqueDeHoy?<Card title="☀️ Arranque del día" style={{borderLeft:'4px solid var(--green)'}}>
+      <p style={{fontSize:14,fontWeight:700,marginBottom:4}}>✅ Ya registraste tu arranque de hoy{arranqueDeHoy.time?` a las ${arranqueDeHoy.time}`:''}</p>
+      <p style={{fontSize:13,color:'var(--dim)'}}>Solo se guarda uno por día: el siguiente se habilita mañana. Lo puedes consultar en el Historial.</p>
+    </Card>:
     <Card title="☀️ Arranque del día">
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:12}}>
         <Field label="Fecha"><Input type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})}/></Field>
@@ -2398,7 +2468,7 @@ function ArranqueTab({data,setData,team,toast,session,refreshKey,recordsPlan=dat
         <PhotoCapture modo="galeria" photo={form.photoSubida} onCapture={p=>setForm({...form,photoSubida:p})}
           onQuitar={()=>setForm({...form,photoSubida:null})} label="🖼️ Subir foto de la galería (sin sello)"/>
       </Field>
-    </Card>
+    </Card>}
     {esLider?<>
       <Card title="Asistencia — ¿ya guardaron su arranque hoy?">
         {cargandoArranquesEquipo?<div style={{textAlign:'center',padding:20}}><Spinner/></div>:
@@ -2423,7 +2493,7 @@ function ArranqueTab({data,setData,team,toast,session,refreshKey,recordsPlan=dat
           </div>
         )}
       </Card>
-    </>:
+    </>:!arranqueDeHoy&&
       <Card title={`Asistencia (${team.length})`}>
         {esCoachPDV&&team.length>0&&
           <p style={{fontSize:13,fontWeight:600,marginBottom:10,padding:'8px 10px',borderRadius:8,
@@ -2478,8 +2548,8 @@ function ArranqueTab({data,setData,team,toast,session,refreshKey,recordsPlan=dat
         })}
       </Card>
     }
-    <Card title="Notas"><Textarea value={form.notas} onChange={e=>setForm({...form,notas:e.target.value})} placeholder="Prioridades, situaciones especiales..."/></Card>
-    {session.soloLectura?<AvisoSoloLectura nombre={session.user.nombre}/>:<>
+    {!arranqueDeHoy&&<Card title="Notas"><Textarea value={form.notas} onChange={e=>setForm({...form,notas:e.target.value})} placeholder="Prioridades, situaciones especiales..."/></Card>}
+    {arranqueDeHoy?null:session.soloLectura?<AvisoSoloLectura nombre={session.user.nombre}/>:<>
       <Btn onClick={guardar} disabled={pendientesPDV.length>0||sinFechaDescanso.length>0} style={{width:'100%'}}>💾 Guardar arranque</Btn>
       {pendientesPDV.length>0&&<p style={{fontSize:13,color:'var(--dim)',textAlign:'center',marginTop:6}}>Se habilita cuando los {team.length} vendedores tengan foto de entrada o justificación.</p>}
       {sinFechaDescanso.length>0&&<p style={{fontSize:13,color:'var(--dim)',textAlign:'center',marginTop:6}}>Falta la fecha de descanso de: {sinFechaDescanso.map(nombreCorto).join(', ')}.</p>}
@@ -5759,7 +5829,7 @@ function FichaRegistro({ev,resaltar,enfoque,onVerFoto,imprimir,conEncabezado,rol
               <EvidenciaFoto src={a.photo} onVer={onVerFoto} imprimir={imprimir} etiqueta="Evidencia"/>
               <EvidenciaFoto src={a.llegada?.photo} onVer={onVerFoto} imprimir={imprimir} etiqueta="Llegada"/>
             </div>}
-            {esRetardoPendiente(a)&&<div style={{fontSize:13,color:'var(--yellow)',fontWeight:600}}>⏰ Pendiente la foto de llegada</div>}
+            {esRetardoPendiente(r,a)&&<div style={{fontSize:13,color:'var(--yellow)',fontWeight:600}}>⏰ Pendiente la foto de llegada</div>}
           </div>
           <span style={HS.chip(c,f)}>{a.reason||'Sin motivo'}</span>
         </div>;
@@ -6545,11 +6615,12 @@ const MANUAL_ROLES={
       {icon:'☀️',titulo:'Arranque (cada mañana)',cuando:'Todos los días, al empezar.',bloques:[
         {pasos:['Toca **☀️ Arranque**.','La **fecha** y la **hora** ya vienen puestas.','En **Foto de grupo** toca **📷 Tomar foto** y tómala con tu equipo. Si el teléfono pregunta por tu ubicación, dile que **sí**.','Si quieres, en **Foto adicional** sube otra foto de tu galería.','En **Asistencia** todos salen en **verde ✓**. Si alguien **no vino**, toca su **✓** y se pone en **rojo ✗**.','Al que no vino elígele el **motivo** y escribe el **detalle**. Puedes agregar una foto o captura de la plática.','Escribe **Notas** si pasa algo especial.','Toca **💾 Guardar arranque**.','Se abre la ventana para compartir: elige **WhatsApp** y manda la evidencia.']},
         {alto:'Sin la **foto de grupo** no se puede guardar. Se toma con la cámara, en ese momento.'},
+        {ojo:'Se guarda **un solo arranque por día**. Ya guardado, la pantalla te dice **✅ Ya registraste tu arranque de hoy** y el siguiente se habilita mañana, aunque entres desde otro teléfono.'},
         {p:'Motivos: Falta justificada, Falta injustificada, Incapacidad, Permiso autorizado, Vacaciones, Descanso, Retardo, Trabajo fuera de ruta, Actividad especial u Otro.'},
         {ojo:'**Trabajo fuera de ruta** y **Actividad especial** no son faltas: la persona sí trabaja. Llena su **🎯 Compromiso del día**: cuentas, ventas, instalaciones y la colonia donde va a trabajar.'},
         {ok:'Si no se abrió WhatsApp, arriba queda el botón verde **📲 Enviar evidencia por WhatsApp**.'},
         {sub:'Retardos'},
-        {pasos:['Al que llegó tarde márcalo **✗** con motivo **Retardo** y guarda tu arranque.','Arriba en **☀️ Arranque** sale **⏰ Retardos de hoy**. Cuando llegue, toca **📷 Tomar foto** y tómate la foto **con él** (lleva sello).','Toca **✅ Ya llegó**. Si no llegó, toca **❌ No llegó**.']},
+        {pasos:['Al que llegó tarde márcalo **✗** con motivo **Retardo** y guarda tu arranque.','Arriba en **☀️ Arranque** sale **⏰ Retardos de hoy**. Cuando llegue, toca **📷 Tomar foto** y tómate la foto **con él** (lleva sello).','Toca **✅ Ya llegó**. Si no llegó, toca **❌ No llegó**.','Lo puedes hacer desde **cualquier teléfono** donde entres con tu usuario, no solo desde el que guardaste el arranque.']},
         {alto:'Si no llega, o se acaba el día sin la foto de llegada, queda como **falta injustificada** por no tener evidencia de su llegada.'},
         {sub:'Si eres Coach de Punto de Venta (Promovendedor)'},
         {lista:['De **cada** vendedor sube su **foto de entrada** en el punto de venta (de la galería, sin sello) **o** márcalo ausente con su motivo.','Un letrero te dice cuántos van resueltos. El botón de guardar se prende cuando **todos** están resueltos.','A quien le toca **😴 descanso** según tu **Plan de la semana** ya sale en **rojo ✗** con motivo **Descanso**.','Si sí vino a trabajar, toca **🔁 Sí trabajó (día laborado)** y pon **cuándo fue o será su día de descanso**. Ese otro día te sale solo como descanso.']},
@@ -6928,20 +6999,48 @@ function MainApp({session:sesionRecibida,setSession,onLogout,sessionBase,vistas,
       });
     return()=>{cancelado=true;};
   },[session.verComo,refreshKey]);
-  // Retardos de días pasados que se quedaron sin la foto de llegada: quedan como falta injustificada
-  // (ver esRetardoPendiente). Se revisa al abrir la app, sobre lo guardado en este teléfono y solo
-  // en la sesión propia (lo de una vista prestada no es de quien tiene el teléfono).
+  // Arranques propios del Sheet (sesión propia): con ellos los retardos pendientes y el "ya
+  // registraste tu arranque de hoy" salen en cualquier teléfono, no solo en el que lo guardó.
+  // null = todavía no llegan. En vista prestada ya vienen dentro de registrosVista.
+  const[arranquesSheet,setArranquesSheet]=useState(null);
+  // El Director y los roles de consulta no capturan arranques: no se gasta esa lectura.
   useEffect(()=>{
-    if(enVista||session.soloLectura)return;
+    if(enVista||session.soloLectura||role==='director')return;
+    let cancelado=false;
+    fetchArranquesPropios(session).then(res=>{if(!cancelado)setArranquesSheet(res);});
+    return()=>{cancelado=true;};
+  },[session.verComo,refreshKey]);
+  const arranquesPropios=useMemo(()=>{
+    const locales=data.records.filter(r=>r.type==='arranque'&&r.registradoPor===user.nombre);
+    return enVista?locales:juntarArranques(locales,arranquesSheet?.records);
+  },[enVista,data.records,arranquesSheet,user.nombre]);
+  // Resolver retardos: en el teléfono, en el Sheet y en lo ya leído del Sheet (si el arranque se
+  // guardó en otro teléfono solo está ahí).
+  const editarRetardos=(ediciones,base=datosLocales)=>{
+    editarAusentesArranque(base,setDatosLocales,ediciones,session.token,toast);
+    setArranquesSheet(s=>s&&{...s,records:aplicarEdicionesAusentes(s.records,ediciones)});
+  };
+  // Al llegar el Sheet: lo que se resolvió en otro teléfono se guarda también en este, y los
+  // retardos de días pasados que se quedaron sin foto de llegada pasan a falta injustificada. Solo
+  // con el Sheet leído (si no, quizá ya llegó con foto en otro teléfono) y en la sesión propia.
+  useEffect(()=>{
+    if(enVista||session.soloLectura||!arranquesSheet?.ok)return;
+    const locales=datosLocales.records.filter(r=>r.type==='arranque'&&r.registradoPor===user.nombre);
+    const unidos=juntarArranques(locales,arranquesSheet.records);
+    const resueltosFuera=new Map(unidos.filter(r=>locales.some(l=>l.id===r.id)&&!locales.includes(r)).map(r=>[r.id,r]));
+    let base=datosLocales;
+    if(resueltosFuera.size){
+      base={...datosLocales,records:datosLocales.records.map(r=>resueltosFuera.get(r.id)||r)};
+      setDatosLocales(base);saveData(base);
+    }
     const hoy=today();
-    const ediciones=datosLocales.records
-      .filter(r=>r.type==='arranque'&&r.date<hoy&&r.registradoPor===user.nombre)
-      .flatMap(r=>(r.ausentes||[]).filter(esRetardoPendiente).map(a=>({rec:r,nombre:a.name,cambios:faltaPorRetardo(a)})));
+    const ediciones=unidos.filter(r=>r.date<hoy)
+      .flatMap(r=>(r.ausentes||[]).filter(a=>esRetardoPendiente(r,a)).map(a=>({rec:r,nombre:a.name,cambios:faltaPorRetardo(a)})));
     if(ediciones.length){
-      editarAusentesArranque(datosLocales,setDatosLocales,ediciones,session.token,toast);
+      editarRetardos(ediciones,base);
       toast(`⏰ ${ediciones.length} retardo${ediciones.length!==1?'s':''} sin foto de llegada quedó como falta`);
     }
-  },[enVista]);
+  },[arranquesSheet]);
   const seguimientos=useMemo(()=>unirPorId(data.records.filter(r=>r.type==='seguimiento'),compromisosSheet.seguimiento),[data.records,compromisosSheet]);
   const compromisos=useMemo(()=>estadoCompromisos(unirPorId(data.records.filter(r=>r.type==='feedback'),compromisosSheet.feedback),seguimientos,today()),[data.records,compromisosSheet,seguimientos]);
   // Memorizado: es la entrada de cálculos pesados (semáforo del Dashboard) que se rehacen al cambiar.
@@ -7233,7 +7332,7 @@ function MainApp({session:sesionRecibida,setSession,onLogout,sessionBase,vistas,
           {tab==='dashboard'&&estadoResultado.pendiente&&<RenglonResultadoPendiente plan={estadoResultado.pendiente}
             aDestiempo={estadoResultado.ventana.aDestiempo} onClick={()=>irATab('plan',{abrirResultado:true})}/>}
           {tab==='dashboard'&&<DashboardTab data={data} setData={setData} team={allTeam} coaches={coaches} session={session} setTab={irATab} toast={toast} recordsPlan={recordsPlan} compromisos={compromisos} recordsSemaforo={recordsSemaforo}/>}
-          {tab==='arranque'&&<ArranqueTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey} recordsPlan={recordsPlan}/>}
+          {tab==='arranque'&&<ArranqueTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey} recordsPlan={recordsPlan} arranquesPropios={arranquesPropios} editarRetardos={editarRetardos}/>}
           {tab==='permisos'&&<PermisosTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
           {tab==='cierre'&&<CierreTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey}/>}
           {tab==='plan'&&<PlanTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey} abrirResultado={abrirResultado} recordsPlan={recordsPlan} planesListos={planesListos}/>}
