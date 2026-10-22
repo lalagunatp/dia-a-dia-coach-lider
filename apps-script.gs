@@ -1343,7 +1343,9 @@ const SHEET_CONFIG = {
       'Casas tocadas', 'Casas abiertas', '% Apertura',
       'Ventas en campo', 'Seguimientos', 'Rechazos', 'Pago promedio',
       'Proveedores', 'Motivos de rechazo', 'Detalle de casas', 'Campo (datos)',
-      'Casas con streaming', 'Apps de streaming', 'Pago prom. streaming'
+      'Casas con streaming', 'Apps de streaming', 'Pago prom. streaming',
+      // El semáforo del vendedor solo se guarda en el hallazgo si su coach lo cambió a mano: su motivo.
+      'Motivo semáforo'
     ]
   },
   // El semáforo se pone desde el panel Equipo del Dashboard, no dentro de un hallazgo. Vive en su
@@ -1664,7 +1666,7 @@ function buildRow(type, d) {
         d.transcript || '', d.notas || '',
         fotoUrl ? 'SÍ' : 'NO', fotoUrl,
         d.registradoPor || '', ts
-      ].concat(columnasCampo(d.campo));
+      ].concat(columnasCampo(d.campo), [d.semaforoMotivo || '']);
       const extra = fotosEvidencia ? { fotosEvidencia: fotosEvidencia } : { fotoUrl: fotoUrl };
       return { row: row, extra: extra };
     }

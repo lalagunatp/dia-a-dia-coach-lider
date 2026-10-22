@@ -597,7 +597,7 @@ function recordDesdeFila(tipo,f){
       // columna que la foto única del acompañamiento — se distinguen por el separador.
       const col=String(f['Foto evidencia']||'').trim();
       const fotos=col.includes(';')?col.split(';').map(s=>s.trim()).filter(Boolean):[];
-      return{...base,vendedor:f['Integrante']||'',tipo:normTipoFeedback(f['Tipo']),semaforo:f['Semáforo']||'',
+      return{...base,vendedor:f['Integrante']||'',tipo:normTipoFeedback(f['Tipo']),semaforo:f['Semáforo']||'',semaforoMotivo:f['Motivo semáforo']||'',
         hallazgos:f['Hallazgos']||'',fortalezas:f['Fortalezas']||'',areas_oportunidad:f['Áreas de oportunidad']||'',
         compromisos:f['Compromisos']||'',fecha_revision:f['Fecha revisión']||'',
         grabado:String(f['Grabado']||'').toUpperCase().startsWith('S'),transcript:f['Transcripción']||'',
@@ -4041,7 +4041,7 @@ function FeedbackTab({data,setData,team,toast,session,refreshKey,compromisos=[],
     // El semáforo que se guarda es el vigente al momento de documentar, no uno elegido aquí.
     // Cada tipo usa solo su evidencia: la foto sellada de Observaciones o las varias sin sello
     // de la asignación externa (por si cambiaron de tipo después de tomar una).
-    const rec={id:uid(),type:'feedback',...form,photo:esEvidenciaExterna?null:form.photo,fotos:esEvidenciaExterna?form.fotos:[],campo:esAcompanamiento?form.campo:null,semaforo:semaforoVigente,registradoPor:session.user.nombre,token:session.token,savedAt:new Date().toISOString()};
+    const rec={id:uid(),type:'feedback',...form,photo:esEvidenciaExterna?null:form.photo,fotos:esEvidenciaExterna?form.fotos:[],campo:esAcompanamiento?form.campo:null,semaforo:semaforoVigente,semaforoMotivo:ajusteVigente?.motivo||'',registradoPor:session.user.nombre,token:session.token,savedAt:new Date().toISOString()};
     // Con compromiso, WhatsApp se abre aquí mismo, dentro del toque (después de un await el
     // teléfono lo bloquearía), con el mensaje listo para el integrante.
     const avisoCompromiso=conCompromiso?{texto:textoNuevoCompromiso(rec),para:nombreCorto(rec.vendedor)}:null;
@@ -4052,11 +4052,13 @@ function FeedbackTab({data,setData,team,toast,session,refreshKey,compromisos=[],
     setForm({date:today(),vendedor:'',tipo:TIPO_CAMPO,hallazgos:'',compromisos:'',fecha_revision:'',semaforo:'',photo:null,fotos:[],campo:campoVacio()});
   };
   const selectedMember=form.vendedor?team.find(m=>m.nombre===form.vendedor):null;
-  // El semáforo ya no se elige aquí: se lee el vigente y se guarda con el hallazgo tal cual estaba,
-  // sin poder cambiarlo desde esta pantalla. A un vendedor le toca el automático (o el ajuste de su
-  // coach); a un coach, que el líder documenta, el último que se le haya puesto a mano.
+  // El semáforo no se elige aquí. A un vendedor el automático ya se calcula solo, así que el hallazgo
+  // solo lo muestra y lo guarda si su coach se lo cambió a mano este mes (con el motivo); a un coach,
+  // que el líder documenta, el último que se le haya puesto a mano.
+  const esVendedorSel=!!selectedMember&&isVendedor(selectedMember.posicion);
+  const ajusteVigente=esVendedorSel?semaforoDeVendedor(selectedMember,ajustesSemaforo(recordsSemaforo,new Date()),new Date(),ventasListas(session)).ajuste:null;
   const semaforoVigente=!selectedMember?''
-    :isVendedor(selectedMember.posicion)?semaforoDeVendedor(selectedMember,ajustesSemaforo(recordsSemaforo,new Date()),new Date(),ventasListas(session)).valor
+    :esVendedorSel?ajusteVigente?.valor||''
     :construirSemaforoMap(recordsSemaforo)[form.vendedor]?.valor||'';
   // Líder: el hallazgo/feedback lo documenta sobre coaches, no directamente sobre vendedores
   // (eso le toca a cada coach) — la lista de integrantes se limita a sus coaches.
@@ -4159,17 +4161,22 @@ function FeedbackTab({data,setData,team,toast,session,refreshKey,compromisos=[],
         {pendientesIntegrante.map(c=><RenglonCompromiso key={c.r.id} c={c} onRevisar={session.soloLectura?null:setRevisando}/>)}
       </div>}
       {/* Solo informativo: el semáforo se pone en Dashboard → Equipo, que es donde se ve el
-          rendimiento contra la meta. Aquí se muestra el vigente y se guarda con el hallazgo como
-          foto del momento, para saber en qué estaba la persona cuando se documentó. */}
-      <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:12,flexWrap:'wrap'}}>
-        <span style={{fontSize:13,fontWeight:700,color:'var(--dim)'}}>SEMÁFORO:</span>
-        {form.vendedor
-          ? (semaforoVigente
-              ? <StatusBadge status={semaforoVigente}/>
-              : <span style={{fontSize:14,color:'var(--yellow)',fontWeight:600}}>⚪ Sin semáforo</span>)
-          : <span style={{fontSize:14,color:'var(--dim)'}}>Selecciona un integrante</span>}
-        <span style={{fontSize:13,color:'var(--dim)'}}>· se calcula solo; el desglose está en Dashboard → Equipo</span>
+          rendimiento contra la meta. Del vendedor solo sale si su coach lo cambió a mano (el
+          automático no aporta nada aquí); del coach, el vigente. Se guarda con el hallazgo. */}
+      {ajusteVigente?<div style={{marginBottom:12}}>
+        <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+          <span style={{fontSize:13,fontWeight:700,color:'var(--dim)'}}>SEMÁFORO:</span>
+          <StatusBadge status={ajusteVigente.valor}/>
+          <span style={{fontSize:13,color:'var(--dim)'}}>· ajustado por {ajusteVigente.porQuien?nombreCorto(ajusteVigente.porQuien):'el coach'}</span>
+        </div>
+        <div style={{fontSize:13,color:'var(--dim)',marginTop:4}}>Motivo: {ajusteVigente.motivo}</div>
       </div>
+      :form.vendedor&&!esVendedorSel&&<div style={{display:'flex',alignItems:'center',gap:10,marginBottom:12,flexWrap:'wrap'}}>
+        <span style={{fontSize:13,fontWeight:700,color:'var(--dim)'}}>SEMÁFORO:</span>
+        {semaforoVigente
+          ? <StatusBadge status={semaforoVigente}/>
+          : <span style={{fontSize:14,color:'var(--yellow)',fontWeight:600}}>⚪ Sin semáforo</span>}
+      </div>}
     </Card>
     {esEvidenciaExterna&&<Card title="📷 Evidencia (obligatoria)">
       <p style={{fontSize:13,color:'var(--dim)',marginBottom:8}}>Sube foto(s) de la persona en campo y de la conversación con el avance al momento (sin sello).</p>
@@ -5730,8 +5737,11 @@ function tonoDe(r,vendedor){
     default:return null;
   }
 }
+// La foto semanal del semáforo automático se sigue guardando en la hoja SEMAFORO, pero no sale en el
+// Historial (lista, expediente ni PDF): solo lo que el coach cambió a mano.
 function normalizarEvento(r,pendientes){
   if(!r||!TIPOS_HIST[r.type])return null;
+  if(r.type==='semaforo'&&esNotaSemAuto(r.nota))return null;
   return{id:r.id,tipo:r.type,fecha:fechaEfectiva(r),hora:horaDeRegistro(r),autor:r.registradoPor||'',
     pendiente:pendientes.has(r.id),desdeSheet:!!r.desdeSheet,sujetos:sujetosDe(r),r};
 }
@@ -6023,6 +6033,7 @@ function FichaRegistro({ev,resaltar,enfoque,onVerFoto,imprimir,conEncabezado,rol
           {r.tipo&&<span style={HS.chip(t.color,t.fondo)}>{r.tipo}</span>}
           {STATUS[r.semaforo]&&<StatusBadge status={r.semaforo} small/>}
         </>)}
+        {texto('Semáforo ajustado por el coach',r.semaforoMotivo)}
         {r.campo&&<CampoResumen campo={r.campo}/>}
         {texto('Hallazgo',r.hallazgos)}
         {texto('Fortalezas',r.fortalezas)}
@@ -6963,7 +6974,7 @@ const MANUAL_COMUNES={
       'En **📈 Dashboard → 👥 Equipo**, la pastilla de cada vendedor trae su color y su calificación (por ejemplo **🟡 67**). Debajo de su nombre dice **lo que más le resta**.',
       '**Toca la pastilla** y ves: su calificación, **💡 qué le haría subir de color**, y **lo que le resta** con sus puntos (por ejemplo "🎯 Instalaciones 🟡 20 de 39"). Lo que va bien sale resumido en **✓ Va bien en…**; tócalo si lo quieres ver.',
       'Toca cualquier cosa de la lista para ver **contra qué se mide**.',
-      'Cada semana la app guarda sola el semáforo en el **📁 Historial**, para ver cómo ha ido cambiando.',
+      'El semáforo automático ya no sale en el **📁 Historial** ni en **💬 Hallazgos**: ahí solo se ve cuando **tú lo cambiaste a mano** (✋), con tu motivo.',
     ]},
     {sub:'Si el color no refleja cómo va'},
     {p:'El **coach** puede cambiarlo, pero **siempre con un motivo**. Sale con ✋, vale **solo ese mes** y se siguen viendo los dos: el que calculó la app y el del coach. Los pasos están en la lección **📈 Dashboard** del coach.'},
@@ -7084,7 +7095,7 @@ const MANUAL_ROLES={
         {pasos:['En **Casas tocadas** usa **+** y **−** para poner cuántas puertas tocaron.','En **Abrieron** pon cuántas abrieron. Sale la **tasa de apertura**: verde 40% o más, amarillo 20% o más, rojo menos.','Toca **+ Agregar casa que abrió** por cada casa, **estando en la casa**: se toman solas las **coordenadas** y la **dirección** del teléfono y salen debajo de **🏠 Casa**. La dirección la puedes corregir; si no se pudo obtener, escríbela tú (es obligatoria). Toca **Ver en mapa** para abrir el punto en Google Maps.','Marca con quién tiene el servicio, cuánto paga, si tiene apps de streaming (cuáles y cuánto paga) y **en qué terminó**: ✅ Venta, 🕒 Seguimiento o ✖️ Rechazo.','Si fue **Rechazo**, marca el motivo (puede ser más de uno).','Toma la **foto con sello**: es obligatoria.']},
         {sub:'Compromisos'},
         {p:'Escribe **Qué + Quién + Cuándo**. Si escribes un compromiso, **tienes que** poner la **Fecha de revisión**. Ese día te sale en el Dashboard para revisarlo. Al guardar se abre WhatsApp para mandarle el compromiso a la persona.'},
-        {ojo:'Aquí el **semáforo** solo se muestra. Se calcula solo; el desglose está en **Dashboard → Equipo**.'},
+        {ojo:'El **semáforo** del vendedor se calcula solo, por eso aquí no sale. Solo aparece, con su motivo, si **tú se lo cambiaste a mano** este mes (en **Dashboard → Equipo**), y se guarda con el hallazgo.'},
         {alto:'No se guarda si: falta el integrante · en Trabajo en campo faltan casas tocadas, proveedor, resultado, dirección de alguna casa, motivo del rechazo, respuesta de streaming o la foto · en Evidencia de asignación externa no hay ninguna foto · hay un compromiso sin fecha de revisión.'},
       ]},
       {icon:'⏰',titulo:'Revisar compromisos',cuando:'El día que vence cada compromiso.',bloques:[
@@ -7223,7 +7234,7 @@ const MANUAL_CONSULTA=[
     {lista:['**🛒 Ventas del equipo**: Oportunidades, Validadas e Instaladas. Toca **Semana** o **Mes**; con **‹** ves las anteriores.','**👥 Distrito por Coach**: cada coach dice de qué líder es (⭐), su semáforo y sus números. Tócalo para ver a sus vendedores, y toca un vendedor para ver su detalle.','**🚦 Semáforo del equipo**: cuántos vendedores hay en 🟢 🟡 🔴 ⚫ y cuántos están sin datos ⚪. Cómo se calcula está en la lección **🚦 El semáforo de tus vendedores**.','**📋 Compromisos del equipo**: quién tiene compromisos vencidos sin revisar y su % revisados a tiempo.']},
   ]},
   {icon:'🗂️',titulo:'Sacar el expediente de una persona',cuando:'Cuando te pidan la historia de alguien.',bloques:[
-    {pasos:['Toca **📁 Historial**.','Toca **Mes** o **Rango** y elige las fechas.','En **🔎 Buscar persona** escribe el nombre y elige la opción que dice **expediente**.','Arriba ves sus cuadros: ✅ Asistencias, 🚫 Ausencias, 📋 Permisos, 💬 Hallazgos y 🌙 Cierres. Abajo, sus ausencias por motivo y su último semáforo.','Toca cada renglón para ver el detalle y las fotos.','Toca **🖨️ Informe PDF** y luego guarda o imprime.']},
+    {pasos:['Toca **📁 Historial**.','Toca **Mes** o **Rango** y elige las fechas.','En **🔎 Buscar persona** escribe el nombre y elige la opción que dice **expediente**.','Arriba ves sus cuadros: ✅ Asistencias, 🚫 Ausencias, 📋 Permisos, 💬 Hallazgos y 🌙 Cierres. Abajo, sus ausencias por motivo y, si su coach se lo cambió a mano, su último semáforo.','Toca cada renglón para ver el detalle y las fotos.','Toca **🖨️ Informe PDF** y luego guarda o imprime.']},
     {ok:'Cada registro del informe trae su **folio** para encontrarlo en el Sheet.'},
     {ojo:'Si eliges la opción que dice **actividad**, no ves el expediente: ves lo que **esa persona capturó** (útil para revisar a un coach).'},
   ]},
