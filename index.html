@@ -6189,7 +6189,323 @@ function InformeImprimible({nombreArchivo,alcance,periodo,filtros,generadoPor,re
     document.body);
 }
 
+// ─── Reporte de incidencias (Historial: Líder, Director y Gestor CH) ───
+// Las ausencias que cada coach marca en su arranque, en un periodo elegido, desglosadas Líder →
+// Coach → Vendedor (el Líder ve directo Coach → Vendedor). "Trabajo fuera de ruta" y "Actividad
+// especial" no entran: la persona sí trabajó. Un retardo que se quedó sin foto de llegada ya está
+// guardado como falta injustificada; cuenta como falta y lleva la nota.
+const MOTIVOS_INCIDENCIA=[
+  {m:'Falta injustificada',corto:'F. injust.',color:'var(--red)',fondo:'var(--rbg)'},
+  {m:'Falta justificada',corto:'F. just.',color:'#b45309',fondo:'var(--ybg)'},
+  {m:'Retardo',corto:'Retardo',color:'#a16207',fondo:'#fef9c3'},
+  {m:'Incapacidad',corto:'Incap.',color:'#7c3aed',fondo:'#ede9fe'},
+  {m:'Vacaciones',corto:'Vacac.',color:'#0f766e',fondo:'#ccfbf1'},
+  {m:'Permiso autorizado',corto:'Permiso',color:'var(--accent)',fondo:'var(--accent-light)'},
+  {m:'Descanso',corto:'Descanso',color:'#475569',fondo:'#f1f5f9'},
+  {m:'Otro',corto:'Otro',color:'#475569',fondo:'#f1f5f9'},
+];
+const MOTIVO_INC=Object.fromEntries(MOTIVOS_INCIDENCIA.map(x=>[x.m,x]));
+const NOTA_RETARDO_FALTA='Retardo sin evidencia de llegada';
+// Un renglón por persona y día. Si un coach guardó dos arranques el mismo día (antes de que se
+// limitara a uno), cuenta el más reciente.
+function incidenciasDeArranques(arranques,desde,hasta){
+  const porDia=new Map();
+  arranques.forEach(r=>{
+    if(!r.date||r.date<desde||r.date>hasta)return;
+    const k=(r.registradoPor||'')+'|'+r.date;
+    porDia.set(k,masReciente([porDia.get(k),r].filter(Boolean),'savedAt'));
+  });
+  const items=[];
+  porDia.forEach(r=>(r.ausentes||[]).forEach(a=>{
+    if(!a.name||!MOTIVO_INC[a.reason])return;
+    const detalle=String(a.detail||'');
+    const porRetardo=a.reason==='Falta injustificada'&&detalle.includes(NOTA_RETARDO_FALTA);
+    items.push({fecha:r.date,coach:r.registradoPor||'Sin coach',vendedor:a.name,motivo:a.reason,porRetardo,
+      detalle:detalle.split(' · ').filter(p=>p&&p!==NOTA_RETARDO_FALTA).join(' · '),
+      pendiente:esRetardoPendiente(r,a)});
+  }));
+  return items;
+}
+// Árbol Líder → Coach → Vendedor con sus conteos por motivo, de más a menos incidencias.
+function arbolIncidencias(items,liderDe){
+  const nodo=nombre=>({nombre,total:0,cuenta:{},hijos:new Map(),items:[]});
+  const sumar=(n,it)=>{n.total++;n.cuenta[it.motivo]=(n.cuenta[it.motivo]||0)+1;};
+  const raiz=nodo('');
+  items.forEach(it=>{
+    const ln=liderDe(it.coach);
+    const L=raiz.hijos.get(ln)||nodo(ln);raiz.hijos.set(ln,L);
+    const C=L.hijos.get(it.coach)||nodo(it.coach);L.hijos.set(it.coach,C);
+    const V=C.hijos.get(it.vendedor)||nodo(it.vendedor);C.hijos.set(it.vendedor,V);
+    [raiz,L,C,V].forEach(n=>sumar(n,it));
+    V.items.push(it);
+  });
+  const ordenar=n=>({...n,hijos:[...n.hijos.values()].map(ordenar).sort((a,b)=>b.total-a.total||a.nombre.localeCompare(b.nombre)),
+    items:n.items.slice().sort((a,b)=>a.fecha.localeCompare(b.fecha))});
+  return ordenar(raiz);
+}
+// Cuántas personas distintas hay debajo de un nodo.
+const personasEn=n=>n.items.length?1:n.hijos.reduce((s,h)=>s+personasEn(h),0);
+
+function PildoraMotivo({motivo,n,grande}){
+  const mi=MOTIVO_INC[motivo];
+  return <span style={{display:'inline-flex',alignItems:'center',gap:4,padding:grande?'3px 9px':'2px 7px',borderRadius:999,background:mi.fondo,color:mi.color,fontSize:grande?13:12,fontWeight:700,whiteSpace:'nowrap'}}>
+    {mi.corto}{n!=null&&<b style={{fontWeight:800}}>{n}</b>}
+  </span>;
+}
+const PildorasCuenta=({cuenta})=><div style={{display:'flex',flexWrap:'wrap',gap:4}}>
+  {MOTIVOS_INCIDENCIA.filter(x=>cuenta[x.m]).map(x=><PildoraMotivo key={x.m} motivo={x.m} n={cuenta[x.m]}/>)}
+</div>;
+
+function ReporteIncidencias({eventos,session,estadoFuente,cargando}){
+  const hoy=today();
+  const atajos=[
+    ['Esta semana',rangoPeriodo('semana',0,{},new Date())],
+    ['Semana pasada',rangoPeriodo('semana',1,{},new Date())],
+    ['Este mes',rangoPeriodo('mes',0,{},new Date())],
+    ['Mes pasado',rangoPeriodo('mes',1,{},new Date())],
+  ];
+  const[rango,setRango]=useState(()=>({desde:atajos[2][1].desde,hasta:hoy}));
+  const desde=rango.desde&&rango.hasta&&rango.desde>rango.hasta?rango.hasta:rango.desde;
+  const hasta=rango.desde&&rango.hasta&&rango.desde>rango.hasta?rango.desde:rango.hasta;
+  const[motivos,setMotivos]=useState(()=>new Set(MOTIVOS_INCIDENCIA.map(x=>x.m)));
+  const[abiertos,setAbiertos]=useState(()=>new Set());
+  const[informe,setInforme]=useState(false);
+  const toggle=k=>setAbiertos(prev=>{const s=new Set(prev);s.has(k)?s.delete(k):s.add(k);return s;});
+  const toggleMotivo=m=>setMotivos(prev=>{const s=new Set(prev);s.has(m)?s.delete(m):s.add(m);return s;});
+
+  // Director y Gestor CH ven varios líderes: el reporte va Líder → Coach → Vendedor.
+  const porLider=session.role!=='lider';
+  const liderDe=useMemo(()=>{
+    const m=new Map((session.coaches||[]).map(c=>[c.nombre,c.reportaA]));
+    return coach=>porLider?(m.get(coach)||'Sin líder asignado'):'';
+  },[session.coaches,porLider]);
+
+  const arranques=useMemo(()=>eventos.filter(e=>e.tipo==='arranque').map(e=>e.r),[eventos]);
+  const todas=useMemo(()=>desde&&hasta?incidenciasDeArranques(arranques,desde,hasta):[],[arranques,desde,hasta]);
+  const conteoMotivo={};todas.forEach(it=>{conteoMotivo[it.motivo]=(conteoMotivo[it.motivo]||0)+1;});
+  const items=todas.filter(it=>motivos.has(it.motivo));
+  const arbol=useMemo(()=>arbolIncidencias(items,liderDe),[todas,motivos,liderDe]);
+  const coachesNodos=porLider?arbol.hijos.flatMap(l=>l.hijos):arbol.hijos;
+
+  const periodoTxt=!desde?'Elige las fechas':desde===hasta?fechaLarga(desde):`Del ${fmt(desde)} al ${fmt(hasta)}`;
+  const alcance=session.role==='director'?`Distrito de ${session.user.nombre}`
+    :esRolConsulta(session.role)?'Todo el distrito':`Equipo de ${session.user.nombre}`;
+  const todasLlaves=()=>{
+    const ks=[];
+    arbol.hijos.forEach(a=>{ks.push('a|'+a.nombre);a.hijos.forEach(b=>{ks.push('b|'+a.nombre+'|'+b.nombre);b.hijos.forEach(c=>ks.push('c|'+a.nombre+'|'+b.nombre+'|'+c.nombre));});});
+    return ks;
+  };
+  const algoAbierto=abiertos.size>0;
+
+  const chipBtn=activo=>({padding:'7px 13px',borderRadius:999,border:`1.5px solid ${activo?'var(--accent)':'var(--border)'}`,background:activo?'var(--accent)':'var(--card)',color:activo?'#fff':'var(--text)',fontSize:13,fontWeight:700,cursor:'pointer',whiteSpace:'nowrap'});
+  const flecha=ab=><span style={{fontSize:13,color:'var(--dim)',transform:ab?'rotate(90deg)':'none',transition:'transform .15s',display:'inline-block',width:14}}>▶</span>;
+  const totalGrande=(n,color)=><div style={{textAlign:'right',flexShrink:0}}>
+    <div style={{fontSize:20,fontWeight:800,lineHeight:1,color}}>{n}</div>
+    <div style={{fontSize:11,color:'var(--dim)'}}>incid.</div>
+  </div>;
+
+  const renglonVendedor=(v,k)=>{
+    const ab=abiertos.has(k);
+    return <div key={k} style={{borderTop:'1px solid var(--border)'}}>
+      <button onClick={()=>toggle(k)} style={{width:'100%',display:'flex',alignItems:'center',gap:8,padding:'9px 4px',background:'none',border:'none',textAlign:'left',cursor:'pointer',color:'var(--text)'}}>
+        {flecha(ab)}
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontSize:14,fontWeight:600,marginBottom:3}}>{v.nombre}</div>
+          <PildorasCuenta cuenta={v.cuenta}/>
+        </div>
+        <span style={{fontSize:16,fontWeight:800}}>{v.total}</span>
+      </button>
+      {ab&&<div style={{padding:'0 4px 10px 26px'}}>
+        {v.items.map((it,i)=><div key={i} style={{display:'flex',gap:8,alignItems:'flex-start',padding:'5px 0',borderTop:i?'1px dashed var(--border)':'none'}}>
+          <span style={{fontSize:13,color:'var(--dim)',width:74,flexShrink:0}}>{fechaCorta(it.fecha)}</span>
+          <div style={{flex:1,minWidth:0}}>
+            <PildoraMotivo motivo={it.motivo}/>
+            {it.porRetardo&&<span style={{fontSize:12,color:'var(--red)',fontWeight:600,marginLeft:6}}>⏰ por retardo sin llegada</span>}
+            {it.pendiente&&<span style={{fontSize:12,color:'#a16207',fontWeight:600,marginLeft:6}}>⏳ esperando llegada</span>}
+            {it.detalle&&<div style={{fontSize:13,color:'var(--dim)',marginTop:2}}>{it.detalle}</div>}
+          </div>
+        </div>)}
+      </div>}
+    </div>;
+  };
+  const tarjetaCoach=(c,prefijo)=>{
+    const k='b|'+prefijo+'|'+c.nombre,ab=abiertos.has(k);
+    return <div key={k} style={{border:'1.5px solid var(--border)',borderRadius:10,background:'var(--card)',marginBottom:8,overflow:'hidden'}}>
+      <button onClick={()=>toggle(k)} style={{width:'100%',display:'flex',alignItems:'center',gap:8,padding:'10px 12px',background:ab?'var(--bg)':'none',border:'none',textAlign:'left',cursor:'pointer',color:'var(--text)'}}>
+        {flecha(ab)}
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontSize:15,fontWeight:700}}>{c.nombre}</div>
+          <div style={{fontSize:12,color:'var(--dim)',margin:'1px 0 4px'}}>Coach · {c.hijos.length} vendedor{c.hijos.length!==1?'es':''} con incidencias</div>
+          <PildorasCuenta cuenta={c.cuenta}/>
+        </div>
+        {totalGrande(c.total)}
+      </button>
+      {ab&&<div style={{padding:'0 12px 4px'}}>{c.hijos.map(v=>renglonVendedor(v,'c|'+prefijo+'|'+c.nombre+'|'+v.nombre))}</div>}
+    </div>;
+  };
+
+  return <div className="hist">
+    <div className="hist-lateral">
+      <Card title="🗂️ Reporte de incidencias">
+        <div style={{fontSize:13,fontWeight:700,color:'var(--dim)',marginBottom:6}}>1. ¿De qué fechas?</div>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:8}}>
+          {atajos.map(([l,p])=><button key={l} onClick={()=>setRango({desde:p.desde,hasta:p.hasta>hoy?hoy:p.hasta})}
+            style={chipBtn(desde===p.desde&&hasta===(p.hasta>hoy?hoy:p.hasta))}>{l}</button>)}
+        </div>
+        <div style={{display:'flex',gap:6,alignItems:'flex-end',marginBottom:14}}>
+          <div style={{flex:1,minWidth:0}}><div style={{fontSize:12,color:'var(--dim)',marginBottom:2}}>Inicio</div>
+            <Input type="date" value={rango.desde} max={hoy} onChange={e=>setRango(r=>({...r,desde:e.target.value}))}/></div>
+          <div style={{flex:1,minWidth:0}}><div style={{fontSize:12,color:'var(--dim)',marginBottom:2}}>Fin</div>
+            <Input type="date" value={rango.hasta} max={hoy} onChange={e=>setRango(r=>({...r,hasta:e.target.value}))}/></div>
+        </div>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',marginBottom:6}}>
+          <span style={{fontSize:13,fontWeight:700,color:'var(--dim)'}}>2. ¿Qué incidencias? <span style={{fontWeight:400}}>(toca para quitar o poner)</span></span>
+        </div>
+        <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+          {MOTIVOS_INCIDENCIA.map(x=>{
+            const on=motivos.has(x.m);
+            return <button key={x.m} onClick={()=>toggleMotivo(x.m)} aria-pressed={on}
+              style={{padding:'6px 11px',borderRadius:999,border:`1.5px solid ${on?x.color:'var(--border)'}`,background:on?x.fondo:'var(--card)',color:on?x.color:'var(--dim)',fontSize:13,fontWeight:700,cursor:'pointer',opacity:on?1:.6,textDecoration:on?'none':'line-through'}}>
+              {x.m} <span style={{fontWeight:800}}>{conteoMotivo[x.m]||0}</span>
+            </button>;
+          })}
+        </div>
+        <div style={{display:'flex',gap:12,marginTop:8}}>
+          <button onClick={()=>setMotivos(new Set(MOTIVOS_INCIDENCIA.map(x=>x.m)))} style={{background:'none',border:'none',padding:0,color:'var(--accent)',fontSize:13,fontWeight:700,cursor:'pointer'}}>Todas</button>
+          <button onClick={()=>setMotivos(new Set(['Falta injustificada','Falta justificada','Retardo']))} style={{background:'none',border:'none',padding:0,color:'var(--accent)',fontSize:13,fontWeight:700,cursor:'pointer'}}>Solo faltas y retardos</button>
+        </div>
+        <p style={{fontSize:12,color:'var(--dim)',marginTop:10}}>{estadoFuente}</p>
+      </Card>
+      <Card>
+        <div style={{fontSize:12,fontWeight:700,color:'var(--dim)',textTransform:'uppercase',letterSpacing:'.6px'}}>{periodoTxt}</div>
+        <div style={{fontSize:17,fontWeight:800,lineHeight:1.3,margin:'2px 0 12px'}}>{alcance}</div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:6}}>
+          {[['Incidencias',arbol.total,arbol.total?'var(--red)':null],['Personas',personasEn(arbol)],['Coaches',coachesNodos.length]].map(([l,v,c])=>
+            <div key={l} style={{padding:'8px 10px',borderRadius:10,border:'1.5px solid var(--border)',background:'var(--bg)'}}>
+              <div style={{fontSize:12,color:'var(--dim)'}}>{l}</div>
+              <div style={{fontSize:22,fontWeight:800,lineHeight:1.15,color:c||'var(--text)'}}>{v}</div>
+            </div>)}
+        </div>
+      </Card>
+    </div>
+
+    <div style={{minWidth:0}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap',margin:'0 2px 10px'}}>
+        <span style={{fontSize:13,color:'var(--dim)'}}>{porLider?'Por líder → coach → vendedor':'Por coach → vendedor'} · toca para abrir</span>
+        <div style={{display:'flex',gap:6}}>
+          {arbol.total>0&&<Btn onClick={()=>setAbiertos(algoAbierto?new Set():new Set(todasLlaves()))} variant="secondary" style={{fontSize:14,padding:'8px 12px'}}>{algoAbierto?'Cerrar todo':'Abrir todo'}</Btn>}
+          <Btn onClick={()=>setInforme(true)} disabled={!arbol.total} variant="secondary" style={{fontSize:14,padding:'8px 12px'}}>🖨️ Informe PDF</Btn>
+        </div>
+      </div>
+      {cargando&&!arbol.total&&<div style={{textAlign:'center',padding:30}}><Spinner/></div>}
+      {!cargando&&!arbol.total&&<div style={{textAlign:'center',padding:'36px 16px',color:'var(--dim)',fontSize:14}}>
+        {!desde?'Elige la fecha de inicio y la de fin.':motivos.size===0?'Elige al menos un tipo de incidencia.':`No hay incidencias ${desde===hasta?'ese día':'en esas fechas'}. 🎉`}
+      </div>}
+      {porLider?arbol.hijos.map(l=>{
+        const k='a|'+l.nombre,ab=abiertos.has(k);
+        return <div key={k} style={{marginBottom:12,border:'1.5px solid var(--accent-light)',borderRadius:12,background:'var(--card)',overflow:'hidden'}}>
+          <button onClick={()=>toggle(k)} style={{width:'100%',display:'flex',alignItems:'center',gap:8,padding:'12px 14px',background:'var(--accent-light)',border:'none',textAlign:'left',cursor:'pointer',color:'var(--text)'}}>
+            {flecha(ab)}
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:12,fontWeight:700,color:'var(--accent)',letterSpacing:'.4px'}}>LÍDER</div>
+              <div style={{fontSize:16,fontWeight:800,marginBottom:4}}>{l.nombre}</div>
+              <div style={{fontSize:12,color:'var(--dim)',marginBottom:4}}>{l.hijos.length} coach{l.hijos.length!==1?'es':''} · {personasEn(l)} persona{personasEn(l)!==1?'s':''}</div>
+              <PildorasCuenta cuenta={l.cuenta}/>
+            </div>
+            {totalGrande(l.total,'var(--accent)')}
+          </button>
+          {ab&&<div style={{padding:'10px 10px 2px'}}>{l.hijos.map(c=>tarjetaCoach(c,l.nombre))}</div>}
+        </div>;
+      }):arbol.hijos.flatMap(l=>l.hijos.map(c=>tarjetaCoach(c,l.nombre)))}
+    </div>
+
+    {informe&&<InformeIncidencias arbol={arbol} porLider={porLider} alcance={alcance} periodoTxt={periodoTxt}
+      nombreArchivo={`Incidencias ${alcance} ${desde}${hasta!==desde?' a '+hasta:''}`}
+      motivosTxt={motivos.size===MOTIVOS_INCIDENCIA.length?'Todas':MOTIVOS_INCIDENCIA.filter(x=>motivos.has(x.m)).map(x=>x.m).join(', ')}
+      generadoPor={session.user.nombre} estadoFuente={estadoFuente} onCerrar={()=>setInforme(false)}/>}
+  </div>;
+}
+
+// El reporte de incidencias en formato de documento (mismo mecanismo que InformeImprimible): por
+// coach una tabla con los conteos de cada vendedor y abajo el detalle por fecha.
+function InformeIncidencias({arbol,porLider,alcance,periodoTxt,nombreArchivo,motivosTxt,generadoPor,estadoFuente,onCerrar}){
+  useEffect(()=>{
+    const previo=document.title;
+    document.title=nombreArchivo;
+    document.body.classList.add('con-informe');
+    return()=>{document.title=previo;document.body.classList.remove('con-informe');};
+  },[nombreArchivo]);
+  const ahora=new Date();
+  const cols=MOTIVOS_INCIDENCIA.filter(x=>arbol.cuenta[x.m]);
+  const h2={fontSize:16,fontWeight:800,color:'#1e3a8a',margin:'22px 0 10px',paddingBottom:4,borderBottom:'2px solid #dbeafe'};
+  const th={padding:'5px 6px',fontSize:11,fontWeight:800,color:'#6b7086',borderBottom:'1.5px solid #c7cbd8',textAlign:'center'};
+  const td={padding:'5px 6px',fontSize:12,borderBottom:'1px solid #e2e4ec',textAlign:'center'};
+  const botonBarra={padding:'8px 14px',borderRadius:8,border:'none',fontSize:14,fontWeight:700,cursor:'pointer',whiteSpace:'nowrap'};
+  const fila=(n,negrita)=><>
+    {cols.map(x=><td key={x.m} style={{...td,color:n.cuenta[x.m]?x.color:'#c7cbd8',fontWeight:negrita||n.cuenta[x.m]?800:400}}>{n.cuenta[x.m]||'·'}</td>)}
+    <td style={{...td,fontWeight:800}}>{n.total}</td>
+  </>;
+  const bloqueCoach=c=><div key={c.nombre} className="h-ficha-print" style={{marginBottom:16}}>
+    <div className="h-grupo-print" style={{fontSize:14,fontWeight:800,margin:'12px 0 6px'}}>Coach: {c.nombre} <span style={{fontWeight:400,color:'#6b7086'}}>· {c.total} incidencia{c.total!==1?'s':''}</span></div>
+    <table style={{width:'100%',borderCollapse:'collapse'}}>
+      <thead><tr><th style={{...th,textAlign:'left'}}>Vendedor</th>{cols.map(x=><th key={x.m} style={th}>{x.corto}</th>)}<th style={th}>Total</th></tr></thead>
+      <tbody>
+        {c.hijos.map(v=><tr key={v.nombre}><td style={{...td,textAlign:'left'}}>{v.nombre}</td>{fila(v)}</tr>)}
+        <tr style={{background:'#f0f2f8'}}><td style={{...td,textAlign:'left',fontWeight:800}}>Total del coach</td>{fila(c,true)}</tr>
+      </tbody>
+    </table>
+    <div style={{fontSize:11.5,color:'#3a3f52',marginTop:6,lineHeight:1.6}}>
+      {c.hijos.map(v=><div key={v.nombre}><b>{v.nombre}:</b> {v.items.map(it=>`${fechaCorta(it.fecha)} ${it.motivo}${it.porRetardo?' (por retardo sin llegada)':''}${it.detalle?` — ${it.detalle}`:''}`).join(' · ')}</div>)}
+    </div>
+  </div>;
+  return ReactDOM.createPortal(
+    <div className="informe-print-root" style={{position:'fixed',inset:0,zIndex:10000,overflow:'auto',background:'#525659'}}>
+      <div className="no-print" style={{position:'sticky',top:0,zIndex:1,display:'flex',gap:8,justifyContent:'space-between',alignItems:'center',padding:'10px 12px',background:'#323639'}}>
+        <button onClick={onCerrar} style={{...botonBarra,background:'rgba(255,255,255,.15)',color:'#fff'}}>← Volver</button>
+        <button onClick={()=>window.print()} style={{...botonBarra,background:'#fff',color:'#1e40af'}}>🖨️ Imprimir / Guardar PDF</button>
+      </div>
+      <div className="informe-hoja" style={{maxWidth:820,margin:'16px auto 40px',background:'#fff',color:'#1a1d29',padding:'28px 24px',borderRadius:4,boxShadow:'0 2px 14px rgba(0,0,0,.35)'}}>
+        <div style={{borderBottom:'3px solid #1e40af',paddingBottom:12}}>
+          <div style={{fontSize:12,fontWeight:800,letterSpacing:'1.5px',color:'#1e40af'}}>SUPERVISIÓN 2.0 · REPORTE DE INCIDENCIAS</div>
+          <h1 style={{fontSize:22,lineHeight:1.25,margin:'6px 0 2px'}}>{alcance}</h1>
+          <div style={{fontSize:15,fontWeight:700}}>{periodoTxt}</div>
+          <div style={{fontSize:12,color:'#6b7086',marginTop:8,lineHeight:1.55}}>
+            Incidencias incluidas: {motivosTxt}<br/>
+            Generado por {generadoPor} el {fmt(ymdLocal(ahora))} a las {dos(ahora.getHours())}:{dos(ahora.getMinutes())}
+          </div>
+        </div>
+        <h2 style={h2}>Resumen</h2>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead><tr><th style={{...th,textAlign:'left'}}>{porLider?'Líder':'Coach'}</th>{cols.map(x=><th key={x.m} style={th}>{x.corto}</th>)}<th style={th}>Total</th></tr></thead>
+          <tbody>
+            {(porLider?arbol.hijos:arbol.hijos.flatMap(l=>l.hijos)).map(n=><tr key={n.nombre}><td style={{...td,textAlign:'left'}}>{n.nombre}</td>{fila(n)}</tr>)}
+            <tr style={{background:'#f0f2f8'}}><td style={{...td,textAlign:'left',fontWeight:800}}>Total · {personasEn(arbol)} personas</td>{fila(arbol,true)}</tr>
+          </tbody>
+        </table>
+        {porLider?arbol.hijos.map(l=><div key={l.nombre}>
+          <h2 className="h-grupo-print" style={h2}>Líder: {l.nombre} <span style={{fontWeight:400,fontSize:13,color:'#6b7086'}}>· {l.total} incidencia{l.total!==1?'s':''}</span></h2>
+          {l.hijos.map(bloqueCoach)}
+        </div>):<><h2 className="h-grupo-print" style={h2}>Detalle por coach</h2>{arbol.hijos.flatMap(l=>l.hijos).map(bloqueCoach)}</>}
+        <div className="h-firmas">
+          <div style={{fontSize:12,color:'#6b7086',marginTop:18,borderTop:'1px solid #e2e4ec',paddingTop:10,lineHeight:1.55}}>
+            <p style={{margin:'2px 0'}}>Fuente: ausencias marcadas en el arranque diario de cada coach (Supervisión 2.0). Una incidencia = una persona en un día. "Por retardo sin llegada": se marcó retardo y no se subió la foto de llegada, por eso cuenta como falta injustificada.</p>
+            {estadoFuente.startsWith('⚠️')&&<p style={{margin:'2px 0'}}>ATENCIÓN: {estadoFuente.replace('⚠️','').trim()}</p>}
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:48,marginTop:40}}>
+            {['Elaboró','Revisó'].map(x=><div key={x} style={{textAlign:'center',fontSize:12,color:'#6b7086'}}>
+              <div style={{borderTop:'1px solid #1a1d29',paddingTop:6}}>{x}</div>
+            </div>)}
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body);
+}
+
 function HistorialTab({data,session,refreshKey,seguimientos=[]}){
+  // Líder, Director y Gestor CH tienen además el reporte de incidencias.
+  const puedeIncidencias=['lider','director','gestor'].includes(session?.role);
+  const[vistaHist,setVistaHist]=useState('registros');
   const[periodo,setPeriodo]=useState('semana');
   const[offset,setOffset]=useState(0);
   const[rango,setRango]=useState({desde:'',hasta:''});
@@ -6320,7 +6636,19 @@ function HistorialTab({data,session,refreshKey,seguimientos=[]}){
   const botonCuadro=deshabilitado=>({width:38,height:38,borderRadius:8,border:'1.5px solid var(--border)',background:'var(--card)',fontSize:18,lineHeight:1,color:deshabilitado?'var(--border)':'var(--text)',cursor:deshabilitado?'default':'pointer',flexShrink:0});
   const cargandoSinNada=sheet.estado==='cargando'&&!lista.length;
 
-  return <div className="hist">
+  const selectorVista=puedeIncidencias&&<div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:4,padding:4,marginBottom:12,borderRadius:12,background:'var(--border)',maxWidth:520}}>
+    {[['registros','📁 Registros'],['incidencias','🗂️ Reporte de incidencias']].map(([v,l])=>
+      <button key={v} onClick={()=>setVistaHist(v)} aria-pressed={vistaHist===v}
+        style={{padding:'9px 8px',borderRadius:9,border:'none',fontSize:14,fontWeight:700,cursor:'pointer',
+          background:vistaHist===v?'var(--card)':'transparent',color:vistaHist===v?'var(--accent)':'var(--dim)',
+          boxShadow:vistaHist===v?'0 1px 4px rgba(0,0,0,.12)':'none'}}>{l}</button>)}
+  </div>;
+  if(puedeIncidencias&&vistaHist==='incidencias')return <div>
+    {selectorVista}
+    <ReporteIncidencias eventos={eventos} session={session} estadoFuente={estadoFuente} cargando={sheet.estado==='cargando'}/>
+  </div>;
+
+  return <div>{selectorVista}<div className="hist">
     <div className="hist-lateral">
     <Card title="📁 Historial" actions={<button onClick={()=>{olvidarLecturas();setRecarga(x=>x+1);}} title="Actualizar desde el Sheet" style={botonCuadro(false)}>🔄</button>}>
       <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:8}}>
@@ -6411,7 +6739,7 @@ function HistorialTab({data,session,refreshKey,seguimientos=[]}){
       <img src={verFoto} alt="" style={{maxWidth:'100%',maxHeight:'100%',objectFit:'contain',borderRadius:8}}/>
       <button onClick={()=>setVerFoto(null)} style={{position:'absolute',top:16,right:16,background:'rgba(255,255,255,.15)',border:'none',borderRadius:8,color:'#fff',fontSize:20,width:36,height:36,cursor:'pointer'}}>✕</button>
     </div>}
-  </div>;
+  </div></div>;
 }
 
 // ═══════════════════════════════════════
@@ -6579,6 +6907,13 @@ const MANUAL_COMUNES={
     {lista:['**Agrupar** acomoda la lista por Día, Vendedor, Coach o Tipo.','Si eliges **Hallazgo**, puedes escoger hasta **3 subtipos** (por ejemplo, solo Trabajo en campo).','Los cuadros con números también son botones: tócalos para ver solo ese tipo.','**🖨️ Informe PDF** arma un documento con lo que tengas en pantalla, listo para imprimir o guardar como PDF.','El **🔄** del cuadro Historial vuelve a leer todo del Sheet.']},
     {colores:[['⚫','Renglón negro','Semáforo negro: condicionado 2 meses o más.'],['🔴','Renglón rojo','Falta injustificada, semáforo rojo o plan cumplido a menos del 60%.'],['🟡','Renglón amarillo','Falta justificada, incapacidad, retardo o cierre con incidencias.'],['⏳','Pendiente','Se guardó en el teléfono y todavía no sube al Sheet.']]},
     {ojo:'Abajo del cuadro dice "Actualizado a las…". Si dice "**Sin conexión con el Sheet**", solo estás viendo lo de tu teléfono.'},
+  ]},
+  incidencias:{icon:'🗂️',titulo:'Reporte de incidencias',cuando:'Para saber quién faltó, llegó tarde o no estuvo, en las fechas que tú elijas.',bloques:[
+    {p:'Junta las ausencias que cada coach marca en su **arranque**: faltas, retardos, vacaciones, incapacidad, permisos autorizados, descansos y otros.'},
+    {pasos:['Toca **📁 Historial** y arriba elige **🗂️ Reporte de incidencias**.','**1. ¿De qué fechas?** Toca un atajo (**Esta semana**, **Semana pasada**, **Este mes**, **Mes pasado**) o pon tú la fecha de **Inicio** y la de **Fin**.','**2. ¿Qué incidencias?** Cada botón dice cuántas hay. Tócalo para quitarlo o ponerlo. **Solo faltas y retardos** deja nada más esos.','Abajo sale el reporte. Toca un **líder** para ver sus coaches, un **coach** para ver a sus vendedores y un **vendedor** para ver sus fechas.','**🖨️ Informe PDF** arma el documento con todo abierto, listo para imprimir o guardar.']},
+    {lista:['Cada **incidencia** es una persona en un día.','El **Líder** ve a sus coaches y sus vendedores. El **Director** y el **Gestor CH** ven primero a cada líder.','**Abrir todo** abre todo el reporte de un jalón.']},
+    {ojo:'**⏰ por retardo sin llegada**: se marcó retardo y no se subió la foto de llegada, por eso cuenta como **falta injustificada**. **⏳ esperando llegada**: es un retardo de hoy que todavía puede subir su foto.'},
+    {alto:'**Trabajo fuera de ruta** y **Actividad especial** no salen aquí: la persona sí trabajó.'},
   ]},
   colores:{icon:'🎨',titulo:'Qué quiere decir cada color',cuando:'Cuando veas un color y no sepas qué significa.',bloques:[
     {sub:'Semáforo de un vendedor'},
@@ -6845,7 +7180,8 @@ function ManualTab({rolPropio}){
   const guia=MANUAL_ROLES[nivel];
   const propias=guia.secciones==='consulta'?MANUAL_CONSULTA:guia.secciones;
   const C=MANUAL_COMUNES;
-  const lecciones=[C.entrar,C.pantalla,...propias,C.semaforo,C.historial,C.colores,C.senal,C.palabras];
+  const lecciones=[C.entrar,C.pantalla,...propias,C.semaforo,C.historial,
+    ...(['lider','director','gestor'].includes(nivel)?[C.incidencias]:[]),C.colores,C.senal,C.palabras];
   const cambiarNivel=n=>{setNivel(n);setAbierta(null);};
   return <div>
     <Card>
