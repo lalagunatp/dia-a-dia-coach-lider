@@ -1276,7 +1276,10 @@ const SHEET_CONFIG = {
       'Presentes', 'Ausentes', 'Detalle ausentes', 'Notas',
       'Con foto', 'Foto grupo', 'Fotos evidencia ausentes', 'Fotos por vendedor',
       'Timestamp',
-      'Compromisos del día', 'Foto grupo subida', 'Nombres presentes'
+      'Compromisos del día', 'Foto grupo subida', 'Nombres presentes',
+      // Retardo resuelto después (ver editarAusenteArranque) y descansos del plan que se
+      // trabajaron con su nueva fecha de descanso (coach de punto de venta).
+      'Fotos llegada retardo', 'Cambios de descanso'
     ]
   },
   PERMISO: {
@@ -1416,8 +1419,9 @@ function doPost(e) {
   try {
     const data = JSON.parse(e.postData.contents);
     const type = data.type;
+    const esEdicionArranque = type === 'arranque_ausente';
 
-    if (!type || !SHEET_CONFIG[type.toUpperCase()]) {
+    if (!type || (!esEdicionArranque && !SHEET_CONFIG[type.toUpperCase()])) {
       return jsonResponse({ ok: false, error: 'Tipo no válido: ' + type });
     }
 
@@ -1430,6 +1434,8 @@ function doPost(e) {
     if (!autor) return jsonResponse({ ok: false, error: 'Usuario no encontrado' });
     data.registradoPor = autor.nombre;
     data.rolRegistro = getRoleType(autor.posicion);
+
+    if (esEdicionArranque) return jsonResponse(editarAusenteArranque(data, autor));
 
     const ss = getSpreadsheet();
     const sheet = hojaDeConfig(ss, SHEET_CONFIG[type.toUpperCase()]);
@@ -1446,6 +1452,46 @@ function doPost(e) {
   } catch (err) {
     return jsonResponse({ ok: false, error: err.message });
   }
+}
+
+// ─── Retardo resuelto en un arranque ya guardado ───
+// Cuando el vendedor con retardo llega, el coach sube la foto sellada de los dos; si no llega, se
+// cambia a falta injustificada. No es un registro nuevo: se reescribe el renglón del arranque
+// (su línea en "Detalle ausentes" y su foto en "Fotos llegada retardo") para que el Sheet, el
+// Historial y los conteos vean ya el resultado final sin tener que juntar dos filas.
+// Si el arranque todavía no llega a la hoja (se guardó sin señal), se responde error y la app lo
+// deja en su cola de pendientes, detrás del arranque, para reintentarlo.
+function editarAusenteArranque(d, autor) {
+  const cfg = SHEET_CONFIG.ARRANQUE;
+  const sheet = getSpreadsheet().getSheetByName(cfg.name);
+  const noEsta = { ok: false, error: 'Todavía no está el arranque en la hoja' };
+  if (!sheet || sheet.getLastRow() < 2) return noEsta;
+  const ids = sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getValues();
+  const idx = ids.findIndex(r => String(r[0]) === String(d.id));
+  if (idx === -1) return noEsta;
+  const fila = idx + 2;
+  const col = h => cfg.headers.indexOf(h) + 1;
+  if (String(sheet.getRange(fila, col('Registrado por')).getValue()) !== autor.nombre) {
+    return { ok: false, error: 'Solo quien guardó el arranque puede editarlo' };
+  }
+  // La foto primero: si no sube, no se toca nada y la app lo reintenta.
+  let fotoLlegada = null;
+  if (d.llegada && d.llegada.photo) {
+    const url = subirFotoADrive(d.llegada.photo, `Llegada_${d.date}_${nombreSeguro(d.name)}.jpg`);
+    if (!url) return { ok: false, error: 'No se pudo subir la foto de llegada' };
+    const celdaF = sheet.getRange(fila, col('Fotos llegada retardo'));
+    const otras = String(celdaF.getValue() || '').split(';').map(s => s.trim())
+      .filter(s => s && s.split(':')[0].trim() !== d.name);
+    celdaF.setValue(otras.concat([`${d.name}: ${url}`]).join('; '));
+    fotoLlegada = { name: d.name, url: url };
+  }
+  const celdaDet = sheet.getRange(fila, col('Detalle ausentes'));
+  const linea = `${d.name}: ${d.reason}${d.detail ? ' — ' + d.detail : ''}`;
+  const partes = String(celdaDet.getValue() || '').split(';').map(s => s.trim()).filter(Boolean);
+  const i = partes.findIndex(p => p.split(':')[0].trim() === d.name);
+  if (i === -1) partes.push(linea); else partes[i] = linea;
+  celdaDet.setValue(partes.join('; '));
+  return { ok: true, type: d.type, id: d.id, fotoLlegada: fotoLlegada };
 }
 
 // ─── Construir fila según tipo ───
@@ -1513,7 +1559,14 @@ function buildRow(type, d) {
         fotoGrupoSubidaUrl,
         // Quiénes estuvieron presentes (antes solo se guardaba cuántos): con esto el Historial de
         // cualquier teléfono puede contar la asistencia al buscar a una persona.
-        (d.presentes || []).join('; ')
+        (d.presentes || []).join('; '),
+        // Se llena después, al resolver un retardo (editarAusenteArranque).
+        '',
+        // Le tocaba descanso según el plan de la semana y sí trabajó: cuándo fue o será su descanso.
+        Object.keys(d.cambiosDescanso || {})
+          .filter(name => d.cambiosDescanso[name])
+          .map(name => `${name}: descansa ${d.cambiosDescanso[name]}`)
+          .join('; ')
       ];
       // Se regresan las ligas para que la app las use en vez de la foto local.
       return { row: row, extra: { fotoGrupoUrl: fotoGrupoUrl, fotoGrupoSubidaUrl: fotoGrupoSubidaUrl, fotosAusentes: fotosAusentes, fotosVendedores: fotosVendedores } };
