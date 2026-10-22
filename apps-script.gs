@@ -691,7 +691,11 @@ function actualizarSnapshotVentas() {
 // Subir este número cuando cambie lo que lleva cada vendedor en la foto de ranking: una foto armada
 // con el código anterior no lo trae, y sin esto se seguía sirviendo hasta la siguiente corrida del
 // activador (o hasta que cambiara la BASE). Con él, la primera lectura la rearma al momento.
-const FORMATO_FOTO_RANKING = 2; // 2: campos del semáforo (mesesCondicionado, medirComo…)
+const FORMATO_FOTO_RANKING = 3; // 2: campos del semáforo (mesesCondicionado, medirComo…); 3: mesesEnNivel y bajadaDe
+// Panel del vendedor: la bajada de ranking se muestra si duró al menos 3 meses en el anterior, y
+// solo durante sus primeros 6 meses en el nuevo.
+const MESES_MIN_RANKING_BAJADA = 3;
+const MESES_MOSTRAR_BAJADA = 6;
 function actualizarSnapshotRanking() {
   const inicio = Date.now(); // mismo criterio que calcularVentasDistrito
   return guardarFoto(FOTO_RANKING, { generado: inicio, formato: FORMATO_FOTO_RANKING, rankEnt: leerRankingEntrenamiento(), rankMen: leerRankingMensual() }, 'ranking');
@@ -983,6 +987,24 @@ function leerRankingMensual() {
     // Meses seguidos como condicionado, contando el actual: con 2 o más, su semáforo es negro.
     let mesesCondicionado = 0;
     for (let k = histRanking.length - 1; k >= 0 && histRanking[k].indexOf('CONDICIONADO') !== -1; k--) mesesCondicionado++;
+    // Meses seguidos en su ranking actual según las columnas "RANKING <mes>" (contando el actual).
+    // Platino cuenta como Oro: la hoja dice ORO en los dos. Para el panel del vendedor; antes se
+    // adivinaba con rangos de instalaciones y no cuadraba con la hoja.
+    let mesesEnNivel = 0;
+    for (let k = histRanking.length - 1; k >= 0 && histRanking[k] && histRanking[k] === badgeHoja; k--) mesesEnNivel++;
+    // Bajada (solo para mostrar, no cambia el semáforo): de ORO a PLATA, de PLATA a BRONCE o de ORO a
+    // BRONCE, si duró al menos 3 meses en el anterior; se muestra sus primeros 6 meses abajo.
+    let bajadaDe = '', bajadaMesesAntes = 0;
+    const NIVEL_BAJADA = { BRONCE: 1, PLATA: 2, ORO: 3 };
+    if (mesesEnNivel && mesesEnNivel <= MESES_MOSTRAR_BAJADA && NIVEL_BAJADA[badgeHoja]) {
+      const j = histRanking.length - 1 - mesesEnNivel;
+      const previo = j >= 0 ? histRanking[j] : '';
+      if (NIVEL_BAJADA[previo] > NIVEL_BAJADA[badgeHoja]) {
+        let k = j;
+        while (k >= 0 && histRanking[k] === previo) k--;
+        if (j - k >= MESES_MIN_RANKING_BAJADA) { bajadaDe = previo; bajadaMesesAntes = j - k; }
+      }
+    }
     // Las certificaciones que pide el ranking con el que se le mide (si no es el suyo).
     const certFaltantesMedicion = (medirComo && blocks[medirComo])
       ? blocks[medirComo].courses.filter(function (c) { return String(r[c.idx] || '').trim().toUpperCase() !== 'APROBADO'; }).map(function (c) { return c.label; })
@@ -1011,6 +1033,8 @@ function leerRankingMensual() {
       if (certFaltantesMedicion) entry.certFaltantesMedicion = certFaltantesMedicion;
     }
     if (mesesCondicionado) entry.mesesCondicionado = mesesCondicionado;
+    if (mesesEnNivel) entry.mesesEnNivel = mesesEnNivel;
+    if (bajadaDe) { entry.bajadaDe = bajadaDe; entry.bajadaMesesAntes = bajadaMesesAntes; }
     [numA, numB, numC].forEach(function (k) {
       if (k && k !== 'INTERNO' && k !== 'EXTERNO' && k !== 'VACANTE') map[k] = entry;
     });

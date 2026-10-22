@@ -1829,15 +1829,12 @@ function enrichTeam(team,rankEnt,rankMen){
     // escribió en la hoja — un "Bronce" con minúsculas dejaba al vendedor sin meta (0), sin
     // color de ranking y hasta el final de los ordenamientos, como si no tuviera ranking.
     let badge=String(re?.ranking||rm?.badgeOficial||'').trim().toUpperCase()||null;
-    let mesesEnRanking=0;
-    if(rm){
-      // Count consecutive months at a similar install level (context only, not the badge itself).
-      const u=rm.ultimos3meses;
-      if(u.length>=2){
-        const lvl=u[u.length-1]>=20?20:u[u.length-1]>=12?12:u[u.length-1]>=8?8:0;
-        mesesEnRanking=u.filter(v=>(v>=20&&lvl>=20)||(v>=12&&v<20&&lvl>=12&&lvl<20)||(v>=8&&v<12&&lvl>=8&&lvl<12)||(v<8&&lvl<8)).length;
-      }
-    }
+    // Meses seguidos en su ranking según las columnas "RANKING <mes>" de la hoja (los cuenta el
+    // servidor; Platino cuenta como Oro). Solo si el badge que se muestra es el de esa hoja — el de
+    // la pestaña de Entrenamiento no tiene historial.
+    const rankDeHoja=!!rm&&badge===String(rm.badgeOficial||'').trim().toUpperCase();
+    const mesesEnRanking=rankDeHoja?(rm.mesesEnNivel||0):0;
+    const bajada=rankDeHoja&&rm.bajadaDe?{de:rm.bajadaDe,mesesAntes:rm.bajadaMesesAntes}:null;
     // Missing certifications: entrenamiento tab for rookies, otherwise the BRONCE/PLATA/ORO
     // block matching their current tier (read straight from the roster sheet).
     let certFaltantes=[];
@@ -1857,6 +1854,7 @@ function enrichTeam(team,rankEnt,rankMen){
       rankingMen:rm,
       badge,
       mesesEnRanking,
+      bajada,
       certFaltantes,
       obs,
     };
@@ -1891,6 +1889,9 @@ const RANK_COLORS={
   'PLATINO':{bg:'#E0F2FE',color:'#0369A1',icon:'🏆'},
   'DIAMANTE':{bg:'#DBEAFE',color:'#1D4ED8',icon:'💎'},
 };
+// Los meses en nivel de un Platino son los que lleva como Oro en la hoja (ahí no existe Platino).
+const nombreRank=b=>nombreRanking(b==='PLATINO'?'ORO':b);
+const mesesTxt=n=>n===1?'1 mes':`${n} meses`;
 
 // getRoleType/isLider ahora solo existen del lado del servidor (apps-script.gs) — el rol de la
 // sesión ya llega calculado desde ahí. isVendedor/isCoach se quedan: se siguen usando para
@@ -4106,7 +4107,8 @@ function FeedbackTab({data,setData,team,toast,session,refreshKey,compromisos=[],
           <div style={{display:'flex',flexWrap:'wrap',gap:8,alignItems:'center',marginBottom:8}}>
             <span style={{fontWeight:700,fontSize:15}}>{selectedMember.nombre}</span>
             <RankBadge badge={selectedMember.badge}/>
-            {selectedMember.mesesEnRanking>0&&<span style={{fontSize:12,color:'var(--dim)',fontWeight:600}}>{selectedMember.mesesEnRanking} meses en este nivel</span>}
+            {selectedMember.mesesEnRanking>0&&<span style={{fontSize:12,color:'var(--dim)',fontWeight:600}}>{mesesTxt(selectedMember.mesesEnRanking)} en {nombreRank(selectedMember.badge)}</span>}
+            {selectedMember.bajada&&<span style={{fontSize:12,color:'var(--red)',fontWeight:600}}>⬇ bajó de {nombreRank(selectedMember.bajada.de)} hace {mesesTxt(selectedMember.mesesEnRanking)} (estuvo {mesesTxt(selectedMember.bajada.mesesAntes)})</span>}
           </div>
 
           {/* Performance */}
@@ -4815,7 +4817,8 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast,recordsPla
       {/* Ranking + meses */}
       <div style={{display:'flex',gap:6,alignItems:'center',marginBottom:6,flexWrap:'wrap'}}>
         <RankBadge badge={m.badge}/>
-        {m.mesesEnRanking>0&&<span style={{fontSize:12,color:'var(--dim)'}}>({m.mesesEnRanking} meses en este nivel)</span>}
+        {m.mesesEnRanking>0&&<span style={{fontSize:12,color:'var(--dim)'}}>({mesesTxt(m.mesesEnRanking)} en {nombreRank(m.badge)})</span>}
+        {m.bajada&&<span style={{fontSize:12,color:'var(--red)',fontWeight:600}}>⬇ bajó de {nombreRank(m.bajada.de)} hace {mesesTxt(m.mesesEnRanking)} (estuvo {mesesTxt(m.bajada.mesesAntes)})</span>}
       </div>
       {m.obs&&<p style={{fontSize:13,color:'var(--yellow)',fontStyle:'italic',marginBottom:6}}>⚠️ {m.obs}</p>}
       {/* Performance */}
@@ -4968,7 +4971,8 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast,recordsPla
           </div>
           {m.rankingMen&&<div style={{fontSize:13,color:'var(--dim)',marginTop:2,lineHeight:1.4}}>
             Prom: {m.rankingMen.promedioMensual} ins/mes
-            {m.mesesEnRanking>0&&<span> · {m.mesesEnRanking}m en nivel</span>}
+            {m.mesesEnRanking>0&&<span> · {m.mesesEnRanking}m en {nombreRank(m.badge)}</span>}
+            {m.bajada&&<span style={{color:'var(--red)',fontWeight:600}}> · ⬇ bajó de {nombreRank(m.bajada.de)} hace {m.mesesEnRanking}m (estuvo {m.bajada.mesesAntes}m)</span>}
           </div>}
           {metaMensual(m.badge)>0&&<div style={{fontSize:13,color:'var(--dim)',marginTop:2,lineHeight:1.4}}>
             🎯 {funnelPeriodo(m.ventas,mesEqIni,mesEqFin).instaladas}/{metaMensual(m.badge)} inst. {mesEqEsActual?'del mes':`de ${labelMesEq}`}
@@ -6966,12 +6970,13 @@ const MANUAL_COMUNES={
     {lista:[
       '**Condicionado**: nunca sale 🟢. Queda 🟡 solo si casi todo lo demás (**5 de sus otras 6 cosas**) va en 🟢; si no, 🔴.',
       '**Condicionado 2 meses o más seguidos**: ⚫ negro, sin importar lo demás.',
-      '**Bajó de ranking** (de Oro a Plata o de Plata a Bronce) después de estar **3 meses o más** arriba: se le sigue pidiendo lo de su ranking anterior (instalaciones, bono y cursos) **hasta que vuelva a subir**.',
+      '**Bajó de ranking** (de Oro a Plata o de Plata a Bronce) después de estar **3 meses o más** arriba: se le sigue pidiendo lo de su ranking anterior (instalaciones, bono y cursos) **hasta que vuelva a subir**. En su tarjeta sale en rojo **⬇ bajó de Oro hace 2m (estuvo 3m)** durante sus primeros **6 meses** abajo (también si bajó de Oro a Bronce).',
       '**Sin con qué medir**: si algo no se puede medir (por ejemplo, no ha instalado y no hay ARPU), esa cosa no cuenta y no le baja la calificación.',
     ]},
     {sub:'Dónde lo ves'},
     {lista:[
       'En **📈 Dashboard → 👥 Equipo**, la pastilla de cada vendedor trae su color y su calificación (por ejemplo **🟡 67**). Debajo de su nombre dice **lo que más le resta**.',
+      'Junto a su promedio dice **cuántos meses seguidos lleva en su ranking** según la hoja de ranking (por ejemplo **2m en Plata**). Un Platino cuenta sus meses como Oro, porque en la hoja sale Oro.',
       '**Toca la pastilla** y ves: su calificación, **💡 qué le haría subir de color**, y **lo que le resta** con sus puntos (por ejemplo "🎯 Instalaciones 🟡 20 de 39"). Lo que va bien sale resumido en **✓ Va bien en…**; tócalo si lo quieres ver.',
       'Toca cualquier cosa de la lista para ver **contra qué se mide**.',
       'El semáforo automático ya no sale en el **📁 Historial** ni en **💬 Hallazgos**: ahí solo se ve cuando **tú lo cambiaste a mano** (✋), con tu motivo.',
@@ -7088,7 +7093,7 @@ const MANUAL_ROLES={
         {ojo:'Si dice que las ventas están cargando, espera un momento. Si dice que no cargaron, toca **🔄**.'},
       ]},
       {icon:'💬',titulo:'Hallazgos (lo que ves en la calle)',cuando:'Cada vez que acompañas, das retroalimentación o pasa algo.',bloques:[
-        {pasos:['Toca **💬 Hallazgos**.','Elige la **Fecha** y el **Tipo**.','Elige al **Integrante**. Sale su contexto: ranking, promedio y cursos que le faltan.','Si sale el cuadro amarillo **📌 La vez pasada quedaron en…**, primero toca **Revisar** y di cómo le fue.','Llena lo que pide el tipo que elegiste (mira abajo).','Toca **💾 Guardar hallazgo**. Si escribiste un compromiso, el botón dice **📲 Guardar y enviar compromiso por WhatsApp**: se abre WhatsApp con el compromiso, elige al integrante y envíalo.']},
+        {pasos:['Toca **💬 Hallazgos**.','Elige la **Fecha** y el **Tipo**.','Elige al **Integrante**. Sale su contexto: ranking, cuántos meses lleva en él (y si bajó), promedio y cursos que le faltan.','Si sale el cuadro amarillo **📌 La vez pasada quedaron en…**, primero toca **Revisar** y di cómo le fue.','Llena lo que pide el tipo que elegiste (mira abajo).','Toca **💾 Guardar hallazgo**. Si escribiste un compromiso, el botón dice **📲 Guardar y enviar compromiso por WhatsApp**: se abre WhatsApp con el compromiso, elige al integrante y envíalo.']},
         {sub:'Los tipos'},
         {lista:['**Trabajo en campo**: acompañaste a la persona en la calle. Pide el recorrido y la foto con sello.','**Feedback 1 a 1**, **Revisión semanal** y **Retroalimentación**: una plática con la persona.','**Incidencia operativa** e **Incidencia crítica**: algo salió mal (la crítica es grave).','**Evidencia de asignación externa**: fotos de la persona en campo y de la conversación del avance (sin sello).','**Otro**.']},
         {sub:'Trabajo en campo: el recorrido'},
