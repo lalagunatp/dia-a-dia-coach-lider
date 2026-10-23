@@ -1807,6 +1807,44 @@ function notaSemaforoAuto(auto){
   const partes=auto.rubros.filter(x=>x.color).map(x=>`${x.label} ${SEM_EMOJI[x.color]} ${x.valor}`);
   return `${PREFIJO_SEM_AUTO} · ${auto.puntaje}/100${auto.bajada?` · medido como ${nombreRanking(auto.medidoComo)}`:''} · ${partes.join(' · ')}${auto.motivo?' · '+auto.motivo:''}`;
 }
+// Semáforo de un coach (o de un líder, con todos los vendedores de sus coaches): el promedio de los
+// puntos del semáforo AUTOMÁTICO de sus vendedores. El ajuste manual no cuenta (si no, el coach
+// subiría su propio color pintando a su gente); el ⚫ cuenta como 0, y quien todavía no tiene datos
+// no entra. Mismos cortes que el del vendedor, pero con el 30% o más en 🔴/⚫ no puede salir 🟢.
+// Con 6 o menos medidos es "equipo chico": un solo vendedor le mueve mucho el promedio.
+const PCT_ROJOS_TOPE_EQUIPO=0.3,MAX_EQUIPO_CHICO=6;
+const ptsSemVendedor=auto=>auto.color==='negro'?0:auto.puntaje;
+function colorSemEquipo(suma,n,malos){
+  const promedio=Math.round(suma/n);
+  const color=promedio>=CORTE_SEM_VERDE?'verde':promedio>=CORTE_SEM_AMARILLO?'amarillo':'rojo';
+  const tope=color==='verde'&&malos/n>=PCT_ROJOS_TOPE_EQUIPO-1e-9;
+  return{promedio,color:tope?'amarillo':color,tope};
+}
+function semaforoDeEquipo(vendedores,semPorVendedor){
+  const medidos=[],cuenta={verde:0,amarillo:0,rojo:0,negro:0};
+  (vendedores||[]).forEach(m=>{
+    const auto=semPorVendedor[m.nombre]?.auto;
+    if(!auto?.color)return;
+    medidos.push({m,auto,pts:ptsSemVendedor(auto)});cuenta[auto.color]++;
+  });
+  const n=medidos.length,sinDatos=(vendedores||[]).length-n;
+  if(!n)return{color:null,promedio:null,tope:false,n,sinDatos,cuenta,medidos,chico:false,sugerencia:''};
+  medidos.sort((a,b)=>a.pts-b.pts); // del que más le baja el promedio al que menos
+  const suma=medidos.reduce((s,x)=>s+x.pts,0),malos=cuenta.rojo+cuenta.negro;
+  const r=colorSemEquipo(suma,n,malos);
+  // 💡 El vendedor que, si llegara a 🟢, más sube al equipo (de preferencia, que le cambie el color).
+  // Ni el ⚫ ni el condicionado pueden llegar a 🟢: a ellos no se les sugiere.
+  let mejor=null;
+  medidos.forEach(x=>{
+    if(x.auto.color==='verde'||x.auto.color==='negro'||esCondicionado(x.m.badge))return;
+    const p=colorSemEquipo(suma-x.pts+Math.max(x.pts,CORTE_SEM_VERDE),n,malos-(x.auto.color==='rojo'?1:0));
+    if(!mejor||ORDEN_COLOR_SEM[p.color]>ORDEN_COLOR_SEM[mejor.color]||(p.color===mejor.color&&p.promedio>mejor.promedio))mejor={...p,quien:nombreCorto(x.m.nombre)};
+  });
+  let sugerencia='';
+  if(mejor&&ORDEN_COLOR_SEM[mejor.color]>ORDEN_COLOR_SEM[r.color])sugerencia=`Si ${mejor.quien} sube a 🟢, el equipo llega a ${SEM_EMOJI[mejor.color]} ${mejor.promedio}`;
+  else if(mejor&&mejor.promedio>r.promedio)sugerencia=`Lo que más lo sube: si ${mejor.quien} llega a 🟢, el equipo llega a ${mejor.promedio}`;
+  return{...r,n,sinDatos,cuenta,medidos,chico:n<=MAX_EQUIPO_CHICO,sugerencia};
+}
 
 // Enrich team with ranking data
 function enrichTeam(team,rankEnt,rankMen){
@@ -4322,6 +4360,43 @@ function PanelCompromisosEquipo({items,session}){
 // rubro dice "X de Y" puntos y la suma da la calificación (ver calificarSemaforo). El ajuste del
 // coach queda detrás de un botón. Va fuera de DashboardTab para que el motivo no se pierda al teclear.
 const TITULO_SEM={verde:'Va bien',amarillo:'Ojo',rojo:'Urgente',negro:'Negro'};
+// Pastilla del semáforo de un coach o líder (ver semaforoDeEquipo): color, promedio y "equipo chico".
+function PastillaSemEquipo({sem,listo,onClick,abierto}){
+  const c=sem?.color;
+  return <button onClick={onClick} title={c?`${STATUS[c].label} — toca para ver cómo se calculó`:'Sin semáforo'}
+    style={{display:'inline-flex',alignItems:'center',gap:5,padding:'6px 10px',borderRadius:20,cursor:onClick?'pointer':'default',
+      border:`2px solid ${c?STATUS[c].border:'var(--border)'}`,background:c?STATUS[c].bg:'var(--input)',
+      color:c?STATUS[c].border:'var(--dim)',fontSize:14,fontWeight:700,whiteSpace:'nowrap'}}>
+    {c?<>{SEM_EMOJI[c]} {sem.promedio}{sem.chico&&<span style={{fontSize:11,fontWeight:600}}>· equipo chico</span>}</>:listo?<>⚪ Sin datos</>:<>⏳</>}
+    {onClick&&<span style={{fontSize:11}}>{abierto?'▲':'▼'}</span>}
+  </button>;
+}
+// Por qué un coach (o líder) tiene su color: promedio, reglas que aplicaron, 💡 y sus vendedores
+// del que más le baja el promedio al que menos.
+function PanelSemEquipo({sem,listo}){
+  if(!listo)return <p style={{fontSize:13,color:'var(--dim)'}}>⏳ Esperando las ventas y el ranking para calcular el semáforo…</p>;
+  if(!sem?.color)return <p style={{fontSize:13,color:'var(--dim)'}}>⚪ Ninguno de sus vendedores tiene todavía números para calcularlo.</p>;
+  const c=sem.color,fila={display:'flex',justifyContent:'space-between',gap:8,alignItems:'baseline'};
+  return <div style={{fontSize:13}}>
+    <div style={fila}>
+      <span style={{fontSize:17,fontWeight:800,color:STATUS[c].border}}>{SEM_EMOJI[c]} {sem.promedio} de 100</span>
+      <span style={{fontWeight:800,color:STATUS[c].border}}>{TITULO_SEM[c]}</span>
+    </div>
+    <div style={{position:'relative',height:8,background:'var(--border)',borderRadius:4,margin:'6px 0 3px',overflow:'hidden'}}>
+      <div style={{width:`${sem.promedio}%`,height:'100%',background:STATUS[c].border}}/>
+      {[CORTE_SEM_AMARILLO,CORTE_SEM_VERDE].map(x=><div key={x} style={{position:'absolute',left:`${x}%`,top:0,bottom:0,width:2,background:'var(--card)'}}/>)}
+    </div>
+    <div style={{fontSize:12,color:'var(--dim)',lineHeight:1.4}}>Promedio de los puntos de {sem.n} vendedor{sem.n!==1?'es':''}: 🟢{sem.cuenta.verde} 🟡{sem.cuenta.amarillo} 🔴{sem.cuenta.rojo}{sem.cuenta.negro?` ⚫${sem.cuenta.negro} (cuenta 0)`:''}{sem.sinDatos?` · ⚪${sem.sinDatos} sin datos, no cuenta${sem.sinDatos!==1?'n':''}`:''}. El ajuste manual (✋) no cuenta.</div>
+    {sem.tope&&<p style={{marginTop:8,padding:'7px 9px',borderRadius:8,background:STATUS[c].bg,lineHeight:1.4}}>⚠️ Su promedio da 🟢, pero el {Math.round(PCT_ROJOS_TOPE_EQUIPO*100)}% o más de su equipo está en 🔴 o ⚫: no puede salir en verde.</p>}
+    {sem.chico&&<p style={{marginTop:8,padding:'7px 9px',borderRadius:8,background:'var(--bg)',lineHeight:1.4}}>👥 Equipo chico ({MAX_EQUIPO_CHICO} o menos medidos): un solo vendedor le mueve mucho el promedio.</p>}
+    {sem.sugerencia&&<p style={{marginTop:8,padding:'7px 9px',borderRadius:8,background:'var(--gbg)',lineHeight:1.4,fontWeight:600}}>💡 {sem.sugerencia}</p>}
+    <div style={{fontSize:12,fontWeight:800,color:'var(--dim)',textTransform:'uppercase',letterSpacing:'.4px',margin:'12px 0 2px'}}>Del que más le baja al que menos</div>
+    {sem.medidos.map(x=><div key={x.m.numEmp||x.m.nombre} style={{...fila,padding:'5px 0',borderBottom:'1px solid var(--border)'}}>
+      <span>{nombreCorto(x.m.nombre)}</span>
+      <b style={{whiteSpace:'nowrap',color:STATUS[x.auto.color].border}}>{SEM_EMOJI[x.auto.color]} {x.pts}</b>
+    </div>)}
+  </div>;
+}
 function PanelSemaforo({m,info,listo,puedeAjustar,onAjustar,onQuitarAjuste}){
   const{auto,ajuste}=info||{};
   const[valor,setValor]=useState('');
@@ -4760,6 +4835,18 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast,recordsPla
   const rojos=vendedores.filter(m=>semColor(m.nombre)==='rojo').length;
   const negros=vendedores.filter(m=>semColor(m.nombre)==='negro').length;
   const sinEval=vendedores.length-verdes-amarillos-rojos-negros;
+  // Semáforo de cada coach y el de quien ve el tablero (coach o líder: todos sus vendedores). El
+  // Director ve además el de cada uno de sus líderes. Solo promedia lo que ya calculó semPorVendedor.
+  const semEquipos=useMemo(()=>{
+    const porCoach={};
+    if(esLider)(coaches||[]).forEach(c=>{porCoach[c.nombre]=semaforoDeEquipo(vendedoresPorCoach[c.nombre],semPorVendedor);});
+    const porLider=esDirector?(session.lideres||[]).map(l=>{
+      const nombres=new Set((coaches||[]).filter(c=>c.reportaA===l.nombre).map(c=>c.nombre));
+      return{lider:l,sem:semaforoDeEquipo(vendedores.filter(m=>nombres.has(m.reportaA)),semPorVendedor)};
+    }):[];
+    return{porCoach,porLider,propio:esDirector?null:semaforoDeEquipo(vendedores,semPorVendedor)};
+  },[semPorVendedor,coaches,esLider,esDirector,session.lideres]);
+  const[semEquipoAbierto,setSemEquipoAbierto]=useState(null); // coach/líder con el desglose de su semáforo a la vista
   // Ajustar el semáforo pide motivo; "regresar al automático" deja un registro que quita el ajuste.
   const guardarSemaforo=(nombre,valor,nota)=>{
     if(session.soloLectura)return; // vista prestada: solo consulta
@@ -5131,6 +5218,25 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast,recordsPla
       </div>
       <div style={{order:12}}>
           <Card title="🚦 Semáforo del equipo">
+            {semEquipos.propio&&<div style={{marginBottom:12,paddingBottom:12,borderBottom:'1px solid var(--border)'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8}}>
+                <span style={{fontSize:14,fontWeight:700}}>{esLider?'⭐ Semáforo del líder':'🧑‍🏫 Semáforo del coach'}</span>
+                <PastillaSemEquipo sem={semEquipos.propio} listo={listoSem} abierto={semEquipoAbierto==='__propio'}
+                  onClick={()=>setSemEquipoAbierto(semEquipoAbierto==='__propio'?null:'__propio')}/>
+              </div>
+              {semEquipoAbierto==='__propio'&&<div style={{marginTop:8}}><PanelSemEquipo sem={semEquipos.propio} listo={listoSem}/></div>}
+            </div>}
+            {semEquipos.porLider.length>0&&<div style={{marginBottom:12,paddingBottom:12,borderBottom:'1px solid var(--border)'}}>
+              <div style={{fontSize:14,fontWeight:700,marginBottom:6}}>⭐ Semáforo por líder</div>
+              {semEquipos.porLider.map(({lider,sem})=>{const k='lider:'+lider.nombre,ab=semEquipoAbierto===k;
+                return <div key={k} style={{padding:'5px 0',borderBottom:'1px solid var(--border)'}}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8}}>
+                    <span style={{fontSize:14}}>{nombreCorto(lider.nombre)}</span>
+                    <PastillaSemEquipo sem={sem} listo={listoSem} abierto={ab} onClick={()=>setSemEquipoAbierto(ab?null:k)}/>
+                  </div>
+                  {ab&&<div style={{marginTop:8}}><PanelSemEquipo sem={sem} listo={listoSem}/></div>}
+                </div>;})}
+            </div>}
             <SemBar/>
             <div style={{display:'flex',justifyContent:'space-around',marginTop:10,fontSize:14,color:'var(--dim)',fontWeight:600}}>
               <span>🟢 {verdes}</span><span>🟡 {amarillos}</span><span>🔴 {rojos}</span>{negros>0&&<span>⚫ {negros}</span>}<span>⚪ {sinEval}</span>
@@ -5140,6 +5246,7 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast,recordsPla
               ⚪ {sinEval} sin datos suficientes para calcular.
             </p>}
             <p style={{fontSize:12,color:'var(--dim)',marginTop:8}}>Se calcula solo con 7 rubros (objetivo, NPPF, conversión, ARPU, ranking, certificaciones y semanas con bono). Toca la pastilla de cada vendedor para ver por qué.</p>
+            <p style={{fontSize:12,color:'var(--dim)',marginTop:4}}>El de {esLider?'cada coach y líder':'coach'} es el promedio de los puntos de sus vendedores (sin ajustes ✋; ⚫ cuenta 0). Con el {Math.round(PCT_ROJOS_TOPE_EQUIPO*100)}% o más en 🔴/⚫ no sale 🟢.</p>
           </Card>
       </div>
     </div>
@@ -5530,6 +5637,7 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast,recordsPla
           :`👥 Equipo (${vendedores.length})`}>
           <p style={{fontSize:14,color:'var(--dim)',marginBottom:10,lineHeight:1.45}}>
             Toca el <b>nombre</b> para ver el detalle · toca la <b>pastilla de color</b> para ver cómo se calculó su semáforo{session.soloLectura?'':' o ajustarlo con motivo'}.
+            {esLider&&<> La pastilla de cada <b>coach</b> es el promedio de sus vendedores.</>}
           </p>
           {esLider?(coaches||[]).map(c=>{
             const vendCoach=vendedoresPorCoach[c.nombre]||[];
@@ -5551,13 +5659,15 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast,recordsPla
               metaMesCoach+=metaMensual(m.badge);
             });
             metaMesCoach+=metaMensualVacantes(vacantesDe(session,[c.nombre]));
+            // El color del renglón es el semáforo del coach (promedio de sus vendedores), no el del peor.
+            const semC=semEquipos.porCoach[c.nombre],colC=semC?.color,semAb=semEquipoAbierto==='coach:'+key;
             return <div key={key}>
               <div onClick={()=>setExpandedCoachEquipo(isExp?null:key)} style={{
-                display:'flex',alignItems:'center',justifyContent:'space-between',
-                padding:'8px 10px',borderRadius:isExp?'8px 8px 0 0':8,marginBottom:isExp?0:4,cursor:'pointer',
-                background:ng>0?'var(--kbg)':r>0?'var(--rbg)':a>0?'var(--ybg)':'transparent',
-                border:`1px solid ${ng>0?'var(--black)':r>0?'var(--red)':a>0?'var(--yellow)':'var(--border)'}`,
-                borderBottom:isExp?'none':undefined,
+                display:'flex',alignItems:'center',justifyContent:'space-between',gap:6,
+                padding:'8px 10px',borderRadius:isExp||semAb?'8px 8px 0 0':8,marginBottom:isExp||semAb?0:4,cursor:'pointer',
+                background:colC?STATUS[colC].bg:'transparent',
+                border:`1px solid ${colC?STATUS[colC].border:'var(--border)'}`,
+                borderBottom:isExp||semAb?'none':undefined,
               }}>
                 <div style={{flex:1}}>
                   <div style={{fontSize:14,fontWeight:700}}>{c.nombre.split(' ').slice(0,3).join(' ')}</div>
@@ -5568,8 +5678,15 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast,recordsPla
                   <div style={{fontSize:12,color:'var(--dim)',marginTop:1}}>Mes ({labelMesEq}): {opMes} op · {valMes} val · {instMes} inst</div>
                   {metaMesCoach>0&&<div style={{fontSize:12,color:'var(--dim)',marginTop:1}}>🎯 Meta del mes: <b>{instMes}/{metaMesCoach}</b></div>}
                 </div>
+                {/* La pastilla abre el desglose del semáforo del coach, no la lista de vendedores. */}
+                <span onClick={e=>e.stopPropagation()}>
+                  <PastillaSemEquipo sem={semC} listo={listoSem} abierto={semAb} onClick={()=>setSemEquipoAbierto(semAb?null:'coach:'+key)}/>
+                </span>
                 <span style={{fontSize:13,color:'var(--dim)'}}>{isExp?'▲':'▼'}</span>
               </div>
+              {semAb&&<div style={{border:`1px solid ${colC?STATUS[colC].border:'var(--border)'}`,borderTop:'none',borderBottom:isExp?'none':undefined,borderRadius:isExp?0:'0 0 8px 8px',padding:10,marginBottom:isExp?0:4,background:'var(--card)'}}>
+                <PanelSemEquipo sem={semC} listo={listoSem}/>
+              </div>}
               {isExp&&<div style={{border:'1px solid var(--border)',borderTop:'none',borderRadius:'0 0 8px 8px',padding:'8px',marginBottom:4}}>
                 {vendCoach.length===0?<p style={{fontSize:13,color:'var(--dim)'}}>Sin vendedores asignados.</p>:
                 vendCoach.map(m=><VendedorRow key={m.numEmp||m.nombre} m={m} nested/>)}
@@ -6983,6 +7100,18 @@ const MANUAL_COMUNES={
     ]},
     {sub:'Si el color no refleja cómo va'},
     {p:'El **coach** puede cambiarlo, pero **siempre con un motivo**. Sale con ✋, vale **solo ese mes** y se siguen viendo los dos: el que calculó la app y el del coach. Los pasos están en la lección **📈 Dashboard** del coach.'},
+    {sub:'El semáforo del coach y del líder'},
+    {p:'El coach también tiene semáforo, y sale de **sus vendedores**: es el **promedio de sus puntos**. Se suman los puntos de cada vendedor y se dividen entre cuántos vendedores tiene. Los colores son los mismos: 🟢 **80 o más** · 🟡 **50 a 79** · 🔴 **menos de 50**.'},
+    {lista:[
+      '**El ajuste a mano (✋) no cuenta**: siempre se usan los puntos que calculó la app.',
+      'El vendedor en **⚫ negro cuenta como 0**.',
+      'El vendedor **sin datos (⚪) no entra** en el promedio.',
+      'Si el **30% o más** de sus vendedores está en 🔴 o ⚫, el coach **no puede salir 🟢** aunque su promedio dé 80 o más: queda en 🟡.',
+      'Con **6 vendedores medidos o menos** su pastilla dice **equipo chico**: un solo vendedor le mueve mucho el promedio.',
+      'El **líder** se calcula igual, con **todos los vendedores de todos sus coaches**.',
+    ]},
+    {p:'Ejemplo: un coach con 5 vendedores que tienen 90, 85, 67, 40 y uno en ⚫. Suma 90 + 85 + 67 + 40 + 0 = **282**, entre 5 = **56**: queda en 🟡 y dice **equipo chico**.'},
+    {ojo:'Toca la pastilla del coach (o del líder) y ves su promedio, cuántos vendedores tiene en cada color, **💡 qué vendedor lo subiría más** si llegara a 🟢, y la lista de sus vendedores **del que más le baja el promedio al que menos**.'},
   ]},
   entrar:{icon:'🔑',titulo:'Entrar a la app',cuando:'La primera vez, o si saliste.',bloques:[
     {pasos:['Escribe tu **número de empleado** (por ejemplo: 17091931).','Escribe tu **PIN**: son **4 números**.','Toca **Iniciar sesión**.']},
@@ -7124,6 +7253,9 @@ const MANUAL_ROLES={
         {sub:'Cambiar el color (solo si de verdad no refleja cómo va)'},
         {pasos:['Toca su **pastilla de color**.','Hasta abajo toca **✋ Ajustar color** y elige 🟢, 🟡 o 🔴.','Escribe el **motivo**. Es obligatorio.','Toca **Guardar ajuste**. Su pastilla sale con ✋.','Para quitarlo, toca la pastilla y luego **↩️ Regresar al automático**.']},
         {ojo:'Tu cambio vale **solo este mes**. Tu líder ve los dos colores: el de la app y el tuyo, con tu motivo.'},
+        {sub:'🧑‍🏫 Tu semáforo como coach'},
+        {p:'Arriba de **🚦 Semáforo del equipo** está **el tuyo**: el promedio de los puntos de tus vendedores. Toca la pastilla para ver cómo se calculó y el **💡 vendedor que más te subiría**. Tu líder lo ve igual.'},
+        {alto:'Ajustar a mano el color de un vendedor **no sube el tuyo**: tu semáforo usa siempre lo que calculó la app.'},
       ]},
     ],
   },
@@ -7170,7 +7302,8 @@ const MANUAL_ROLES={
       ]},
       {icon:'📈',titulo:'Dashboard (tu tablero)',cuando:'Siempre que quieras saber cómo va tu equipo.',bloques:[
         {p:'Es igual al del coach, pero todo viene **agrupado por coach**.'},
-        {lista:['En **🛒 Ventas del equipo** el % se mide contra **la suma de los planes de tus coaches** (dice cuántos tienen plan).','Toca **📋 Avance vs plan por coach** para ver a cada uno: Op., Val. e Inst. contra su plan.','En los paneles (rechazos, planes, cuentas por instalar, ARPU, sin pagar, pagadas) primero tocas al **coach** y luego al **vendedor**.','En **👥 Equipo por Coach** cada coach dice cuántos vendedores tiene, cuántos vendedores lleva en cada color del semáforo (🟢🟡🔴⚫⚪), la semana, el mes y su meta. Tócalo para ver a sus vendedores.']},
+        {lista:['En **🛒 Ventas del equipo** el % se mide contra **la suma de los planes de tus coaches** (dice cuántos tienen plan).','Toca **📋 Avance vs plan por coach** para ver a cada uno: Op., Val. e Inst. contra su plan.','En los paneles (rechazos, planes, cuentas por instalar, ARPU, sin pagar, pagadas) primero tocas al **coach** y luego al **vendedor**.','En **👥 Equipo por Coach** cada coach dice cuántos vendedores tiene, cuántos vendedores lleva en cada color del semáforo (🟢🟡🔴⚫⚪), la semana, el mes y su meta. Tócalo para ver a sus vendedores.','A la derecha de cada coach está **su semáforo** (el promedio de sus vendedores) y el renglón se pinta de ese color. Toca la pastilla para ver cómo se calculó.','En **🚦 Semáforo del equipo** está **⭐ el tuyo como líder**: el promedio de todos los vendedores de tus coaches.']},
+        {ok:'Cómo se calcula el semáforo del coach y del líder está en la lección **🚦 El semáforo de tus vendedores**.'},
       ]},
       {icon:'👁️',titulo:'Ver la app como uno de tus coaches',cuando:'Para ver exactamente lo que ve un coach.',bloques:[
         {pasos:['Arriba dice **⭐ Estás en tu vista de líder**. Toca **👁️ Ver un coach**.','Elige al coach.','La barra se pone amarilla: **👁️ Viendo como …· solo consulta**. Puedes mirar todo, pero **no puedes guardar nada**.','Toca **← Regresar** para volver a tu vista.']},
@@ -7196,7 +7329,7 @@ const MANUAL_ROLES={
         {ojo:'El **semáforo** de cada vendedor se calcula solo; sus coaches pueden ajustarlo con motivo (✋).'},
       ]},
       {icon:'📈',titulo:'Dashboard del distrito',cuando:'Siempre que quieras saber cómo va el distrito.',bloques:[
-        {lista:['**🛒 Ventas del equipo**: Oportunidades, Validadas e Instaladas de todo el distrito. Toca **Semana** o **Mes**; con **‹** ves las anteriores.','El % de avance se mide contra **la suma de los planes de todos**.','Toca **📋 Avance vs plan por líder**: cada líder con sus números y cuántos de sus coaches tienen plan (verde = todos, amarillo = algunos, rojo = ninguno).','**👥 Distrito por Coach**: todos los coaches. Cada uno dice de qué líder es (⭐), su semáforo, semana, mes y meta. Tócalo para ver a sus vendedores.','Los paneles (rechazos, planes, cuentas por instalar, ARPU, sin pagar, pagadas) se abren primero por coach y luego por vendedor.','**🚦 Semáforo del equipo**: cuántos vendedores hay en 🟢 🟡 🔴 ⚫ y cuántos están sin datos ⚪. Cómo se calcula está en la lección **🚦 El semáforo de tus vendedores**.']},
+        {lista:['**🛒 Ventas del equipo**: Oportunidades, Validadas e Instaladas de todo el distrito. Toca **Semana** o **Mes**; con **‹** ves las anteriores.','El % de avance se mide contra **la suma de los planes de todos**.','Toca **📋 Avance vs plan por líder**: cada líder con sus números y cuántos de sus coaches tienen plan (verde = todos, amarillo = algunos, rojo = ninguno).','**👥 Distrito por Coach**: todos los coaches. Cada uno dice de qué líder es (⭐), su semáforo de coach (el promedio de sus vendedores), semana, mes y meta. Toca su pastilla para ver cómo se calculó, o su nombre para ver a sus vendedores.','Los paneles (rechazos, planes, cuentas por instalar, ARPU, sin pagar, pagadas) se abren primero por coach y luego por vendedor.','**🚦 Semáforo del equipo**: arriba, **⭐ el semáforo de cada líder** (el promedio de todos los vendedores de sus coaches); abajo, cuántos vendedores hay en 🟢 🟡 🔴 ⚫ y cuántos están sin datos ⚪. Cómo se calcula está en la lección **🚦 El semáforo de tus vendedores**.']},
         {sub:'Compromisos'},
         {p:'Toca **📋 Compromisos del equipo**: de cada persona ves cuántos compromisos tiene **vencidos sin revisar** y su **% revisados a tiempo**.'},
       ]},
@@ -7236,7 +7369,7 @@ const MANUAL_CONSULTA=[
     {lista:['Tu menú tiene **📈 Dashboard**, **📁 Historial** y **📖 Manual**.','Ves **todo el distrito**: todos los líderes, coaches y vendedores.','**No puedes guardar ni cambiar nada**. El semáforo se calcula solo; tocando la pastilla ves por qué tiene ese color, pero no lo puedes ajustar.']},
   ]},
   {icon:'📈',titulo:'Dashboard del distrito',cuando:'Para ver cómo va todo.',bloques:[
-    {lista:['**🛒 Ventas del equipo**: Oportunidades, Validadas e Instaladas. Toca **Semana** o **Mes**; con **‹** ves las anteriores.','**👥 Distrito por Coach**: cada coach dice de qué líder es (⭐), su semáforo y sus números. Tócalo para ver a sus vendedores, y toca un vendedor para ver su detalle.','**🚦 Semáforo del equipo**: cuántos vendedores hay en 🟢 🟡 🔴 ⚫ y cuántos están sin datos ⚪. Cómo se calcula está en la lección **🚦 El semáforo de tus vendedores**.','**📋 Compromisos del equipo**: quién tiene compromisos vencidos sin revisar y su % revisados a tiempo.']},
+    {lista:['**🛒 Ventas del equipo**: Oportunidades, Validadas e Instaladas. Toca **Semana** o **Mes**; con **‹** ves las anteriores.','**👥 Distrito por Coach**: cada coach dice de qué líder es (⭐), su semáforo de coach (el promedio de sus vendedores) y sus números. Tócalo para ver a sus vendedores, y toca un vendedor para ver su detalle.','**🚦 Semáforo del equipo**: el semáforo de cada líder, y cuántos vendedores hay en 🟢 🟡 🔴 ⚫ y cuántos están sin datos ⚪. Cómo se calcula está en la lección **🚦 El semáforo de tus vendedores**.','**📋 Compromisos del equipo**: quién tiene compromisos vencidos sin revisar y su % revisados a tiempo.']},
   ]},
   {icon:'🗂️',titulo:'Sacar el expediente de una persona',cuando:'Cuando te pidan la historia de alguien.',bloques:[
     {pasos:['Toca **📁 Historial**.','Toca **Mes** o **Rango** y elige las fechas.','En **🔎 Buscar persona** escribe el nombre y elige la opción que dice **expediente**.','Arriba ves sus cuadros: ✅ Asistencias, 🚫 Ausencias, 📋 Permisos, 💬 Hallazgos y 🌙 Cierres. Abajo, sus ausencias por motivo y, si su coach se lo cambió a mano, su último semáforo.','Toca cada renglón para ver el detalle y las fotos.','Toca **🖨️ Informe PDF** y luego guarda o imprime.']},
