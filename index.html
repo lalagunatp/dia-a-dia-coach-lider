@@ -2135,18 +2135,20 @@ function CompromisoDelDia({compromiso,colonia,onCompromiso,onColonia,zonasData,c
 }
 // Foto con sello de coach, día/fecha/hora, dirección y coordenadas (geolocalización del dispositivo).
 // Ubicación del teléfono en este momento: {lat,lng} con 5 decimales y la dirección que corresponde
-// (texto vacío si no se pudo traducir). Truena si no hay GPS o no dieron permiso.
+// (texto vacío si no se pudo traducir), y el número de la casa si el mapa lo tiene (casi nunca en
+// colonias nuevas: por eso Trabajo en campo lo pide aparte). Truena si no hay GPS o no dieron permiso.
 async function ubicacionActual(){
   if(!navigator.geolocation)throw new Error('sin geolocalización');
   const pos=await new Promise((res,rej)=>navigator.geolocation.getCurrentPosition(res,rej,{enableHighAccuracy:true,timeout:8000}));
   const lat=pos.coords.latitude,lng=pos.coords.longitude;
-  let direccion='';
+  let direccion='',numero='';
   try{
     const resGeo=await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`,{headers:{'Accept-Language':'es'}});
     const j=await resGeo.json();
     direccion=j?.display_name||'';
+    numero=String(j?.address?.house_number||'').trim();
   }catch(eGeo){console.error('Reverse geocoding falló:',eGeo);}
-  return{lat:lat.toFixed(5),lng:lng.toFixed(5),direccion};
+  return{lat:lat.toFixed(5),lng:lng.toFixed(5),direccion,numero};
 }
 const ligaMapa=(lat,lng)=>`https://www.google.com/maps?q=${lat},${lng}`;
 function PhotoCaptureGeo({photo,onCapture,coachName,toast,label,modo='ambos'}){
@@ -3711,8 +3713,13 @@ const CAMPO_STREAMING=['Netflix','Disney+','Max','Prime Video','YouTube Premium'
 const numC=v=>Number(v)||0;
 const campoVacio=()=>({tocadas:0,abiertas:0,contactos:[]});
 // streaming: '' sin contestar · 'si' · 'no'; apps las que tiene y pagoApps lo que paga por todas al mes.
-const contactoVacio=()=>({id:uid(),proveedor:'',pago:'',streaming:'',apps:[],otraApp:'',pagoApps:'',resultado:'',motivos:[],otroMotivo:'',lat:'',lng:'',direccion:''});
+// hora: cuándo se tocó "+ Agregar casa" (fija, como las coordenadas). numExt es obligatorio salvo
+// que se marque sinNumero, y entonces la referencia es la obligatoria; numInt es opcional.
+const contactoVacio=()=>({id:uid(),proveedor:'',pago:'',streaming:'',apps:[],otraApp:'',pagoApps:'',resultado:'',motivos:[],otroMotivo:'',lat:'',lng:'',direccion:'',hora:'',numExt:'',numInt:'',sinNumero:false,referencia:''});
 const appsDe=x=>(x.apps||[]).map(a=>a==='Otra'&&x.otraApp?.trim()?x.otraApp.trim():a);
+// "No. 245 int. B" · "S/N (portón verde)" — para el Historial; las casas guardadas antes no lo traen.
+const numeroCasa=x=>x.sinNumero?`S/N${x.referencia?.trim()?` (${x.referencia.trim()})`:''}`
+  :x.numExt?.trim()?`No. ${x.numExt.trim()}${x.numInt?.trim()?` int. ${x.numInt.trim()}`:''}`:'';
 const resultadoCampo=v=>CAMPO_RESULTADOS.find(x=>x.value===v);
 // Números del día para mostrar (formulario, historial, tarjeta del líder) y para guardar en el Sheet.
 function resumenCampo(campo){
@@ -3784,6 +3791,8 @@ function CampoResumen({campo,compacto}){
           {x.streaming==='si'&&<div style={{fontSize:13,color:'var(--dim)'}}>📺 {appsDe(x).join(', ')||'Streaming'}{numC(x.pagoApps)>0&&` · $${numC(x.pagoApps).toLocaleString('es-MX')}/mes`}</div>}
           {x.streaming==='no'&&<div style={{fontSize:13,color:'var(--dim)'}}>📺 Sin streaming</div>}
           {motivos&&<div style={{fontSize:13,color:'var(--dim)'}}>{motivos}</div>}
+          {x.hora&&<div style={{fontSize:13,color:'var(--dim)'}}>🕒 Agregada a las {x.hora}</div>}
+          {numeroCasa(x)&&<div style={{fontSize:13,color:'var(--text)',fontWeight:600}}>🔢 {numeroCasa(x)}</div>}
           {x.direccion&&<div style={{fontSize:13,color:'var(--dim)'}}>📍 {x.direccion}</div>}
           {x.lat&&x.lng&&<a href={ligaMapa(x.lat,x.lng)} target="_blank" rel="noopener" style={{fontSize:12,color:'var(--accent)'}}>🌐 {x.lat}, {x.lng} · Ver en mapa</a>}
         </div>
@@ -3819,14 +3828,15 @@ function TrabajoCampo({campo,onChange}){
   const[ubicando,setUbicando]=useState({});
   const[sinUbicacion,setSinUbicacion]=useState({});
   // Cada casa con detalle es una casa que abrió: si registran más de las que dijeron, el contador sube solo.
-  // Al agregarla se toman las coordenadas y la dirección del teléfono; si no se puede, se escribe a mano.
+  // Al agregarla se toman la hora, las coordenadas y la dirección del teléfono (y el número, si el
+  // mapa lo trae); si no se puede, se escribe a mano.
   const agregar=()=>{
-    const nueva=contactoVacio();
+    const nueva={...contactoVacio(),hora:now()};
     const contactos=[...c.contactos,nueva];set({contactos,abiertas:Math.max(c.abiertas,contactos.length),tocadas:Math.max(c.tocadas,contactos.length)});
     setUbicando(u=>({...u,[nueva.id]:true}));
     ubicacionActual().then(u=>{
       const cur=ultimo.current;
-      onChange({...cur,contactos:cur.contactos.map(x=>x.id===nueva.id?{...x,lat:u.lat,lng:u.lng,direccion:x.direccion||u.direccion}:x)});
+      onChange({...cur,contactos:cur.contactos.map(x=>x.id===nueva.id?{...x,lat:u.lat,lng:u.lng,direccion:x.direccion||u.direccion,numExt:(x.numExt||x.sinNumero)?x.numExt:u.numero}:x)});
       if(!u.direccion)setSinUbicacion(s=>({...s,[nueva.id]:true}));
     }).catch(e=>{console.error('Ubicación de la casa:',e);setSinUbicacion(s=>({...s,[nueva.id]:true}));})
       .finally(()=>setUbicando(u=>({...u,[nueva.id]:false})));
@@ -3857,7 +3867,7 @@ function TrabajoCampo({campo,onChange}){
       const r=resultadoCampo(x.resultado);
       return <div key={x.id} className="anim" style={{border:'1px solid var(--border)',borderLeft:`4px solid ${r?r.color:'var(--border)'}`,borderRadius:10,padding:12,marginBottom:10,background:'var(--card)'}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
-          <span style={{fontWeight:800,fontSize:15}}>🏠 Casa {i+1}{r&&<span style={{...HS.chip(r.color,r.fondo),marginLeft:8}}>{r.icono} {r.label}</span>}</span>
+          <span style={{fontWeight:800,fontSize:15}}>🏠 Casa {i+1}{x.hora&&<span style={{fontSize:13,fontWeight:600,color:'var(--dim)'}}> · 🕒 {x.hora}</span>}{r&&<span style={{...HS.chip(r.color,r.fondo),marginLeft:8}}>{r.icono} {r.label}</span>}</span>
           <button type="button" onClick={()=>quitar(x.id)} aria-label="Quitar casa" style={{border:'none',background:'transparent',color:'var(--dim)',fontSize:18,cursor:'pointer',padding:'0 4px'}}>✕</button>
         </div>
         <div style={{marginTop:-4,marginBottom:12}}>
@@ -3866,6 +3876,22 @@ function TrabajoCampo({campo,onChange}){
             :<>
               {sinUbicacion[x.id]&&!(x.direccion||'').trim()&&<div style={{fontSize:12,color:'var(--red)',fontWeight:600,marginBottom:4}}>⚠️ No se pudo obtener la dirección: escríbela (obligatoria)</div>}
               <Input value={x.direccion||''} placeholder="📍 Dirección de la casa" onChange={e=>setContacto(x.id,{direccion:e.target.value})} style={{fontSize:13}}/>
+              {/* El número casi nunca viene en la dirección del mapa: va aparte y es obligatorio, salvo S/N con referencia. */}
+              {!x.sinNumero&&<>
+                {!(x.numExt||'').trim()&&<div style={{fontSize:12,color:'var(--red)',fontWeight:600,margin:'6px 0 2px'}}>⚠️ Escribe el número del predio, casa o local (obligatorio)</div>}
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6,marginTop:6}}>
+                  <Input value={x.numExt||''} placeholder="No. exterior *" onChange={e=>setContacto(x.id,{numExt:e.target.value})} style={{fontSize:13}}/>
+                  <Input value={x.numInt||''} placeholder="No. interior (opcional)" onChange={e=>setContacto(x.id,{numInt:e.target.value})} style={{fontSize:13}}/>
+                </div>
+              </>}
+              <label style={{display:'flex',alignItems:'center',gap:6,fontSize:13,marginTop:6,cursor:'pointer'}}>
+                <input type="checkbox" checked={!!x.sinNumero} onChange={e=>setContacto(x.id,{sinNumero:e.target.checked,...(e.target.checked?{numExt:'',numInt:''}:{referencia:''})})}/>
+                Sin número (S/N)
+              </label>
+              {x.sinNumero&&<>
+                {!(x.referencia||'').trim()&&<div style={{fontSize:12,color:'var(--red)',fontWeight:600,margin:'4px 0 2px'}}>⚠️ Sin número: escribe una referencia para ubicarla (obligatoria)</div>}
+                <Input value={x.referencia||''} placeholder="Referencia: portón verde, junto a la tienda…" onChange={e=>setContacto(x.id,{referencia:e.target.value})} style={{fontSize:13,marginTop:4}}/>
+              </>}
               {x.lat&&x.lng&&<a href={ligaMapa(x.lat,x.lng)} target="_blank" rel="noopener" style={{display:'inline-block',fontSize:12,color:'var(--accent)',marginTop:4}}>🌐 {x.lat}, {x.lng} · Ver en mapa</a>}
             </>}
         </div>
@@ -4068,6 +4094,8 @@ function FeedbackTab({data,setData,team,toast,session,refreshKey,compromisos=[],
       if(i>=0){alert(`Casa ${i+1}: marca con quién tiene el servicio y en qué terminó`);return;}
       const d=c.contactos.findIndex(x=>!String(x.direccion||'').trim());
       if(d>=0){alert(`Casa ${d+1}: falta la dirección (espera a que se obtenga la ubicación o escríbela)`);return;}
+      const n=c.contactos.findIndex(x=>x.sinNumero?!String(x.referencia||'').trim():!String(x.numExt||'').trim());
+      if(n>=0){alert(c.contactos[n].sinNumero?`Casa ${n+1}: sin número, escribe una referencia para ubicarla`:`Casa ${n+1}: falta el número del predio, casa o local (si no tiene, marca "Sin número" y escribe una referencia)`);return;}
       const j=c.contactos.findIndex(x=>x.resultado==='rechazo'&&!x.motivos.length);
       if(j>=0){alert(`Casa ${j+1}: marca al menos un motivo del rechazo`);return;}
       const k=c.contactos.findIndex(x=>!x.streaming||(x.streaming==='si'&&!x.apps.length));
@@ -7226,7 +7254,7 @@ const MANUAL_ROLES={
         {sub:'Los tipos'},
         {lista:['**Trabajo en campo**: acompañaste a la persona en la calle. Pide el recorrido y la foto con sello.','**Feedback 1 a 1**, **Revisión semanal** y **Retroalimentación**: una plática con la persona.','**Incidencia operativa** e **Incidencia crítica**: algo salió mal (la crítica es grave).','**Evidencia de asignación externa**: fotos de la persona en campo y de la conversación del avance (sin sello).','**Otro**.']},
         {sub:'Trabajo en campo: el recorrido'},
-        {pasos:['En **Casas tocadas** usa **+** y **−** para poner cuántas puertas tocaron.','En **Abrieron** pon cuántas abrieron. Sale la **tasa de apertura**: verde 40% o más, amarillo 20% o más, rojo menos.','Toca **+ Agregar casa que abrió** por cada casa, **estando en la casa**: se toman solas las **coordenadas** y la **dirección** del teléfono y salen debajo de **🏠 Casa**. La dirección la puedes corregir; si no se pudo obtener, escríbela tú (es obligatoria). Toca **Ver en mapa** para abrir el punto en Google Maps.','Marca con quién tiene el servicio, cuánto paga, si tiene apps de streaming (cuáles y cuánto paga) y **en qué terminó**: ✅ Venta, 🕒 Seguimiento o ✖️ Rechazo.','Si fue **Rechazo**, marca el motivo (puede ser más de uno).','Toma la **foto con sello**: es obligatoria.']},
+        {pasos:['En **Casas tocadas** usa **+** y **−** para poner cuántas puertas tocaron.','En **Abrieron** pon cuántas abrieron. Sale la **tasa de apertura**: verde 40% o más, amarillo 20% o más, rojo menos.','Toca **+ Agregar casa que abrió** por cada casa, **estando en la casa**: se toman solas la **hora** (sale junto a **🏠 Casa**, como 🕒 10:42, y no se puede cambiar), las **coordenadas** y la **dirección** del teléfono. La dirección la puedes corregir; si no se pudo obtener, escríbela tú (es obligatoria). Toca **Ver en mapa** para abrir el punto en Google Maps.','Escribe el **No. exterior** del predio, casa o local: es **obligatorio** (si el mapa lo trae, ya viene escrito; revísalo). El **No. interior** (depto., local dentro de una plaza) es opcional. Si de verdad **no tiene número**, marca **Sin número (S/N)** y escribe una **referencia** para encontrarla (por ejemplo "portón verde junto a la tienda"): entonces la obligatoria es la referencia.','Marca con quién tiene el servicio, cuánto paga, si tiene apps de streaming (cuáles y cuánto paga) y **en qué terminó**: ✅ Venta, 🕒 Seguimiento o ✖️ Rechazo.','Si fue **Rechazo**, marca el motivo (puede ser más de uno).','Toma la **foto con sello**: es obligatoria.']},
         {sub:'Compromisos'},
         {p:'Escribe **Qué + Quién + Cuándo**. Si escribes un compromiso, **tienes que** poner la **Fecha de revisión**. Ese día te sale en el Dashboard para revisarlo. Al guardar se abre WhatsApp para mandarle el compromiso a la persona.'},
         {ojo:'El **semáforo** del vendedor se calcula solo, por eso aquí no sale. Solo aparece, con su motivo, si **tú se lo cambiaste a mano** este mes (en **Dashboard → Equipo**), y se guarda con el hallazgo.'},

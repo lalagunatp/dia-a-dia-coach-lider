@@ -1241,12 +1241,20 @@ function columnasCampo(campo) {
   const contestaron = cs.filter(x => x.streaming).length;
   const pagosApps = conStreaming.map(x => num(x.pagoApps)).filter(p => p > 0);
   const etiqueta = { venta: 'Venta', seguimiento: 'Seguimiento', rechazo: 'Rechazo' };
+  // Hora en que se agregó la casa y su número ("No. 245 int. B" o "S/N (referencia)"); las casas
+  // guardadas antes de esto no los traen. Mismo formato que numeroCasa en index.html.
+  const numeroDe = x => {
+    if (x.sinNumero) return 'S/N' + (String(x.referencia || '').trim() ? ' (' + String(x.referencia).trim() + ')' : '');
+    const ext = String(x.numExt || '').trim(), interior = String(x.numInt || '').trim();
+    return ext ? 'No. ' + ext + (interior ? ' int. ' + interior : '') : '';
+  };
   const detalle = cs.map((x, i) => {
     const motivos = x.resultado === 'rechazo' ? motivosDe(x).join(', ') : '';
     const streaming = x.streaming === 'si'
       ? ' · Streaming: ' + (appsDe(x).join(', ') || 'sí') + (num(x.pagoApps) > 0 ? ' $' + num(x.pagoApps) : '')
       : x.streaming === 'no' ? ' · Sin streaming' : '';
-    return (i + 1) + '. ' + (x.proveedor || '—') +
+    const numero = numeroDe(x);
+    return (i + 1) + '. ' + (x.hora ? x.hora + ' · ' : '') + (numero ? numero + ' · ' : '') + (x.proveedor || '—') +
       (num(x.pago) > 0 ? ' · $' + num(x.pago) : '') +
       streaming +
       (etiqueta[x.resultado] ? ' · ' + etiqueta[x.resultado] : '') +
