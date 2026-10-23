@@ -5052,6 +5052,14 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast,recordsPla
     </div>;
   };
 
+  // ARPU al final de una línea de meta, con el color de su rubro en el semáforo (🟢 $480+, 🟡 $460+,
+  // 🔴 menos). Sin instalaciones no hay ARPU y no se pinta nada.
+  const ArpuTarjeta=({arpu})=>{
+    if(!(arpu>0))return null;
+    const a=Math.round(arpu); // el color sale del mismo número que se ve: $479.6 se ve $480 y va en 🟢
+    const color=a>=ARPU_META?'verde':a>=ARPU_BASE?'amarillo':'rojo';
+    return <span title={`ARPU sin IVA · meta ${ARPU_META_TXT}, base ${ARPU_BASE_TXT}`}> · <b style={{color:STATUS[color].border}}>💵 {fmtMoney(a)} {SEM_EMOJI[color]}</b></span>;
+  };
   // Fila de un vendedor con su semáforo/meta/último feedback — se usa tanto en el listado plano
   // (coach/director) como anidada dentro de un coach expandido (líder).
   // nested=true: esta fila se muestra dentro de un coach expandido (vista líder) — usa un tono
@@ -5064,6 +5072,8 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast,recordsPla
     const lastFb=recs.filter(r=>r.type==='feedback'&&r.vendedor===m.nombre).sort((a,b)=>b.savedAt.localeCompare(a.savedAt))[0];
     const sinPagarN=cuentasSinPagar(m.cuentasCom,now).length;
     const sinPagarPct=sinPagarN?Math.round(sinPagarN/cuentasDelPeriodo(m.cuentasCom,now).length*100):0;
+    // ARPU sin IVA del mismo mes y semana que sus líneas de meta (0 = sin instalaciones: no se muestra).
+    const arpuMesV=arpuPromedioPeriodo(m.ventas,mesEqIni,mesEqFin),arpuSemV=arpuPromedioPeriodo(m.ventas,semEqIni,semEqFin);
     // Franja de color a la izquierda: se lee el estado de toda la lista de un vistazo, sin tener
     // que buscar la pastilla de cada renglón. Gris cuando todavía nadie lo ha semaforizado.
     const franja=sem?STATUS[sem].border:'#cbd0dd';
@@ -5089,11 +5099,13 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast,recordsPla
             {m.mesesEnRanking>0&&<span> · {m.mesesEnRanking}m en {nombreRank(m.badge)}</span>}
             {m.bajada&&<span style={{color:'var(--red)',fontWeight:600}}> · ⬇ bajó de {nombreRank(m.bajada.de)} hace {m.mesesEnRanking}m (estuvo {m.bajada.mesesAntes}m)</span>}
           </div>}
-          {metaMensual(m.badge)>0&&<div style={{fontSize:13,color:'var(--dim)',marginTop:2,lineHeight:1.4}}>
-            🎯 {funnelPeriodo(m.ventas,mesEqIni,mesEqFin).instaladas}/{metaMensual(m.badge)} inst. {mesEqEsActual?'del mes':`de ${labelMesEq}`}
+          {(metaMensual(m.badge)>0||arpuMesV>0)&&<div style={{fontSize:13,color:'var(--dim)',marginTop:2,lineHeight:1.4}}>
+            {metaMensual(m.badge)>0?<>🎯 {funnelPeriodo(m.ventas,mesEqIni,mesEqFin).instaladas}/{metaMensual(m.badge)} inst. {mesEqEsActual?'del mes':`de ${labelMesEq}`}</>:<>{mesEqEsActual?'Mes':labelMesEq}</>}
+            <ArpuTarjeta arpu={arpuMesV}/>
           </div>}
-          {metaSemanal(m.badge)>0&&<div style={{fontSize:13,color:'var(--dim)',marginTop:2,lineHeight:1.4}}>
-            🎯 {funnelPeriodo(m.ventas,semEqIni,semEqFin).instaladas}/{metaSemanal(m.badge)} inst. {semEqEsActual?'de la semana':`del ${labelSemEq}`}
+          {(metaSemanal(m.badge)>0||arpuSemV>0)&&<div style={{fontSize:13,color:'var(--dim)',marginTop:2,lineHeight:1.4}}>
+            {metaSemanal(m.badge)>0?<>🎯 {funnelPeriodo(m.ventas,semEqIni,semEqFin).instaladas}/{metaSemanal(m.badge)} inst. {semEqEsActual?'de la semana':`del ${labelSemEq}`}</>:<>{semEqEsActual?'Semana':labelSemEq}</>}
+            <ArpuTarjeta arpu={arpuSemV}/>
           </div>}
           {m.rankingMen?.ventaSana&&<div style={{fontSize:13,color:'var(--dim)',marginTop:2,lineHeight:1.4}}>
             % Venta sana ({m.rankingMen.ventaSana.mes}): <b>{m.rankingMen.ventaSana.valor}</b>
@@ -7275,6 +7287,8 @@ const MANUAL_ROLES={
         {lista:['Toca **Semana** o **Mes**. Con **‹** ves la anterior; con **Volver** regresas a la de hoy.','🕒 dice a qué hora se tomaron los datos.','Ves **Oportunidades**, **Validadas** e **Instaladas**, y abajo el **% de avance** contra tu Plan.','El reloj 🎯 compara las instalaciones contra la meta.']},
         {sub:'Paneles que se abren al tocarlos'},
         {lista:['❌ **Motivos de rechazo** de las oportunidades.','📦 **Instalaciones por plan**.','⏳ **Cuentas por instalar** (últimos 30 días). Las puedes mandar por WhatsApp.','💵 **ARPU** por vendedor.','💰 **Cuentas sin pagar**: instaladas hace 25 a 90 días y sin pagar. Entre más días, más urge.','✅ **Cuentas pagadas**: la semana pasada contra la anterior.']},
+        {sub:'👥 La tarjeta de cada vendedor'},
+        {lista:['**🎯 8/14 inst. del mes** y **🎯 2/4 inst. de la semana**: lo que lleva contra su meta. Siguen la semana y el mes que elegiste en **🛒 Ventas del equipo**.','Al final de cada una va su **💵 ARPU** (sin IVA) de ese mes o esa semana, con color: 🟢 **$480 o más** · 🟡 **$460 a $479** · 🔴 **menos de $460**. Por ejemplo: **🎯 8/14 inst. del mes · 💵 $486 🟢**.','Si no instaló nada en ese periodo no hay ARPU, y no sale.']},
         {sub:'🚦 El semáforo de tus vendedores'},
         {p:'Ya **no lo pones tú**: la app lo calcula sola. Cómo lo calcula está en la lección **🚦 El semáforo de tus vendedores**.'},
         {pasos:['Baja hasta **👥 Equipo**. Debajo de cada vendedor dice **lo que más le resta**.','Toca su **pastilla de color**: ves su calificación, **💡 qué le haría subir de color** y lo que le resta, con sus puntos.','Toca una línea para ver contra qué se mide. Usa el 💡 para platicar con tu vendedor qué hacer esta semana.']},
@@ -7330,7 +7344,7 @@ const MANUAL_ROLES={
       ]},
       {icon:'📈',titulo:'Dashboard (tu tablero)',cuando:'Siempre que quieras saber cómo va tu equipo.',bloques:[
         {p:'Es igual al del coach, pero todo viene **agrupado por coach**.'},
-        {lista:['En **🛒 Ventas del equipo** el % se mide contra **la suma de los planes de tus coaches** (dice cuántos tienen plan).','Toca **📋 Avance vs plan por coach** para ver a cada uno: Op., Val. e Inst. contra su plan.','En los paneles (rechazos, planes, cuentas por instalar, ARPU, sin pagar, pagadas) primero tocas al **coach** y luego al **vendedor**.','En **👥 Equipo por Coach** cada coach dice cuántos vendedores tiene, cuántos vendedores lleva en cada color del semáforo (🟢🟡🔴⚫⚪), la semana, el mes y su meta. Tócalo para ver a sus vendedores.','A la derecha de cada coach está **su semáforo** (el promedio de sus vendedores) y el renglón se pinta de ese color. Toca la pastilla para ver cómo se calculó.','En **🚦 Semáforo del equipo** está **⭐ el tuyo como líder**: el promedio de todos los vendedores de tus coaches.']},
+        {lista:['En **🛒 Ventas del equipo** el % se mide contra **la suma de los planes de tus coaches** (dice cuántos tienen plan).','Toca **📋 Avance vs plan por coach** para ver a cada uno: Op., Val. e Inst. contra su plan.','En los paneles (rechazos, planes, cuentas por instalar, ARPU, sin pagar, pagadas) primero tocas al **coach** y luego al **vendedor**.','En **👥 Equipo por Coach** cada coach dice cuántos vendedores tiene, cuántos vendedores lleva en cada color del semáforo (🟢🟡🔴⚫⚪), la semana, el mes y su meta. Tócalo para ver a sus vendedores.','En la tarjeta de cada vendedor, junto a su meta del mes y de la semana, va su **💵 ARPU** de ese periodo con color (🟢 $480 o más · 🟡 $460 a $479 · 🔴 menos). Si no instaló nada, no sale.','A la derecha de cada coach está **su semáforo** (el promedio de sus vendedores) y el renglón se pinta de ese color. Toca la pastilla para ver cómo se calculó.','En **🚦 Semáforo del equipo** está **⭐ el tuyo como líder**: el promedio de todos los vendedores de tus coaches.']},
         {ok:'Cómo se calcula el semáforo del coach y del líder está en la lección **🚦 El semáforo de tus vendedores**.'},
       ]},
       {icon:'👁️',titulo:'Ver la app como uno de tus coaches',cuando:'Para ver exactamente lo que ve un coach.',bloques:[
