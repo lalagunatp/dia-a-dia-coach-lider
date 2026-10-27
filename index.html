@@ -3079,7 +3079,9 @@ function completitudPlanFila(row){
     total++;if(Number(row[k])>0)llenos++;
   });
   const zonasTxt=String(row['Zonas']||'');
-  DIAS_SEMANA.forEach(d=>{total++;if(zonasTxt.includes(DIAS_SEMANA_LABEL[d]+':'))llenos++;});
+  // Zonas: con 6 de los 7 días (cualquiera) ya cuentan las 7 — un día libre es normal, sobre todo en PDV.
+  const diasZona=DIAS_SEMANA.filter(d=>zonasTxt.includes(DIAS_SEMANA_LABEL[d]+':')).length;
+  total+=DIAS_SEMANA.length;llenos+=diasZona>=DIAS_SEMANA.length-1?DIAS_SEMANA.length:diasZona;
   ['Prioridades','Acompañamientos','Resultado esperado','Notas'].forEach(k=>{
     total++;if(String(row[k]||'').trim())llenos++;
   });
@@ -7324,7 +7326,7 @@ const MANUAL_ROLES={
       ]},
       {icon:'📊',titulo:'Plan de la semana (lunes)',cuando:'El lunes, **después** de que tus coaches guarden el suyo.',bloques:[
         {sub:'1. Revisa a tus coaches'},
-        {p:'En **📊 Planes del equipo** ves a cada coach: 🟢 100% capturado · 🟡 capturado a medias · 🔴 sin capturar.'},
+        {p:'En **📊 Planes del equipo** ves a cada coach: 🟢 100% capturado · 🟡 capturado a medias · 🔴 sin capturar. El % cuenta 16 casillas: los 5 objetivos (mayores a 0), las zonas de los 7 días (con 6 días cualquiera ya cuentan completas) y Prioridades, Acompañamientos, Resultado esperado y Notas.'},
         {sub:'2. Tu plan'},
         {pasos:['El **🎯 Objetivo de la semana** se llena **solo** con lo que puso cada coach. Debajo de cada uno, en gris, está **su meta**. Total del equipo y **Meta** van al final.','**Prioridades** y **Acompañamientos** también vienen de tus coaches (solo se leen).','En **🤝 Coach a priorizar en la semana**, para cada día busca al coach, toca **+ Agregar** y escribe un comentario si hace falta.','Escribe **Resultado esperado** y **Notas**.','Toca **📲 Guardar plan y enviar por WhatsApp**. Se abre WhatsApp con el plan: elige a tu director y envíalo.']},
         {ojo:'Al guardar se copia lo que tus coaches tengan **en ese momento**. Por eso guárdalo cuando ya todos estén en 🟢.'},
