@@ -734,12 +734,13 @@ function textoPermisoCompromiso({vendedor,date,tipo,motivo,compromiso,colonia,re
   if(registradoPor)l.push(`— ${nombreNatural(registradoPor)}`);
   return l.join('\n');
 }
-// Desde cuándo hacen falta los semáforos fuera del Historial: los ajustes valen el mes en curso y
-// la foto automática es de esta semana, que puede haber empezado el mes pasado. La hoja SEMAFORO
+// Desde cuándo hacen falta los semáforos fuera del Historial: los ajustes valen 7 días y la foto
+// automática es de esta semana. La hoja SEMAFORO
 // crece cada semana, así que no se baja completa más que en el Historial.
 function desdeSemaforo(){
-  const hoy=new Date(),lunes=startOfWeek(hoy),mes=startOfMonth(hoy);
-  return ymdLocal(lunes<mes?lunes:mes);
+  // Desde lo que haga falta: el lunes (foto semanal) o los 7 días en que vale un ajuste ✋.
+  const hoy=new Date(),lunes=startOfWeek(hoy),ajuste=diasAntes(hoy,DIAS_AJUSTE_SEM-1);
+  return ymdLocal(lunes<ajuste?lunes:ajuste);
 }
 // Los registros que capturó ESA persona (los suyos, no los de su equipo), de todas las hojas o
 // solo de las de `tipos` (p.ej. ['plan','plan_resultado']).
@@ -1592,11 +1593,13 @@ function pagadasEnSemana(pagadas,semana){
 // llega a la base, 0). La calificación es el promedio ponderado, con peso 1 ÷ prioridad (prioridad 1
 // es lo más importante): 🟢 de 80 para arriba, 🟡 de 50 a 79, 🔴 abajo de 50. Un rubro sin datos
 // (sin instaladas no hay ARPU, por ejemplo) no cuenta y su peso se reparte entre los demás.
-// Los rubros que se miden "en el mes" son del mes en curso, hasta hoy.
+// Instalaciones, ARPU, conversión y semanas con bono se miden en una VENTANA MÓVIL de 30 días
+// cerrados que termina AYER (ver ventanaSemaforo): la BASE se carga muy temprano con el cierre del
+// día anterior, así que "hoy" todavía no trae nada. Ranking, cursos y el ⚫ siguen siendo del mes.
 const RUBROS_SEMAFORO=[
   {k:'objetivo',icon:'🎯',label:'Objetivo de instalaciones',prioridad:1},
   {k:'nppf',icon:'💰',label:'Cuentas sin pagar (NPPF)',prioridad:2},
-  {k:'semanas',icon:'📅',label:'Semanas con bono en el mes',prioridad:3},
+  {k:'semanas',icon:'📅',label:'Semanas con bono (últimas 4)',prioridad:3},
   {k:'arpu',icon:'💵',label:'ARPU (sin IVA)',prioridad:4},
   {k:'ranking',icon:'🏅',label:'Ranking',prioridad:5},
   {k:'cert',icon:'📚',label:'Certificaciones',prioridad:6},
@@ -1606,8 +1609,12 @@ const PUNTOS_SEMAFORO={verde:100,amarillo:50,rojo:0};
 const CORTE_SEM_VERDE=80,CORTE_SEM_AMARILLO=50;
 const ARPU_BASE=460,ARPU_META=480;
 const NPPF_BASE=10,NPPF_META=5; // % sin pagar: aquí menos es mejor
-const CONV_BASE=85,CONV_META=90; // instaladas ÷ validadas del mes, en %
-const SEMANAS_BONO_BASE=3; // la meta es todas las semanas del mes (4 o 5)
+const CONV_BASE=85,CONV_META=90; // de las validadas del grupo, % que ya se instaló
+const DIAS_VENTANA_SEM=30; // días cerrados que mide el semáforo
+const DIAS_MADURAR_CONV=7; // días que se le dan a una validada para instalarse antes de contarla
+const SEMANAS_BONO_VENTANA=4,SEMANAS_BONO_BASE=3; // últimas 4 semanas cerradas; meta las 4, base 3
+const DIAS_AJUSTE_SEM=7; // el ajuste ✋ del coach vale 7 días (el día que se pone cuenta); al 8.º, automático
+const DIA_MS=86400000;
 // No debe haber condicionados: uno queda en 🟡 solo si al menos el 80% de sus otros rubros (todos
 // menos el de ranking) está en 🟢; si no, en 🔴. Nunca en 🟢. Con 2 meses o más seguidos como
 // condicionado (contando el actual, ver leerRankingMensual) es ⚫ negro, sin importar lo demás.
@@ -1636,13 +1643,35 @@ function ventanaNPPF(ref){
   const ini=new Date(corte);ini.setDate(ini.getDate()-30);
   return{ini,fin:new Date(corte.getTime()-1)};
 }
-// Lunes de las semanas del mes: cada semana es del mes de su lunes.
-function semanasDelMes(ref){
-  const ini=startOfMonth(ref),fin=endOfMonth(ref);
-  const l=startOfWeek(ini);if(l<ini)l.setDate(l.getDate()+7);
-  const out=[];
-  for(const d=new Date(l);d<=fin;d.setDate(d.getDate()+7))out.push(new Date(d));
-  return out;
+// Fecha de ingreso "dd/mm/aaaa" (como la manda el servidor) → Date a las 00:00, o null.
+function fechaDMY(s){
+  const p=String(s||'').trim().split('/');
+  if(p.length!==3||!Number(p[0])||!Number(p[1])||!Number(p[2]))return null;
+  const d=new Date(Number(p[2]),Number(p[1])-1,Number(p[0]));
+  return isNaN(d)?null:d;
+}
+const diasAntes=(d,n)=>{const x=new Date(d);x.setHours(0,0,0,0);x.setDate(x.getDate()-n);return x;};
+// Ventanas del semáforo (todas cerradas: terminan ayer o antes, porque la BASE de hoy trae el
+// cierre de ayer):
+// · ini–fin: los 30 días que terminan ayer → instalaciones y ARPU. A quien entró después de que
+//   arranca se le mide desde su ingreso, y `dias` dice cuántos lleva (para prorratear la meta).
+// · conv: las validadas de los 30 días que terminan 7 días antes de ayer, para que cada una haya
+//   tenido al menos 7 días para instalarse (conversión por grupo). También desde su ingreso.
+// · semanas: lunes de las últimas 4 semanas ya terminadas (lunes a domingo; la que terminó ayer
+//   domingo ya cuenta), solo las que trabajó completas (su lunes es el día de ingreso o después).
+function ventanaSemaforo(m,ref){
+  const hoy=diasAntes(ref,0);
+  const alta=fechaDMY(m.fechaAlta);
+  const desde=i30=>alta&&alta>i30?alta:i30;
+  const i30=diasAntes(hoy,DIAS_VENTANA_SEM),ini=desde(i30);
+  const cFin=diasAntes(hoy,DIAS_MADURAR_CONV),cIni=desde(diasAntes(cFin,DIAS_VENTANA_SEM));
+  const lunesHoy=startOfWeek(hoy),semanas=[];
+  for(let k=SEMANAS_BONO_VENTANA;k>=1;k--){
+    const l=new Date(lunesHoy);l.setDate(l.getDate()-7*k);
+    if(!alta||alta<=l)semanas.push(l);
+  }
+  return{ini,fin:new Date(hoy.getTime()-1),dias:Math.max(0,Math.round((hoy-ini)/DIA_MS)),nuevo:ini>i30,
+    conv:{ini:cIni,fin:new Date(cFin.getTime()-1)},semanas};
 }
 // Las cuentas del semáforo, en UNA sola pasada por las ventas y otra por las cuentas, comparando
 // milisegundos y no objetos Date: con funnelPeriodo por cada rubro y cada semana, el Director
@@ -1650,40 +1679,41 @@ function semanasDelMes(ref){
 // redibujo del Dashboard. Cuenta exactamente lo mismo que funnelPeriodo/arpuPromedioPeriodo.
 const msFecha=d=>d?d.getTime():NaN; // NaN: cualquier comparación da false, como enRango con fecha vacía
 function datosSemaforo(m,ref){
-  const ini=startOfMonth(ref).getTime(),hoy=ref.getTime();
-  const semanas=semanasDelMes(ref).map(l=>({ini:l.getTime(),fin:endOfWeek(l).getTime(),inst:0}));
+  const w=ventanaSemaforo(m,ref);
+  const ini=w.ini.getTime(),fin=w.fin.getTime(),cIni=w.conv.ini.getTime(),cFin=w.conv.fin.getTime();
+  const semanas=w.semanas.map(l=>({ini:l.getTime(),fin:endOfWeek(l).getTime(),inst:0}));
   const nppf=ventanaNPPF(ref),nIni=nppf.ini.getTime(),nFin=nppf.fin.getTime();
-  let validadas=0,instaladas=0,sumaArpu=0,cuentas=0,sinPagar=0;
+  let validadas=0,convInst=0,instaladas=0,sumaArpu=0,cuentas=0,sinPagar=0;
   for(const v of m.ventas||[]){
     const a=msFecha(v.activacion),val=msFecha(v.validacion);
-    if(val>=ini&&val<=hoy)validadas++;
-    if(a>=ini&&a<=hoy){instaladas++;sumaArpu+=Number(v.arpu)||0;}
+    // Conversión por grupo: de las validadas en su ventana, cuántas ya se instalaron (cuando sea).
+    if(val>=cIni&&val<=cFin){validadas++;if(a<=fin)convInst++;}
+    if(a>=ini&&a<=fin){instaladas++;sumaArpu+=Number(v.arpu)||0;}
     for(const s of semanas)if(a>=s.ini&&a<=s.fin){s.inst++;break;}
   }
   for(const c of m.cuentasCom||[]){
     const f=msFecha(c.fechaInstalacion);
     if(f>=nIni&&f<=nFin){cuentas++;if(!/^YA COMISIONADA/i.test(c.estatusPago))sinPagar++;}
   }
-  return{validadas,instaladas,arpu:instaladas?sumaArpu/instaladas/1.16:0,semanas,nppf,cuentas,sinPagar};
+  return{w,validadas,convInst,instaladas,arpu:instaladas?sumaArpu/instaladas/1.16:0,semanas,nppf,cuentas,sinPagar};
 }
 const ARPU_BASE_TXT=fmtMoney(ARPU_BASE),ARPU_META_TXT=fmtMoney(ARPU_META);
 function semaforoAutomatico(m,ref){
   const{badge:R,bajada}=rankingMedicion(m);
-  const finMes=endOfMonth(ref);
-  const d=datosSemaforo(m,ref);
-  const fMes={validadas:d.validadas,instaladas:d.instaladas};
+  const d=datosSemaforo(m,ref),w=d.w;
+  const rango=(a,b)=>`del ${fmtDateObj(a)} al ${fmtDateObj(b)}`;
   const color=(meta,base)=>meta?'verde':base?'amarillo':'rojo';
   const r={};
-  // Objetivo de instalaciones por ranking, prorrateado a los días que van del mes: a media
-  // quincena no se le puede pedir la meta del mes completo.
+  // Objetivo de instalaciones por ranking en los últimos 30 días cerrados: 30 días ≈ un mes, así
+  // que se pide la meta del mes completa. Solo a quien lleva menos de 30 días se le prorratea a los
+  // días que lleva; si todavía no le toca ni 1 instalación, el rubro no cuenta.
   {
-    const dia=ref.getDate(),dias=finMes.getDate();
     const metaMes=metaMensual(R),minMes=Math.round(minimoBono(R)*4.33);
-    const meta=Math.floor(metaMes*dia/dias),min=Math.floor(minMes*dia/dias);
+    const meta=Math.floor(metaMes*w.dias/DIAS_VENTANA_SEM),min=Math.floor(minMes*w.dias/DIAS_VENTANA_SEM);
     // `accion`: lo que tendría que pasar para que el rubro llegue a 🟢, dicho para "Si ___, sube a…"
-    // (ver sugerenciaSemaforo). Solo en los rubros que se pueden mover en lo que queda del mes.
-    r.objetivo={color:color(fMes.instaladas>=meta,fMes.instaladas>=min),valor:`${fMes.instaladas} de ${meta} inst.`,
-      detalle:`Lo que debería llevar al día ${dia} según su ranking: objetivo ${meta}, mínimo del bono ${min}. Del mes completo: ${metaMes}.`,
+    // (ver sugerenciaSemaforo). Solo en los rubros que el vendedor puede mover con su trabajo.
+    if(meta>0)r.objetivo={color:color(d.instaladas>=meta,d.instaladas>=min),valor:`${d.instaladas} de ${meta} inst.`,
+      detalle:`Instalaciones ${rango(w.ini,w.fin)}${w.nuevo?` (lleva ${w.dias} días desde que entró)`:' (últimos 30 días)'}. Objetivo de su ranking: ${meta}, mínimo del bono: ${min}.${w.nuevo?` En 30 días completos: ${metaMes}.`:''}`,
       accion:`llega a ${meta} instalaciones`};
   }
   if(d.cuentas){
@@ -1692,14 +1722,15 @@ function semaforoAutomatico(m,ref){
       detalle:`Cuentas que instaló del ${fmtDateObj(d.nppf.ini)} al ${fmtDateObj(d.nppf.fin)} y siguen sin pagar. Meta: ${NPPF_META}% o menos. Base: ${NPPF_BASE}% o menos.`,
       accion:cobrar>0?`se cobra${cobrar===1?' 1 de sus cuentas':`n ${cobrar} de sus cuentas`} sin pagar`:''};
   }
-  if(fMes.validadas){
-    const pct=fMes.instaladas/fMes.validadas*100,faltan=Math.ceil(fMes.validadas*CONV_META/100)-fMes.instaladas;
-    r.conversion={color:color(pct>=CONV_META,pct>=CONV_BASE),valor:`${Math.round(pct)}%`,
-      detalle:`${fMes.instaladas} instaladas de ${fMes.validadas} validadas en el mes. Meta: ${CONV_META}%. Base: ${CONV_BASE}%.`,
-      accion:faltan>0?`instala ${faltan} más de lo que ya tiene validado`:''};
+  // Conversión por grupo: de lo que validó (hasta hace una semana), cuánto ya se instaló.
+  if(d.validadas){
+    const pct=d.convInst/d.validadas*100,faltan=Math.ceil(d.validadas*CONV_META/100)-d.convInst;
+    r.conversion={color:color(pct>=CONV_META,pct>=CONV_BASE),valor:`${d.convInst} de ${d.validadas} (${Math.round(pct)}%)`,
+      detalle:`De lo que validó ${rango(w.conv.ini,w.conv.fin)}, cuánto ya se instaló. No entra lo validado en la última semana: se le dan ${DIAS_MADURAR_CONV} días para instalarse. Meta: ${CONV_META}%. Base: ${CONV_BASE}%.`,
+      accion:faltan>0?`se instala${faltan===1?' 1 de las que validó':`n ${faltan} de las que validó`} ${rango(w.conv.ini,w.conv.fin)}`:''};
   }
   if(d.arpu>0)r.arpu={color:color(d.arpu>=ARPU_META,d.arpu>=ARPU_BASE),valor:fmtMoney(d.arpu),
-    detalle:`Lo que paga en promedio cada cliente que instaló en el mes, sin IVA. Meta: ${ARPU_META_TXT}. Base: ${ARPU_BASE_TXT}.`,
+    detalle:`Lo que paga en promedio cada cliente que instaló ${rango(w.ini,w.fin)}, sin IVA. Meta: ${ARPU_META_TXT}. Base: ${ARPU_BASE_TXT}.`,
     accion:`su ARPU sube a ${ARPU_META_TXT}`};
   if(tieneRanking(m.badge)){
     r.ranking={color:RANKING_VERDE.includes(m.badge)?'verde':RANKING_AMARILLO.includes(m.badge)?'amarillo':'rojo',valor:nombreRanking(m.badge),
@@ -1712,16 +1743,16 @@ function semaforoAutomatico(m,ref){
       detalle:faltan.length?`Le falta: ${faltan.join(', ')}.`:`Tiene todas las de ${nombreRanking(R)||'su ranking'}.`,
       accion:faltan.length?`termina ${faltan.length===1?'su curso pendiente':`sus ${faltan.length} cursos pendientes`}`:''};
   }
-  // Semanas con bono: de las semanas del mes que ya cerraron, en cuántas llegó al mínimo del bono.
-  // 🟢 si no ha fallado ninguna; 🟡 mientras todavía pueda juntar 3 en el mes; 🔴 si ya no.
+  // Semanas con bono: de las últimas 4 semanas ya terminadas, en cuántas llegó al mínimo del bono.
+  // 🟢 las 4 · 🟡 3 de 4 · 🔴 2 o menos. A quien lleva menos de 4 semanas completas se le mide en
+  // las que tiene, en la misma proporción (🟡 con el 75% o más).
   {
-    const semanas=d.semanas,hoy=ref.getTime(),cerradas=semanas.filter(s=>s.fin<hoy);
-    if(cerradas.length){
+    const semanas=d.semanas,n=semanas.length;
+    if(n){
       const minimo=minimoBono(R);
-      const conBono=cerradas.filter(s=>s.inst>=minimo).length;
-      const fallo=cerradas.length-conBono;
-      r.semanas={color:fallo===0?'verde':fallo<=semanas.length-SEMANAS_BONO_BASE?'amarillo':'rojo',valor:`${conBono} de ${cerradas.length} con bono`,
-        detalle:`Semanas del mes que ya terminaron y en las que llegó al mínimo del bono (${minimo} inst.). El mes tiene ${semanas.length}. Meta: todas. Base: ${SEMANAS_BONO_BASE}.`};
+      const conBono=semanas.filter(s=>s.inst>=minimo).length;
+      r.semanas={color:conBono===n?'verde':conBono*SEMANAS_BONO_VENTANA>=SEMANAS_BONO_BASE*n?'amarillo':'rojo',valor:`${conBono} de ${n} con bono`,
+        detalle:`${n<SEMANAS_BONO_VENTANA?`Las ${n===1?'única semana completa':`${n} semanas completas`} que lleva desde que entró`:`Las últimas ${n} semanas que ya terminaron`} (${rango(new Date(semanas[0].ini),new Date(semanas[n-1].fin))}) y en cuántas llegó al mínimo del bono (${minimo} inst.). Meta: todas. Base: ${SEMANAS_BONO_BASE} de ${SEMANAS_BONO_VENTANA}.`};
     }
   }
   const base=RUBROS_SEMAFORO.map(x=>({...x,color:null,...r[x.k]}));
@@ -1761,7 +1792,7 @@ function calificarSemaforo(m,rubros){
   return{color:final,puntaje,motivo,rubros:out};
 }
 // Una línea para el coach: el rubro que, si llegara a 🟢, más lo sube (de preferencia, que le cambie
-// el color). Solo rubros que todavía se pueden mover este mes (los que traen `accion`). El negro es
+// el color). Solo rubros que el vendedor puede mover con su trabajo (los que traen `accion`). El negro es
 // regla fija y el verde ya está arriba: ahí no se sugiere nada.
 const ORDEN_COLOR_SEM={negro:0,rojo:1,amarillo:2,verde:3};
 function sugerenciaSemaforo(m,base,cal){
@@ -1781,18 +1812,25 @@ function loQueMasResta(auto){
   return(auto?.rubros||[]).filter(x=>x.color&&x.max>x.pts).sort((a,b)=>(b.max-b.pts)-(a.max-a.pts))[0]||null;
 }
 // El coach puede cambiar el color, pero con motivo: se guarda como registro 'semaforo' con el motivo
-// en la Nota, y vale solo en el mes en que se puso. Los registros que deja el cálculo automático
-// (foto semanal, nota "Automático · …") no son ajustes; "Regresó al automático" quita el ajuste.
+// en la Nota, y vale 7 días contando el día en que se puso: al 8.º regresa solo al automático. Los
+// registros que deja el cálculo automático (foto semanal, nota "Automático · …") no son ajustes;
+// "Regresó al automático" quita el ajuste.
 const PREFIJO_SEM_AUTO='Automático';
 const NOTA_SIN_AJUSTE='Regresó al automático';
 const esNotaSemAuto=n=>String(n||'').startsWith(PREFIJO_SEM_AUTO);
+// Último día en que vale un ajuste puesto en `ymd` (fecha "aaaa-mm-dd").
+function ultimoDiaAjuste(ymd){
+  const[y,mo,d]=String(ymd||'').slice(0,10).split('-').map(Number);
+  return y&&mo&&d?ymdLocal(new Date(y,mo-1,d+DIAS_AJUSTE_SEM-1)):'';
+}
 function ajustesSemaforo(records,ref){
-  const mes=ymdLocal(ref).slice(0,7);
+  const hoy=ymdLocal(ref),desde=ymdLocal(diasAntes(ref,DIAS_AJUSTE_SEM-1));
   const map={};
   (records||[])
-    .filter(r=>r.type==='semaforo'&&r.vendedor&&STATUS[r.semaforo]&&String(r.date||'').startsWith(mes)&&String(r.nota||'').trim()&&!esNotaSemAuto(r.nota))
+    .filter(r=>{const f=String(r.date||'').slice(0,10);
+      return r.type==='semaforo'&&r.vendedor&&STATUS[r.semaforo]&&f>=desde&&f<=hoy&&String(r.nota||'').trim()&&!esNotaSemAuto(r.nota);})
     .sort((a,b)=>String(a.savedAt||'').localeCompare(String(b.savedAt||'')))
-    .forEach(r=>{map[r.vendedor]=r.nota===NOTA_SIN_AJUSTE?null:{valor:r.semaforo,motivo:r.nota,fecha:r.date||'',porQuien:r.registradoPor||''};});
+    .forEach(r=>{map[r.vendedor]=r.nota===NOTA_SIN_AJUSTE?null:{valor:r.semaforo,motivo:r.nota,fecha:r.date||'',hasta:ultimoDiaAjuste(r.date),porQuien:r.registradoPor||''};});
   return map;
 }
 // Semáforo que vale para un vendedor: el ajuste del coach si lo hay, si no el automático. El negro
@@ -4122,7 +4160,7 @@ function FeedbackTab({data,setData,team,toast,session,refreshKey,compromisos=[],
   };
   const selectedMember=form.vendedor?team.find(m=>m.nombre===form.vendedor):null;
   // El semáforo no se elige aquí. A un vendedor el automático ya se calcula solo, así que el hallazgo
-  // solo lo muestra y lo guarda si su coach se lo cambió a mano este mes (con el motivo); a un coach,
+  // solo lo muestra y lo guarda si su coach se lo cambió a mano en los últimos 7 días (con el motivo); a un coach,
   // que el líder documenta, el último que se le haya puesto a mano.
   const esVendedorSel=!!selectedMember&&isVendedor(selectedMember.posicion);
   const ajusteVigente=esVendedorSel?semaforoDeVendedor(selectedMember,ajustesSemaforo(recordsSemaforo,new Date()),new Date(),ventasListas(session)).ajuste:null;
@@ -4453,6 +4491,7 @@ function PanelSemaforo({m,info,listo,puedeAjustar,onAjustar,onQuitarAjuste}){
     {ajuste&&<div style={{marginBottom:10,padding:'8px 10px',borderRadius:8,background:STATUS[ajuste.valor].bg,border:`1px solid ${STATUS[ajuste.valor].border}`}}>
       <div style={{fontWeight:700}}>✋ Su coach lo puso en {SEM_EMOJI[ajuste.valor]} {TITULO_SEM[ajuste.valor]}{ajuste.porQuien?` · ${nombreCorto(ajuste.porQuien)}`:''}{ajuste.fecha?` · ${fmt(ajuste.fecha)}`:''}</div>
       <div style={{color:'var(--dim)',marginTop:2}}>Motivo: {ajuste.motivo}</div>
+      {ajuste.hasta&&<div style={{fontSize:12,color:'var(--dim)',marginTop:2}}>Vale hasta el {fmt(ajuste.hasta)}; después regresa solo al automático.</div>}
       {puedeAjustar&&<Btn variant="ghost" style={{fontSize:13,padding:'6px 0',marginTop:2}} onClick={onQuitarAjuste}>↩️ Regresar al automático</Btn>}
       {auto?.color&&<div style={{fontSize:12,color:'var(--dim)',marginTop:2}}>Abajo, lo que calcula la app.</div>}
     </div>}
@@ -4511,7 +4550,7 @@ function PanelSemaforo({m,info,listo,puedeAjustar,onAjustar,onQuitarAjuste}){
           Guardar ajuste
         </Btn>
       </div>
-      <p style={{fontSize:12,color:'var(--dim)',marginTop:6}}>Vale solo este mes. Se siguen viendo los dos: el de la app y el tuyo.</p>
+      <p style={{fontSize:12,color:'var(--dim)',marginTop:6}}>Vale {DIAS_AJUSTE_SEM} días contando hoy; al {DIAS_AJUSTE_SEM+1}.º regresa solo al automático. Se siguen viendo los dos: el de la app y el tuyo.</p>
     </div>}
   </div>;
 }
@@ -4849,7 +4888,7 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast,recordsPla
   const coachesOrdenadosPendientes=esLider?Object.values(porCoachLider).filter(c=>c.pendientesTotal>0).sort((a,b)=>b.pendientesTotal-a.pendientesTotal):[];
   const coachesOrdenadosSinPagar=esLider?Object.values(porCoachLider).filter(c=>c.sinPagarTotal>0).sort((a,b)=>b.sinPagarTotal-a.sinPagarTotal):[];
 
-  // Semáforo automático (ver semaforoAutomatico) o, si el coach lo cambió este mes, su ajuste.
+  // Semáforo automático (ver semaforoAutomatico) o, si el coach lo cambió en los últimos 7 días, su ajuste.
   const listoSem=ventasListas(session);
   // Se recalcula solo si cambian el equipo (ventas/ranking), los registros de semáforo o el día; no
   // en cada toque del Dashboard (abrir un panel, expandir un coach…).
@@ -5130,7 +5169,7 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast,recordsPla
         <div style={{display:'flex',alignItems:'center',gap:6}}>
           {/* El botón del semáforo NO abre el detalle del vendedor: stopPropagation, si no, cada
               toque terminaría desplegando la ficha. Abre el desglose del cálculo (y, si se puede
-              capturar, el ajuste con motivo). ✋ = el coach lo ajustó a mano este mes. */}
+              capturar, el ajuste con motivo). ✋ = el coach lo ajustó a mano en los últimos 7 días. */}
           <button onClick={e=>{e.stopPropagation();setSemAbierto(abiertoSem?null:m.nombre);}}
             title={sem?`${STATUS[sem].label}${semInfo.ajuste?' (ajustado por el coach)':''} — toca para ver por qué`:'Sin semáforo — toca para ver por qué'}
             style={{display:'inline-flex',alignItems:'center',gap:5,padding:'7px 11px',borderRadius:20,cursor:'pointer',
@@ -7102,7 +7141,7 @@ const SEM_COLORES_MANUAL=[
   ['🟡','Ojo','Saca **de 50 a 79**. Se está quedando corto.'],
   ['🔴','Urgente','Saca **menos de 50**. Necesita un plan de acción.'],
   ['⚫','Negro','Lleva **2 meses o más seguidos como Condicionado**. Sin importar lo demás, y no se puede ajustar.'],
-  ['✋','Ajustado','Su coach le cambió el color este mes, con un motivo.'],
+  ['✋','Ajustado','Su coach le cambió el color, con un motivo. Vale **7 días**.'],
   ['⚪','Sin datos','Todavía no hay números para calcularlo.'],
 ];
 const MANUAL_COMUNES={
@@ -7113,28 +7152,29 @@ const MANUAL_COMUNES={
     {sub:'Qué se revisa'},
     {p:'Se revisan **7 cosas** y cada una **vale puntos**: entre todas suman 100. Si llega a la **meta** (🟢) se lleva todos sus puntos; si pasa la **base** pero no llega a la meta (🟡), la mitad; si no llega ni a la base (🔴), cero. **La calificación es la suma.** Van de la que más vale a la que menos:'},
     {colores:[
-      ['🎯','1. Instalaciones · 39 pts','Lo que lleva **en el mes hasta hoy** contra el objetivo de su ranking. Meta: su objetivo. Base: el mínimo del bono.'],
+      ['🎯','1. Instalaciones · 39 pts','Lo que instaló en los **últimos 30 días** contra el objetivo del mes de su ranking. Meta: su objetivo. Base: el mínimo del bono.'],
       ['💰','2. Cuentas sin pagar · 19 pts','De lo que instaló en los 30 días **antes de la semana pasada**, cuánto sigue sin pagarse. Meta: **5% o menos**. Base: **10% o menos**.'],
-      ['📅','3. Semanas con bono · 13 pts','De las semanas del mes que ya terminaron, en cuántas llegó al mínimo del bono. Meta: **todas**. Base: **3 en el mes**.'],
-      ['💵','4. ARPU · 10 pts','Lo que paga en promedio cada cliente que instaló en el mes, sin IVA. Meta: **$480**. Base: **$460**.'],
+      ['📅','3. Semanas con bono · 13 pts','De las **últimas 4 semanas que ya terminaron**, en cuántas llegó al mínimo del bono. Meta: **las 4**. Base: **3 de 4**.'],
+      ['💵','4. ARPU · 10 pts','Lo que paga en promedio cada cliente que instaló en los **últimos 30 días**, sin IVA. Meta: **$480**. Base: **$460**.'],
       ['🏅','5. Ranking · 8 pts','🟢 Oro o Platino · 🟡 Bronce o Plata · 🔴 Condicionado o Entrenamiento.'],
       ['📚','6. Certificaciones · 6 pts','🟢 si tiene **todas** las de su ranking · 🔴 si le falta alguna.'],
-      ['🔄','7. Conversión · 5 pts','Instaladas ÷ validadas del mes. Meta: **90%**. Base: **85%**.'],
+      ['🔄','7. Conversión · 5 pts','De lo que validó en 30 días (sin contar la última semana), **cuánto ya se instaló**. Meta: **90%**. Base: **85%**.'],
     ]},
     {ojo:'Las instalaciones valen **39 puntos** y la conversión solo **5**. Por eso alguien puede tener casi todo en 🟢 y aun así salir 🟡.'},
     {sub:'De qué fechas sale'},
-    {p:'Se mide **el mes en curso, del día 1 a hoy**. La app lo vuelve a calcular cada vez que abres la pantalla; las ventas y el ranking se actualizan cada 30 minutos (o a los pocos minutos de que se actualiza la BASE). Cada cosa toma estas fechas:'},
+    {p:'Se miden **los últimos 30 días cerrados, hasta ayer**. El día de hoy no entra porque la BASE se carga muy temprano con **el cierre del día anterior**. Así se mide siempre la misma cantidad de días y el color no se reinicia cada día 1. La app lo vuelve a calcular cada vez que abres la pantalla; las ventas y el ranking se actualizan cada 30 minutos (o a los pocos minutos de que se actualiza la BASE). Cada cosa toma estas fechas:'},
     {lista:[
-      '🎯 **Instalaciones**: del 1 del mes a hoy. El objetivo se reparte entre los días del mes: el día 15 de un mes de 30 se le pide **la mitad** del objetivo del mes.',
+      '🎯 **Instalaciones** y 💵 **ARPU**: los **30 días que terminan ayer**. Como 30 días son un mes, se le pide **el objetivo del mes completo** de su ranking.',
+      '🔄 **Conversión**: lo que validó en los **30 días que terminan hace una semana**, y de eso cuánto ya se instaló (aunque se haya instalado después). Lo validado en la última semana no entra todavía: se le dan **7 días** para instalarse.',
+      '📅 **Semanas con bono**: las **últimas 4 semanas que ya terminaron** (de lunes a domingo). La semana en curso no entra; el lunes ya cuenta la que terminó el domingo.',
       '💰 **Cuentas sin pagar**: lo instalado en los **30 días antes del lunes de la semana pasada**. La semana actual y la pasada no entran porque todavía no les toca pagarse.',
-      '📅 **Semanas con bono**: solo las semanas **que ya terminaron** (de lunes a domingo). Cada semana es **del mes de su lunes**: si el mes empieza en jueves, esos primeros días son de la última semana del mes anterior.',
-      '💵 **ARPU** y 🔄 **Conversión**: del 1 del mes a hoy.',
       '🏅 **Ranking**: el del mes actual en la hoja de ranking.',
       '📚 **Certificaciones**: lo que tenga aprobado hoy.',
-      '⚫ **Negro**: es lo único que ve meses anteriores (los meses seguidos como Condicionado).',
+      '⚫ **Negro**: los meses seguidos como Condicionado en la hoja de ranking.',
     ]},
-    {ojo:'**A principio de mes** hay pocas instalaciones y ninguna semana terminada, así que el color puede cambiar mucho los primeros días. **El día 1 todo vuelve a empezar**, y el ajuste a mano del coach (✋) se acaba con el mes.'},
-    {p:'Si alguien sale con **0** y en 🔴, casi siempre es porque **no tiene instalaciones en el mes**: sin ellas no hay ARPU, conversión ni cuentas que medir, y lo que queda (instalaciones, semanas con bono, ranking y cursos) va en 🔴. Si en la BASE sí tiene ventas del mes, avisa: puede que sus ventas no estén ligadas a su número de empleado.'},
+    {ojo:'**Si entró hace menos de 30 días**, se le mide **desde su fecha de ingreso**: el objetivo se reparte entre los días que lleva (con 15 días se le pide **la mitad**), y las semanas con bono son solo las **semanas completas** que ha trabajado. Si todavía no le toca ni 1 instalación, ese rubro no cuenta.'},
+    {p:'Como se miden 30 días, **una semana mala se sigue viendo hasta que sale de la ventana**, y una mejora tarda unos días en subir el color. Toca cada rubro para ver **de qué fecha a qué fecha** se está midiendo.'},
+    {p:'Si alguien sale con **0** y en 🔴, casi siempre es porque **no tiene instalaciones en los últimos 30 días**: sin ellas no hay ARPU ni cuentas que medir, y lo que queda (instalaciones, semanas con bono, ranking y cursos) va en 🔴. Si en la BASE sí tiene ventas de esos días, avisa: puede que sus ventas no estén ligadas a su número de empleado.'},
     {sub:'Un ejemplo'},
     {p:'Ana es Plata. Sus instalaciones van 🟡 (**20 de 39**), el ARPU 🔴 (**0 de 10**) y su ranking 🟡 (**4 de 8**). Lo demás va 🟢 y se lleva todos sus puntos (19 + 13 + 6 + 5). Suma **67**: queda en 🟡. La app le dice al coach: **"Si llega a 14 instalaciones, sube a 🟢 86"**.'},
     {p:'Si algo no se puede medir todavía (por ejemplo, sin instaladas no hay ARPU), sus puntos se reparten entre las demás y siempre se califica sobre 100.'},
@@ -7154,7 +7194,7 @@ const MANUAL_COMUNES={
       'El semáforo automático ya no sale en el **📁 Historial** ni en **💬 Hallazgos**: ahí solo se ve cuando **tú lo cambiaste a mano** (✋), con tu motivo.',
     ]},
     {sub:'Si el color no refleja cómo va'},
-    {p:'El **coach** puede cambiarlo, pero **siempre con un motivo**. Sale con ✋, vale **solo ese mes** y se siguen viendo los dos: el que calculó la app y el del coach. Los pasos están en la lección **📈 Dashboard** del coach.'},
+    {p:'El **coach** puede cambiarlo, pero **siempre con un motivo**. Sale con ✋, vale **7 días contando el día en que lo puso** (al 8.º regresa solo al automático) y se siguen viendo los dos: el que calculó la app y el del coach. Los pasos están en la lección **📈 Dashboard** del coach.'},
     {sub:'El semáforo del coach y del líder'},
     {p:'El coach también tiene semáforo, y sale de **sus vendedores**: es el **promedio de sus puntos**. Se suman los puntos de cada vendedor y se dividen entre cuántos vendedores tiene. Los colores son los mismos: 🟢 **80 o más** · 🟡 **50 a 79** · 🔴 **menos de 50**.'},
     {lista:[
@@ -7284,7 +7324,7 @@ const MANUAL_ROLES={
         {pasos:['En **Casas tocadas** usa **+** y **−** para poner cuántas puertas tocaron.','En **Abrieron** pon cuántas abrieron. Sale la **tasa de apertura**: verde 40% o más, amarillo 20% o más, rojo menos.','Toca **+ Agregar casa que abrió** por cada casa, **estando en la casa**: se toman solas la **hora** (sale junto a **🏠 Casa**, como 🕒 10:42, y no se puede cambiar), las **coordenadas** y la **dirección** del teléfono. La dirección la puedes corregir; si no se pudo obtener, escríbela tú (es obligatoria). Toca **Ver en mapa** para abrir el punto en Google Maps.','Escribe el **No. exterior** del predio, casa o local: es **obligatorio** (si el mapa lo trae, ya viene escrito; revísalo). El **No. interior** (depto., local dentro de una plaza) es opcional. Si de verdad **no tiene número**, marca **Sin número (S/N)** y escribe una **referencia** para encontrarla (por ejemplo "portón verde junto a la tienda"): entonces la obligatoria es la referencia.','Marca con quién tiene el servicio, cuánto paga, si tiene apps de streaming (cuáles y cuánto paga) y **en qué terminó**: ✅ Venta, 🕒 Seguimiento o ✖️ Rechazo.','Si fue **Rechazo**, marca el motivo (puede ser más de uno).','Toma la **foto con sello**: es obligatoria.']},
         {sub:'Compromisos'},
         {p:'Escribe **Qué + Quién + Cuándo**. Si escribes un compromiso, **tienes que** poner la **Fecha de revisión**. Ese día te sale en el Dashboard para revisarlo. Al guardar se abre WhatsApp para mandarle el compromiso a la persona.'},
-        {ojo:'El **semáforo** del vendedor se calcula solo, por eso aquí no sale. Solo aparece, con su motivo, si **tú se lo cambiaste a mano** este mes (en **Dashboard → Equipo**), y se guarda con el hallazgo.'},
+        {ojo:'El **semáforo** del vendedor se calcula solo, por eso aquí no sale. Solo aparece, con su motivo, si **tú se lo cambiaste a mano** en los últimos 7 días (en **Dashboard → Equipo**), y se guarda con el hallazgo.'},
         {alto:'No se guarda si: falta el integrante · en Trabajo en campo faltan casas tocadas, proveedor, resultado, dirección de alguna casa, motivo del rechazo, respuesta de streaming o la foto · en Evidencia de asignación externa no hay ninguna foto · hay un compromiso sin fecha de revisión.'},
       ]},
       {icon:'⏰',titulo:'Revisar compromisos',cuando:'El día que vence cada compromiso.',bloques:[
@@ -7309,7 +7349,7 @@ const MANUAL_ROLES={
         {pasos:['Baja hasta **👥 Equipo**. Debajo de cada vendedor dice **lo que más le resta**.','Toca su **pastilla de color**: ves su calificación, **💡 qué le haría subir de color** y lo que le resta, con sus puntos.','Toca una línea para ver contra qué se mide. Usa el 💡 para platicar con tu vendedor qué hacer esta semana.']},
         {sub:'Cambiar el color (solo si de verdad no refleja cómo va)'},
         {pasos:['Toca su **pastilla de color**.','Hasta abajo toca **✋ Ajustar color** y elige 🟢, 🟡 o 🔴.','Escribe el **motivo**. Es obligatorio.','Toca **Guardar ajuste**. Su pastilla sale con ✋.','Para quitarlo, toca la pastilla y luego **↩️ Regresar al automático**.']},
-        {ojo:'Tu cambio vale **solo este mes**. Tu líder ve los dos colores: el de la app y el tuyo, con tu motivo.'},
+        {ojo:'Tu cambio vale **7 días contando hoy**; al 8.º regresa solo al automático (si sigue sin reflejar cómo va, vuelve a ajustarlo). Tu líder ve los dos colores: el de la app y el tuyo, con tu motivo.'},
         {sub:'🧑‍🏫 Tu semáforo como coach'},
         {p:'Arriba de **🚦 Semáforo del equipo** está **el tuyo**: el promedio de los puntos de tus vendedores. Toca la pastilla para ver cómo se calculó y el **💡 vendedor que más te subiría**. Tu líder lo ve igual.'},
         {alto:'Ajustar a mano el color de un vendedor **no sube el tuyo**: tu semáforo usa siempre lo que calculó la app.'},
