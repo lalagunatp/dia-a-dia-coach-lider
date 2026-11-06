@@ -1182,10 +1182,19 @@ function textoCierre(rec){
 // nadie al navegador, ni decide aquí a quién le toca ver qué equipo. El servidor regresa
 // solo lo que corresponde a este usuario, más un token firmado para las siguientes llamadas
 // (historial, doPost) — así ya no hace falta reenviar el PIN después de este primer paso.
+// Va por POST: el PIN viaja en el cuerpo, no en la URL (que queda en historiales y registros).
+// text/plain para que el navegador no mande la consulta previa de CORS, que Apps Script no contesta.
+// Si Google regresa su página de error o se atora, se reintenta igual que las lecturas.
 async function fetchLogin(numEmp,pin){
-  try{
-    return await leerServidor(`${DOPOST_URL}?accion=login&numEmp=${encodeURIComponent(numEmp)}&pin=${encodeURIComponent(pin)}`);
-  }catch(e){return{ok:false,error:'Error de conexión, intenta de nuevo'};}
+  const body=JSON.stringify({accion:'login',numEmp,pin});
+  for(let i=0;;i++){
+    try{
+      return await conTurno(()=>pedirJSON(DOPOST_URL,{method:'POST',body,headers:{'Content-Type':'text/plain'}},15000),true);
+    }catch(e){
+      if(!e.reintentable||i>=ESPERAS_REINTENTO_MS.length)return{ok:false,error:e.reintentable?e.message:'Error de conexión, intenta de nuevo'};
+      await new Promise(r=>setTimeout(r,ESPERAS_REINTENTO_MS[i]));
+    }
+  }
 }
 // Re-trae team/coaches/role con el token (sin volver a pedir el PIN) — botón "Actualizar información".
 async function fetchPerfil(token,verComo){
@@ -7212,6 +7221,7 @@ const MANUAL_COMUNES={
     {pasos:['Escribe tu **número de empleado** (por ejemplo: 17091931).','Escribe tu **PIN**: son **4 números**.','Toca **Iniciar sesión**.']},
     {ok:'Si sale un aviso **azul** que dice "Ya entraste. Cargando las ventas…", no hagas nada: espera. Los números aparecen solos.'},
     {alto:'Si sale un aviso **rojo** que dice que las ventas no cargaron, los números están en cero **por un error**, no porque no se haya vendido. Toca el botón redondo **🔄** (abajo a la derecha).'},
+    {alto:'Si pones el PIN mal **5 veces seguidas**, la app no te deja entrar por **15 minutos**. Si llegas a **15 veces mal**, se pausa unas horas. Si no recuerdas tu PIN, pídeselo a tu líder: no lo sigas adivinando.'},
     {p:'La app se acuerda de ti aunque la cierres. Para salir, toca **Salir** (arriba a la derecha).'},
     {ojo:'La **primera vez que abres la app cada día** (con señal), se recarga sola un momento para traer la versión más nueva. Es normal: no pierdes tu sesión ni lo que guardaste.'},
   ]},
