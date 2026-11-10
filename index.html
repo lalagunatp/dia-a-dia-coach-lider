@@ -3437,9 +3437,14 @@ function PlanTab({data,setData,team,toast,session,refreshKey,abrirResultado,reco
 
   // Lo último que se guardó: se queda en pantalla con el comparativo y el botón de WhatsApp.
   const[ultimoResultado,setUltimoResultado]=useState(null);
+  // Candado contra el doble toque: el segundo clic llegaba antes de que se quitara el pendiente
+  // y el resultado quedaba guardado dos veces (dos folios, dos tarjetas en el Historial).
+  const guardandoRes=useRef(false);
   const guardarResultado=async()=>{
     if(session.soloLectura)return; // vista prestada: solo consulta
-    if(!planPendiente||!realPendiente||!datosListos||!comentarioRes.trim())return;
+    if(!planPendiente||!realPendiente||!datosListos||!comentarioRes.trim()||!planesListos)return;
+    if(guardandoRes.current)return;
+    guardandoRes.current=true;setTimeout(()=>{guardandoRes.current=false;},3000);
     const rec={id:uid(),type:'plan_resultado',planId:planPendiente.id,date:today(),
       semanaInicio:planPendiente.semanaInicio,semanaFin:planPendiente.semanaFin,semanaLabel:planPendiente.semanaLabel,
       objetivos:planPendiente.objetivos,resultados:realPendiente,aDestiempo:!!ventanaResultado?.aDestiempo,
@@ -3483,9 +3488,9 @@ function PlanTab({data,setData,team,toast,session,refreshKey,abrirResultado,reco
       </Card>
     }
 
-    {planPendiente&&<RenglonResultadoPendiente plan={planPendiente} aDestiempo={ventanaResultado.aDestiempo}
+    {planPendiente&&planesListos&&<RenglonResultadoPendiente plan={planPendiente} aDestiempo={ventanaResultado.aDestiempo}
       abierto={resultadoAbierto} onClick={()=>setResultadoAbierto(a=>!a)}/>}
-    {planPendiente&&resultadoAbierto&&
+    {planPendiente&&planesListos&&resultadoAbierto&&
       <Card style={{marginTop:-8,borderLeft:`3px solid ${ventanaResultado.aDestiempo?'var(--red)':'var(--yellow)'}`}}>
         {ventanaResultado.aDestiempo&&<AvisoDestiempo/>}
         {!datosListos
@@ -6879,8 +6884,18 @@ function HistorialTab({data,session,refreshKey,seguimientos=[]}){
       const k=(r.registradoPor||'')+'|'+r.semanaInicio;
       planVigente[k]=masReciente([planVigente[k],r].filter(Boolean),'savedAt');
     });
+    // Resultado del plan: uno por persona y semana. Si quedó capturado dos veces (doble toque, o
+    // desde otro teléfono antes de que llegara el Sheet) se ve solo el más reciente.
+    const kRes=r=>(r.registradoPor||'')+'|'+(r.semanaLabel||r.planId||'');
+    const resultadoVigente={};
+    porId.forEach(r=>{
+      if(r.type!=='plan_resultado')return;
+      const k=kRes(r);
+      resultadoVigente[k]=masReciente([resultadoVigente[k],r].filter(Boolean),'savedAt');
+    });
     porId.forEach((r,id)=>{
       if(r.type==='plan'&&r.semanaInicio&&planVigente[(r.registradoPor||'')+'|'+r.semanaInicio]!==r)porId.delete(id);
+      if(r.type==='plan_resultado'&&resultadoVigente[kRes(r)]!==r)porId.delete(id);
     });
     return[...porId.values()]
       .map(r=>r.type==='feedback'&&segPor[r.id]?{...r,seguimientos:segPor[r.id].slice().sort((a,b)=>String(a.savedAt||'').localeCompare(String(b.savedAt||'')))}:r)
