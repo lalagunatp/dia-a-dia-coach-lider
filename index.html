@@ -318,6 +318,7 @@ const TABS=[
   {id:'cierre',icon:'🌙',label:'Cierre'},
   {id:'feedback',icon:'💬',label:'Hallazgos'},
   {id:'historial',icon:'📁',label:'Historial'},
+  {id:'zeus',icon:'📲',label:'Zeus'},
   {id:'manual',icon:'📖',label:'Manual'},
 ];
 // Reporte comercial (semana en curso, semana cerrada o mes cerrado, por líder): vive en el
@@ -328,7 +329,7 @@ const REPORTE_COMERCIAL_URL='https://lalagunatp.github.io/informeseguimiento/#re
 // servidor les arma el equipo completo), sin capturar nada — solo Dashboard, Historial y Manual.
 const ROLES_CONSULTA=['gestor','auditor'];
 const esRolConsulta=role=>ROLES_CONSULTA.includes(role);
-const TABS_CONSULTA=['dashboard','historial','manual'];
+const TABS_CONSULTA=['dashboard','historial','zeus','manual'];
 // "Trabajo fuera de ruta" y "Actividad especial" no son ausencias: el vendedor sí trabaja, solo que
 // fuera de su ruta. Por eso aparecen tanto aquí (Arranque) como en Permisos, y en los dos lados son
 // los únicos que piden el compromiso del día — el resto de motivos no tiene nada que comprometer.
@@ -7275,6 +7276,17 @@ const MANUAL_COMUNES={
     {colores:[['⚫','Renglón negro','Semáforo negro: condicionado 2 meses o más.'],['🔴','Renglón rojo','Falta injustificada, semáforo rojo o plan cumplido a menos del 60%.'],['🟡','Renglón amarillo','Falta justificada, incapacidad, retardo o cierre con incidencias.'],['⏳','Pendiente','Se guardó en el teléfono y todavía no sube al Sheet.']]},
     {ojo:'Abajo del cuadro dice "Actualizado a las…". Si dice "**Sin conexión con el Sheet**", solo estás viendo lo de tu teléfono.'},
   ]},
+  zeus:{icon:'📲',titulo:'Zeus: quién entra y quién se registra',cuando:'Cada semana, cuando se actualiza el libro de Zeus.',bloques:[
+    {p:'Muestra, por semana (**lunes a domingo**), cómo usa Zeus tu gente: **vendedores, promovendedores PDV, coaches y líderes**. Cada quien ve a su equipo; el **Director**, el **Gestor CH** y el **Auditor** ven todo el distrito.'},
+    {pasos:['Toca **📲 Zeus**. Abre en la **última semana** que trae el libro (se carga una vez por semana).','Con **◀ ▶** cambias de semana.','Arriba está el **resumen del equipo**. Abajo, cada persona; **▸** abre el equipo de un líder o coach.','Toca a una persona para ver su **check de cada día** con la hora y el **📍 mapa** de dónde se registró, sus **comunicados** y sus **últimas 8 semanas**.','Los botones de arriba de la lista filtran: **⚠️ Entraron sin registrarse**, **⛔ No entraron**, **🔴 Inicio del día** y **🔴 Check**.']},
+    {sub:'Qué se mide'},
+    {colores:[['✅','Acceso','Si **entró a Zeus** esa semana (✅ sí, ⛔ no, ❔ sin dato). Zeus lo da por semana, no por día.'],['☀️','Inicio del día','La tarea de Zeus: cuántos días la hizo.'],['📍','Check','Cuántos **días** tiene al menos un registro (entrada o salida) con hora y ubicación.'],['📣','Comunicados','Cuántos comunicados de la semana cumplió (Netflix, Koiplay…).']]},
+    {p:'**Inicio del día** y **Check** no siempre coinciden: por eso van **lado a lado**, cada uno con su color.'},
+    {sub:'Meta y colores'},
+    {colores:[['🟢','Llega','Se registró **6 de 7 días** o más.'],['🟡','Le falta 1','5 de 7.'],['🔴','Le faltan 2 o más','4 o menos, o ninguno.']]},
+    {lista:['Quien **entró o se dio de baja a media semana** tiene meta **proporcional** a los días que estuvo. Ejemplo: entró en jueves = 4 días → meta 3.','Las **bajas** siguen apareciendo en las semanas en que estuvieron, bajo el coach y el líder de los que dependían (dice **baja dd/mm**).']},
+    {ojo:'**⚠️ Entró y no se registró**: esa semana sí entró a Zeus, pero su **Inicio del día** no llega a la meta. Es a quien hay que buscar primero.'},
+  ]},
   incidencias:{icon:'🗂️',titulo:'Reporte de incidencias',cuando:'Para saber quién faltó, llegó tarde o no estuvo, en las fechas que tú elijas.',bloques:[
     {p:'Junta las ausencias que cada coach marca en su **arranque**: faltas, retardos, vacaciones, incapacidad, permisos autorizados, descansos y otros.'},
     {pasos:['Toca **📁 Historial** y arriba elige **🗂️ Reporte de incidencias**.','**1. ¿De qué fechas?** Toca un atajo (**Esta semana**, **Semana pasada**, **Este mes**, **Mes pasado**) o pon tú la fecha de **Inicio** y la de **Fin**.','**2. ¿Qué incidencias?** Cada botón dice cuántas hay. Tócalo para quitarlo o ponerlo. **Solo faltas y retardos** deja nada más esos.','Abajo sale el reporte. Toca un **líder** para ver sus coaches, un **coach** para ver a sus vendedores y un **vendedor** para ver sus fechas.','**🖨️ Informe PDF** arma el documento con todo abierto, listo para imprimir o guardar.']},
@@ -7550,13 +7562,276 @@ function BloqueManual({b}){
   return null;
 }
 
+// ═══ ZEUS ═══
+// Avance en Zeus por semana (lunes a domingo), leído del libro "Uso_de_Zeus_2026_LA_LAGUNA" que se
+// carga una vez por semana (ver apps-script.gs: armarFotoZeus / obtenerZeus). Tres datos por persona:
+//   · Acceso: ACCEDIO / NO ACCEDIO esa semana (el libro no lo trae por día).
+//   · Inicio del día: la tarea de Zeus (hojas "Ejecucion por usuario").
+//   · Check: días con al menos un marcaje en "Detalle Check" (con hora y coordenadas).
+// Inicio y Check no siempre coinciden: se muestran lado a lado, cada uno con su semáforo.
+// Meta: 6 de 7 días. Quien entró o se dio de baja a media semana, la parte proporcional de los días
+// que estuvo (entró en jueves = 4 días → meta 3). 🟢 llega · 🟡 le falta 1 · 🔴 le faltan 2+ o 0.
+// ⚠️ = entró a Zeus esa semana pero su Inicio del día no llega a la meta.
+const ZEUS_META_SEMANA=6;
+const ZEUS_INICIO_DATOS=new Date(2026,0,1); // el libro arranca el jueves 1/01: la semana 1 tiene 4 días
+const fechaDeYMD=s=>{const p=String(s||'').split('-');return p.length===3?new Date(+p[0],+p[1]-1,+p[2]):null;};
+const DIAS_ZEUS=['Lun','Mar','Mié','Jue','Vie','Sáb','Dom'];
+const ddmm=d=>`${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}`;
+function diasActivosZeus(p,lunesStr){
+  const lunes=fechaDeYMD(lunesStr);if(!lunes)return 7;
+  let ini=lunes,fin=new Date(lunes);fin.setDate(fin.getDate()+6);
+  [fechaDMY(p.fechaAlta),ZEUS_INICIO_DATOS].forEach(d=>{if(d&&d>ini)ini=d;});
+  const baja=fechaDMY(p.fechaBaja);if(baja&&baja<fin)fin=baja;
+  return fin<ini?0:Math.round((fin-ini)/86400000)+1;
+}
+const colorZeus=(v,meta)=>!meta?null:v>=meta?'verde':v>0&&v>=meta-1?'amarillo':'rojo';
+function evalZeus(p,k,lunes){
+  const dias=diasActivosZeus(p,lunes);if(!dias)return null;
+  const meta=Math.max(1,Math.round(ZEUS_META_SEMANA*dias/7));
+  const r=p.sem?.[k];
+  const a=r?r[0]:null,ini=r&&r[1]!=null?r[1]:0,chk=r?r[2]:0;
+  return{dias,meta,a,ini,chk,cIni:colorZeus(ini,meta),cChk:colorZeus(chk,meta),alerta:a===1&&ini<meta};
+}
+const cumpleCom=m=>m[2]>=Math.max(1,m[1]);
+function puestoCortoZeus(pos){
+  const p=String(pos||'').toUpperCase();
+  if(p.includes('LIDER'))return'Líder';
+  if(p.includes('COACH')&&p.includes('PROMOVENDEDOR'))return'Coach PDV';
+  if(p.includes('COACH'))return'Coach';
+  if(p.includes('PROMOVENDEDOR'))return'PDV';
+  return'';
+}
+const ordenPuestoZeus=pos=>{const c=puestoCortoZeus(pos);return c==='Líder'?0:c.startsWith('Coach')?1:2;};
+async function fetchZeus(token,verComo,sem){
+  return leerServidor(`${DOPOST_URL}?accion=zeus&token=${encodeURIComponent(token)}${qsVerComo(verComo)}${sem?`&sem=${encodeURIComponent(sem)}`:''}`,{cache:true,ms:60000,reintentos:1});
+}
+function PastillaZeus({c,v,meta}){
+  return <span style={{display:'inline-block',minWidth:52,textAlign:'center',padding:'2px 6px',borderRadius:12,fontSize:13,fontWeight:700,whiteSpace:'nowrap',
+    background:c?STATUS[c].bg:'var(--input)',color:c?STATUS[c].border:'var(--dim)',border:`1.5px solid ${c?STATUS[c].border:'var(--border)'}`}}>{c?SEM_EMOJI[c]:'⚪'} {v}/{meta}</span>;
+}
+const ACCESO_ZEUS={1:{e:'✅',t:'Entró a Zeus'},0:{e:'⛔',t:'No entró a Zeus'},null:{e:'❔',t:'Sin dato de acceso'}};
+// Cuenta de un grupo de personas ya evaluadas: lo que va arriba (todo el equipo) y en cada líder/coach.
+function cuentaZeus(lista){
+  const c={n:lista.length,entraron:0,alerta:0,ini:{verde:0,amarillo:0,rojo:0},chk:{verde:0,amarillo:0,rojo:0},com:0,comOk:0};
+  lista.forEach(({p,ev})=>{
+    if(ev.a===1)c.entraron++;
+    if(ev.alerta)c.alerta++;
+    c.ini[ev.cIni]++;c.chk[ev.cChk]++;
+    (p.com||[]).forEach(m=>{c.com++;if(cumpleCom(m))c.comOk++;});
+  });
+  return c;
+}
+function DetalleZeus({p,ev,datos}){
+  const sem=datos.semanas.find(s=>s.k===datos.sem);
+  const lunes=fechaDeYMD(sem?.lunes);
+  const porDia=DIAS_ZEUS.map(()=>[]);
+  (p.checks||[]).forEach(c=>porDia[c[0]]?.push(c));
+  const alta=fechaDMY(p.fechaAlta),baja=fechaDMY(p.fechaBaja);
+  const subt={fontSize:12,fontWeight:800,color:'var(--dim)',textTransform:'uppercase',letterSpacing:'.4px',margin:'12px 0 4px'};
+  return <div style={{fontSize:14,padding:'10px 12px',background:'var(--bg)',borderRadius:10,margin:'4px 0 8px'}}>
+    <div style={{lineHeight:1.5}}>
+      {ACCESO_ZEUS[ev.a].e} {ACCESO_ZEUS[ev.a].t} esta semana.<br/>
+      🎯 Meta: <b>{ev.meta} de {ev.dias} día{ev.dias!==1?'s':''}</b>{ev.dias<7?' (parte proporcional: no estuvo la semana completa)':''}.<br/>
+      ☀️ Inicio del día: <b>{ev.ini}</b> · 📍 Días con check: <b>{ev.chk}</b>
+      {ev.alerta&&<div style={{marginTop:6,padding:'6px 9px',borderRadius:8,background:'var(--ybg)',borderLeft:'4px solid var(--yellow)',fontWeight:600}}>⚠️ Entró a Zeus, pero su Inicio del día no llega a la meta.</div>}
+    </div>
+    <div style={subt}>Check por día</div>
+    {DIAS_ZEUS.map((d,i)=>{
+      const f=lunes?new Date(lunes.getFullYear(),lunes.getMonth(),lunes.getDate()+i):null;
+      const fuera=f&&((alta&&f<alta)||(baja&&f>baja)||f<ZEUS_INICIO_DATOS);
+      return <div key={d} style={{display:'flex',gap:8,alignItems:'baseline',padding:'4px 0',borderTop:i?'1px solid var(--border)':'none',opacity:fuera?.5:1}}>
+        <span style={{width:74,flexShrink:0,fontWeight:700}}>{d} {f?ddmm(f):''}</span>
+        <span style={{display:'flex',flexWrap:'wrap',gap:'2px 10px',minWidth:0}}>
+          {fuera?<span style={{color:'var(--dim)'}}>no estaba</span>
+            :porDia[i].length?porDia[i].map((c,j)=><span key={j} style={{whiteSpace:'nowrap'}}>
+              {c[4]==='S'?'↩️ Salida':'✅ Entrada'} {c[1]}{' '}
+              {c[2]!=null&&c[3]!=null&&<a href={`https://www.google.com/maps?q=${c[2]},${c[3]}`} target="_blank" rel="noopener" style={{color:'var(--accent)',fontWeight:700,textDecoration:'none'}}>📍 mapa</a>}
+            </span>)
+            :<span style={{color:'var(--red)'}}>— sin check</span>}
+        </span>
+      </div>;})}
+    {(p.com||[]).length>0&&<>
+      <div style={subt}>Comunicados ({p.com.filter(cumpleCom).length} de {p.com.length})</div>
+      <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+        {p.com.map((m,i)=><span key={i} style={{fontSize:13,padding:'2px 8px',borderRadius:10,background:cumpleCom(m)?'var(--gbg)':'var(--rbg)',color:cumpleCom(m)?'var(--green)':'var(--red)',fontWeight:600}}>
+          {cumpleCom(m)?'✅':'❌'} {datos.com[m[0]]||'—'}
+        </span>)}
+      </div>
+    </>}
+    {datos.tira.length>1&&<>
+      <div style={subt}>Últimas {datos.tira.length} semanas</div>
+      <div style={{overflowX:'auto'}}>
+        <table style={{borderCollapse:'collapse',fontSize:13}}>
+          <tbody>
+            <tr><td style={{paddingRight:8,color:'var(--dim)'}}>Sem</td>{datos.tira.map(k=><td key={k} style={{textAlign:'center',padding:'0 3px',color:'var(--dim)'}}>{Number(k.split('-')[1])}</td>)}</tr>
+            {[['Inicio','cIni'],['Check','cChk']].map(([l,campo])=><tr key={l}>
+              <td style={{paddingRight:8,fontWeight:700}}>{l}</td>
+              {datos.tira.map(k=>{const s=datos.semanas.find(x=>x.k===k),e=evalZeus(p,k,s?.lunes);
+                return <td key={k} style={{textAlign:'center',padding:'0 3px'}} title={e?`${campo==='cIni'?e.ini:e.chk} de ${e.meta}`:'No estaba'}>{e?SEM_EMOJI[e[campo]]:'·'}</td>;})}
+            </tr>)}
+          </tbody>
+        </table>
+      </div>
+    </>}
+  </div>;
+}
+function ResumenGrupoZeus({c}){
+  return <span style={{fontSize:12,color:'var(--dim)'}}>👥 {c.n} · Inicio 🟢{c.ini.verde} 🟡{c.ini.amarillo} 🔴{c.ini.rojo}{c.alerta?` · ⚠️${c.alerta}`:''}</span>;
+}
+function NodoZeus({nodo,nivel,datos,abiertos,toggle,detalle,setDetalle,hijosDe}){
+  const{p,ev}=nodo;
+  const hijos=hijosDe(p.nombre);
+  const abierto=abiertos.has(p.nombre),verDetalle=detalle===p.numEmp;
+  const tag=puestoCortoZeus(p.posicion);
+  const desc=[];const juntar=n=>hijosDe(n.p.nombre).forEach(h=>{desc.push(h);juntar(h);});
+  if(hijos.length)juntar(nodo);
+  return <div style={{marginLeft:nivel?12:0,borderLeft:nivel?'2px solid var(--border)':'none',paddingLeft:nivel?8:0}}>
+    <div style={{display:'flex',alignItems:'center',gap:6,padding:'7px 0',borderBottom:'1px solid var(--border)'}}>
+      {hijos.length>0
+        ?<button onClick={()=>toggle(p.nombre)} aria-expanded={abierto} title={abierto?'Ocultar su equipo':'Ver su equipo'}
+            style={{flexShrink:0,width:26,height:26,borderRadius:6,border:'1px solid var(--border)',background:'var(--card)',cursor:'pointer',color:'var(--text)',fontSize:13}}>{abierto?'▾':'▸'}</button>
+        :<span style={{width:26,flexShrink:0}}/>}
+      <button onClick={()=>setDetalle(verDetalle?null:p.numEmp)} aria-expanded={verDetalle}
+        style={{flex:1,minWidth:0,display:'flex',alignItems:'center',gap:6,flexWrap:'wrap',background:'none',border:'none',padding:0,textAlign:'left',cursor:'pointer',color:'var(--text)'}}>
+        <span style={{flex:'1 1 150px',minWidth:0}}>
+          <span style={{fontWeight:700,fontSize:14}}>{nombreCorto(p.nombre)}</span>
+          {tag&&<span style={{marginLeft:5,fontSize:11,fontWeight:700,color:'var(--accent)',background:'var(--accent-light)',padding:'1px 6px',borderRadius:8}}>{tag}</span>}
+          {p.baja&&<span style={{marginLeft:5,fontSize:11,fontWeight:700,color:'var(--dim)',background:'var(--kbg)',padding:'1px 6px',borderRadius:8}}>baja {p.fechaBaja.slice(0,5)}</span>}
+          {ev.alerta&&<span title="Entró a Zeus y no se registró" style={{marginLeft:5}}>⚠️</span>}
+          {hijos.length>0&&<span style={{display:'block'}}><ResumenGrupoZeus c={cuentaZeus(desc)}/></span>}
+        </span>
+        <span style={{display:'flex',alignItems:'center',gap:5,flexShrink:0}}>
+          <span title={ACCESO_ZEUS[ev.a].t} style={{fontSize:15,width:20,textAlign:'center'}}>{ACCESO_ZEUS[ev.a].e}</span>
+          <PastillaZeus c={ev.cIni} v={ev.ini} meta={ev.meta}/>
+          <PastillaZeus c={ev.cChk} v={ev.chk} meta={ev.meta}/>
+          <span style={{fontSize:12,color:'var(--dim)',width:34,textAlign:'right'}}>{(p.com||[]).length?`${p.com.filter(cumpleCom).length}/${p.com.length}`:'—'}</span>
+        </span>
+      </button>
+    </div>
+    {verDetalle&&<DetalleZeus p={p} ev={ev} datos={datos}/>}
+    {abierto&&hijos.map(h=><NodoZeus key={h.p.numEmp} nodo={h} nivel={nivel+1} datos={datos} abiertos={abiertos} toggle={toggle} detalle={detalle} setDetalle={setDetalle} hijosDe={hijosDe}/>)}
+  </div>;
+}
+const FILTROS_ZEUS=[
+  {id:'todos',l:'Todos'},
+  {id:'alerta',l:'⚠️ Entraron sin registrarse',f:e=>e.alerta},
+  {id:'noentro',l:'⛔ No entraron',f:e=>e.a!==1},
+  {id:'rojoIni',l:'🔴 Inicio del día',f:e=>e.cIni==='rojo'},
+  {id:'rojoChk',l:'🔴 Check',f:e=>e.cChk==='rojo'},
+];
+function ZeusTab({session,refreshKey}){
+  const[sem,setSem]=useState('');
+  const[datos,setDatos]=useState(null);
+  const[error,setError]=useState('');
+  const[cargando,setCargando]=useState(true);
+  const[abiertos,setAbiertos]=useState(new Set());
+  const[detalle,setDetalle]=useState(null);
+  const[filtro,setFiltro]=useState('todos');
+  useEffect(()=>{
+    let vivo=true;setCargando(true);setError('');
+    fetchZeus(session.token,session.verComo,sem)
+      .then(j=>{if(!vivo)return;
+        // Un Apps Script sin la versión de Zeus responde ok pero sin semanas: decirlo, no tronar.
+        if(j&&j.ok&&!Array.isArray(j.semanas))setError('falta publicar la versión nueva del Apps Script');
+        else if(j&&j.ok&&!j.semanas.length)setError('el libro de Zeus no trae semanas');
+        else if(j&&j.ok)setDatos(j);else setError(j?.error||'el servidor no respondió');})
+      .catch(e=>{if(vivo)setError(e.message||'no hubo respuesta');})
+      .finally(()=>{if(vivo)setCargando(false);});
+    return()=>{vivo=false;};
+  },[session.token,session.verComo,sem,refreshKey]);
+
+  const semInfo=datos?.semanas.find(s=>s.k===datos.sem);
+  const evaluados=useMemo(()=>{
+    if(!datos||!semInfo)return[];
+    return datos.personas.map(p=>({p,ev:evalZeus(p,datos.sem,semInfo.lunes)})).filter(x=>x.ev)
+      .sort((a,b)=>ordenPuestoZeus(a.p.posicion)-ordenPuestoZeus(b.p.posicion)||a.p.nombre.localeCompare(b.p.nombre));
+  },[datos,semInfo]);
+  const porJefe=useMemo(()=>{const m={};evaluados.forEach(x=>{(m[x.p.jefe]=m[x.p.jefe]||[]).push(x);});return m;},[evaluados]);
+  const nombres=useMemo(()=>new Set(evaluados.map(x=>x.p.nombre)),[evaluados]);
+  const raices=evaluados.filter(x=>!nombres.has(x.p.jefe));
+  const hijosDe=n=>porJefe[n]||[];
+  // Con una sola raíz (el coach con su equipo, o el líder) se abre sola.
+  useEffect(()=>{if(raices.length===1)setAbiertos(new Set([raices[0].p.nombre]));},[datos?.sem,raices.length]);
+  const toggle=n=>setAbiertos(s=>{const x=new Set(s);x.has(n)?x.delete(n):x.add(n);return x;});
+
+  if(!datos)return <Card>
+    {cargando?<div style={{textAlign:'center',padding:20}}><Spinner/><p style={{fontSize:14,color:'var(--dim)',marginTop:10}}>Cargando Zeus… la primera vez después de que se actualiza el libro puede tardar hasta un minuto.</p></div>
+      :<p style={{fontSize:14,color:'var(--red)',fontWeight:600}}>⚠️ No se pudo leer Zeus: {error}. Toca 🔄 para reintentar.</p>}
+  </Card>;
+
+  const idx=datos.semanas.findIndex(s=>s.k===datos.sem);
+  const lunes=fechaDeYMD(semInfo?.lunes),domingo=lunes?new Date(lunes.getFullYear(),lunes.getMonth(),lunes.getDate()+6):null;
+  const c=cuentaZeus(evaluados);
+  const comEquipo={};
+  evaluados.forEach(({p})=>(p.com||[]).forEach(m=>{const e=comEquipo[m[0]]=comEquipo[m[0]]||{n:0,ok:0};e.n++;if(cumpleCom(m))e.ok++;}));
+  const filtroSel=FILTROS_ZEUS.find(f=>f.id===filtro);
+  const lista=filtroSel?.f?evaluados.filter(x=>filtroSel.f(x.ev)):null;
+  const pct=(a,b)=>b?Math.round(a*100/b)+'%':'—';
+  const navBtn={padding:'6px 12px',borderRadius:8,border:'1.5px solid var(--border)',background:'var(--card)',fontSize:16,fontWeight:800,cursor:'pointer',color:'var(--text)'};
+  return <div>
+    <Card>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8}}>
+        <button style={{...navBtn,opacity:idx>0?1:.35}} disabled={idx<=0||cargando} onClick={()=>{setDetalle(null);setSem(datos.semanas[idx-1].k);}} aria-label="Semana anterior">◀</button>
+        <div style={{textAlign:'center',minWidth:0}}>
+          <div style={{fontSize:17,fontWeight:800}}>📲 Semana {Number(datos.sem.split('-')[1])}</div>
+          <div style={{fontSize:13,color:'var(--dim)'}}>{lunes?`lun ${ddmm(lunes)} – dom ${ddmm(domingo)}`:''}{cargando?' · ⏳':''}</div>
+        </div>
+        <button style={{...navBtn,opacity:idx<datos.semanas.length-1?1:.35}} disabled={idx>=datos.semanas.length-1||cargando} onClick={()=>{setDetalle(null);setSem(datos.semanas[idx+1].k);}} aria-label="Semana siguiente">▶</button>
+      </div>
+      <p style={{fontSize:12,color:'var(--dim)',textAlign:'center',margin:'6px 0 0'}}>Datos de Zeus al {datos.datosAl||'—'} · el libro se actualiza cada semana</p>
+      {error&&<p style={{fontSize:13,color:'var(--red)',fontWeight:600,margin:'8px 0 0'}}>⚠️ No se pudo leer esa semana: {error}</p>}
+    </Card>
+
+    <Card title="Resumen del equipo">
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(140px,1fr))',gap:8}}>
+        {[
+          ['Entraron a Zeus',`${c.entraron} de ${c.n}`,pct(c.entraron,c.n),'var(--accent)'],
+          ['⚠️ Entraron y no se registraron',c.alerta,'Inicio del día bajo la meta','var(--yellow)'],
+          ['☀️ Inicio del día',`🟢${c.ini.verde} 🟡${c.ini.amarillo} 🔴${c.ini.rojo}`,`${pct(c.ini.verde,c.n)} en meta`,'var(--text)'],
+          ['📍 Check',`🟢${c.chk.verde} 🟡${c.chk.amarillo} 🔴${c.chk.rojo}`,`${pct(c.chk.verde,c.n)} en meta`,'var(--text)'],
+          ['📣 Comunicados',pct(c.comOk,c.com),`${c.comOk} de ${c.com} cumplidos`,'var(--accent)'],
+        ].map(([l,v,s,col])=><div key={l} style={{padding:'9px 10px',borderRadius:10,background:'var(--bg)'}}>
+          <div style={{fontSize:12,fontWeight:700,color:'var(--dim)'}}>{l}</div>
+          <div style={{fontSize:18,fontWeight:800,color:col,whiteSpace:'nowrap'}}>{v}</div>
+          <div style={{fontSize:12,color:'var(--dim)'}}>{s}</div>
+        </div>)}
+      </div>
+      <p style={{fontSize:12,color:'var(--dim)',margin:'8px 0 0',lineHeight:1.4}}>Meta: registrarse <b>6 de 7 días</b> (proporcional si entró o se dio de baja a media semana). 🟢 llega · 🟡 le falta 1 día · 🔴 le faltan 2 o más.</p>
+    </Card>
+
+    <Card title="Por persona">
+      <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:10}}>
+        {FILTROS_ZEUS.map(f=>{const n=f.f?evaluados.filter(x=>f.f(x.ev)).length:evaluados.length,act=f.id===filtro;
+          return <button key={f.id} onClick={()=>setFiltro(f.id)} aria-pressed={act}
+            style={{padding:'6px 10px',borderRadius:999,border:`1.5px solid ${act?'var(--accent)':'var(--border)'}`,background:act?'var(--accent)':'var(--card)',color:act?'#fff':'var(--text)',fontSize:13,fontWeight:700,cursor:'pointer'}}>{f.l} · {n}</button>;})}
+      </div>
+      <div style={{display:'flex',justifyContent:'flex-end',gap:5,fontSize:11,fontWeight:700,color:'var(--dim)',textTransform:'uppercase',paddingBottom:4,borderBottom:'1px solid var(--border)'}}>
+        <span style={{width:20,textAlign:'center'}}>Acc.</span><span style={{minWidth:52,textAlign:'center'}}>Inicio</span><span style={{minWidth:52,textAlign:'center'}}>Check</span><span style={{width:34,textAlign:'right'}}>Com.</span>
+      </div>
+      {evaluados.length===0&&<p style={{fontSize:14,color:'var(--dim)'}}>No hay personas para medir en esta semana.</p>}
+      {lista
+        ?(lista.length?lista.map(x=><NodoZeus key={x.p.numEmp} nodo={x} nivel={0} datos={datos} abiertos={new Set()} toggle={()=>{}} detalle={detalle} setDetalle={setDetalle} hijosDe={()=>[]}/>)
+          :<p style={{fontSize:14,color:'var(--dim)'}}>Nadie en este filtro. 👏</p>)
+        :raices.map(x=><NodoZeus key={x.p.numEmp} nodo={x} nivel={0} datos={datos} abiertos={abiertos} toggle={toggle} detalle={detalle} setDetalle={setDetalle} hijosDe={hijosDe}/>)}
+      <p style={{fontSize:12,color:'var(--dim)',margin:'8px 0 0'}}>Toca a una persona para ver su check por día con el 📍 mapa, sus comunicados y sus últimas semanas. ▸ abre su equipo.</p>
+    </Card>
+
+    {Object.keys(comEquipo).length>0&&<Card title="📣 Comunicados de la semana">
+      {Object.entries(comEquipo).sort((a,b)=>a[1].ok/a[1].n-b[1].ok/b[1].n).map(([i,e])=><div key={i} style={{display:'flex',justifyContent:'space-between',gap:8,padding:'6px 0',borderBottom:'1px solid var(--border)',fontSize:14}}>
+        <span style={{minWidth:0}}>{datos.com[i]||'—'}</span>
+        <b style={{whiteSpace:'nowrap',color:e.ok===e.n?'var(--green)':e.ok*2>=e.n?'var(--yellow)':'var(--red)'}}>{e.ok} de {e.n} · {pct(e.ok,e.n)}</b>
+      </div>)}
+    </Card>}
+  </div>;
+}
+
 function ManualTab({rolPropio}){
   const[nivel,setNivel]=useState(MANUAL_ROLES[rolPropio]?rolPropio:'coach');
   const[abierta,setAbierta]=useState(null);
   const guia=MANUAL_ROLES[nivel];
   const propias=guia.secciones==='consulta'?MANUAL_CONSULTA:guia.secciones;
   const C=MANUAL_COMUNES;
-  const lecciones=[C.entrar,C.pantalla,...propias,C.semaforo,C.historial,
+  const lecciones=[C.entrar,C.pantalla,...propias,C.semaforo,C.historial,C.zeus,
     ...(['lider','director','gestor'].includes(nivel)?[C.incidencias]:[]),C.colores,C.senal,C.palabras];
   const cambiarNivel=n=>{setNivel(n);setAbierta(null);};
   return <div>
@@ -7950,7 +8225,7 @@ function MainApp({session:sesionRecibida,setSession,onLogout,sessionBase,vistas,
   // con poca altura) y desde 1024 px de ancho (tablet acostada, laptop): las secciones pasan a una
   // barra lateral para dejarle toda la altura al contenido. Dashboard e Historial aprovechan el ancho;
   // los formularios de captura se quedan a un ancho cómodo de leer y llenar.
-  const anchoContenido=tab==='dashboard'||tab==='historial'?'ancho-amplio':'ancho-angosto';
+  const anchoContenido=tab==='dashboard'||tab==='historial'||tab==='zeus'?'ancho-amplio':'ancho-angosto';
   // Con la barra fija se puede cambiar de sección estando a media página: la nueva sección se
   // abre desde su inicio, no a la altura en que iba la anterior.
   const contenidoRef=useRef(null);
@@ -8051,6 +8326,7 @@ function MainApp({session:sesionRecibida,setSession,onLogout,sessionBase,vistas,
           {tab==='plan'&&<PlanTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey} abrirResultado={abrirResultado} recordsPlan={recordsPlan} planesListos={planesListos}/>}
           {tab==='feedback'&&<FeedbackTab data={data} setData={setData} team={allTeam} toast={toast} session={session} refreshKey={refreshKey} compromisos={compromisos} recordsSemaforo={recordsSemaforo}/>}
           {tab==='historial'&&<HistorialTab data={data} session={session} refreshKey={refreshKey} seguimientos={seguimientos}/>}
+          {tab==='zeus'&&<ZeusTab session={session} refreshKey={refreshKey}/>}
           {/* El puesto propio (no el de la vista prestada): el manual abre en el de quien entró. */}
           {tab==='manual'&&<ManualTab rolPropio={sessionBase?.role||role}/>}
         </div></div>
