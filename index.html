@@ -7278,12 +7278,12 @@ const MANUAL_COMUNES={
   ]},
   zeus:{icon:'📲',titulo:'Zeus: quién entra y quién se registra',cuando:'Cada semana, cuando se actualiza el libro de Zeus.',bloques:[
     {p:'Muestra, por semana (**lunes a domingo**), cómo usa Zeus tu gente: **vendedores, promovendedores PDV, coaches y líderes**. Cada quien ve a su equipo; el **Director**, el **Gestor CH** y el **Auditor** ven todo el distrito.'},
-    {pasos:['Toca **📲 Zeus**. Abre en la **última semana** que trae el libro (se carga una vez por semana).','Con **◀ ▶** cambias de semana.','Arriba dice en palabras **cuántos entraron a Zeus**, **cuántos cumplieron su Inicio del día** y **cuántos su check**, con su barra. Si hay gente que entró y no se registró, sale el aviso amarillo: tócalo para verlos.','Abajo va cada **equipo en una tarjeta** (por líder y por coach) con cuántos cumplen. Tócala para abrirla.','Cada persona trae su semana en **7 bolitas (L a D)**: **verde** = hizo check ese día, **gris** = no hizo. A la derecha, **☀️ 5/6** es su Inicio del día contra su meta.','Toca a una persona: te dice en palabras cómo le fue, su **hora de cada día** (📍 la abre en Google Maps), sus **comunicados** y sus **últimas 8 semanas**.','Los botones de arriba de la lista filtran: **⚠️ Entraron sin registrarse**, **⛔ No entraron**, **☀️ Inicio bajo** y **📍 Check bajo**.']},
+    {pasos:['Toca **📲 Zeus**. Abre en la **última semana** que trae el libro (se carga una vez por semana).','Con **◀ ▶** cambias de semana.','Arriba dice en palabras **cuántos entraron a Zeus**, **cuántos cumplieron su Inicio del día**, **su check de entrada** y **su check de salida**, con su barra. Si hay gente que entró y no se registró, sale el aviso amarillo: tócalo para verlos.','Abajo va cada **equipo en una tarjeta** (por líder y por coach) con cuántos cumplen. Tócala para abrirla.','Cada persona trae su semana en **7 bolitas (L a D)**: **verde** = marcó entrada ese día, **gris** = no marcó; el **puntito azul** en la esquina = también marcó salida. A la derecha, **☀️ 5/6** es su Inicio del día contra su meta.','Toca a una persona: te dice en palabras cómo le fue, su **hora de cada día** (📍 la abre en Google Maps), sus **comunicados** y sus **últimas 8 semanas**.','Los botones de arriba de la lista filtran: **⚠️ Entraron sin registrarse**, **⛔ No entraron**, **☀️ Inicio bajo**, **📍 Entrada baja**, **🏁 Salida baja** y, si hay, **🚫 No aparecen en Zeus**.']},
     {sub:'El mapa'},
-    {pasos:['En la tarjeta de un equipo toca **🗺️ Mapa**.','**📅 Por día**: elige el día y ves a todo el equipo en un solo mapa, cada quien con la **hora de su check**. Abajo dice quién **no hizo check** ese día.','**👤 Por persona**: elige a alguien y ves **toda su semana** en el mapa (L 08:05, M 08:12…), unida en el orden en que se registró.','También desde el detalle de una persona: **🗺️ Ver su semana en el mapa**.','Abajo del mapa, **Google Maps ↗** abre cada punto en Google Maps. **Cerrar ✕** regresa.']},
+    {pasos:['En la tarjeta de un equipo toca **🗺️ Mapa**.','**📅 Por día**: elige el día y ves a todo el equipo en un solo mapa, cada quien con la **hora de su check** (las salidas dicen **🏁 Salida**). Abajo dice quién **no marcó entrada** ese día.','**👤 Por persona**: elige a alguien y ves **toda su semana** en el mapa (L 08:05, M 08:12…), unida en el orden en que se registró.','También desde el detalle de una persona: **🗺️ Ver su semana en el mapa**.','Abajo del mapa, **Google Maps ↗** abre cada punto en Google Maps. **Cerrar ✕** regresa.']},
     {sub:'Qué se mide'},
-    {colores:[['✅','Acceso','Si **entró a Zeus** esa semana (✅ sí, ⛔ no, ❔ sin dato). Zeus lo da por semana, no por día.'],['☀️','Inicio del día','La tarea de Zeus: cuántos días la hizo.'],['📍','Check','Cuántos **días** tiene al menos un registro (entrada o salida) con hora y ubicación.'],['📣','Comunicados','Cuántos comunicados de la semana cumplió (Netflix, Koiplay…).']]},
-    {p:'**Inicio del día** y **Check** no siempre coinciden: por eso van **lado a lado**, cada uno con su color.'},
+    {colores:[['✅','Acceso','Si **entró a Zeus** esa semana (✅ sí, ⛔ no). Zeus lo da por semana, no por día.'],['🚫','No aparece en Zeus','Está en la plantilla pero Zeus **no lo trae** esa semana: no tiene usuario o Zeus lo tiene en otro distrito. **No cuenta en los porcentajes** (así los números cuadran con los de Zeus); sale aparte para que pidas que lo den de alta.'],['☀️','Inicio del día','La tarea de Zeus: cuántos días la hizo.'],['📍','Check de entrada','Cuántos **días** marcó **ENTRADA** con hora y ubicación.'],['🏁','Check de salida','Cuántos **días** marcó **SALIDA**. Es un dato **aparte** de la entrada, con su propia meta (6 de 7) y su color.'],['📣','Comunicados','Cuántos comunicados de la semana cumplió (Netflix, Koiplay…).']]},
+    {p:'**Inicio del día**, **entrada** y **salida** no siempre coinciden: por eso se ven **por separado**, cada uno con su color.'},
     {sub:'Meta y colores'},
     {colores:[['🟢','Llega','Se registró **6 de 7 días** o más.'],['🟡','Le falta 1','5 de 7.'],['🔴','Le faltan 2 o más','4 o menos, o ninguno.']]},
     {lista:['Quien **entró o se dio de baja a media semana** tiene meta **proporcional** a los días que estuvo. Ejemplo: entró en jueves = 4 días → meta 3.','Las **bajas** siguen apareciendo en las semanas en que estuvieron, bajo el coach y el líder de los que dependían (dice **baja dd/mm**).']},
@@ -7594,8 +7594,11 @@ function evalZeus(p,k,lunes){
   const dias=diasActivosZeus(p,lunes);if(!dias)return null;
   const meta=Math.max(1,Math.round(ZEUS_META_SEMANA*dias/7));
   const r=p.sem?.[k];
-  const a=r?r[0]:null,ini=r&&r[1]!=null?r[1]:0,chk=r?r[2]:0;
-  return{dias,meta,a,ini,chk,cIni:colorZeus(ini,meta),cChk:colorZeus(chk,meta),alerta:a===1&&ini<meta};
+  // r = [acceso, Inicio del día, días con ENTRADA, días con SALIDA] (el Apps Script viejo no manda salida).
+  const a=r?r[0]:null,ini=r&&r[1]!=null?r[1]:0,chk=r?r[2]:0,sal=r?r[3]||0:0;
+  // sinZeus: está en la PLANTILLA pero "Detalle Logg in" no lo trae esa semana (sin usuario en Zeus o
+  // dado de alta en otro distrito). Se muestra aparte y no cuenta en los %, igual que en Zeus.
+  return{dias,meta,a,ini,chk,sal,cIni:colorZeus(ini,meta),cChk:colorZeus(chk,meta),cSal:colorZeus(sal,meta),alerta:a===1&&ini<meta,sinZeus:a==null};
 }
 const cumpleCom=m=>m[2]>=Math.max(1,m[1]);
 function puestoCortoZeus(pos){
@@ -7809,14 +7812,17 @@ function SubirZeus({session,onListo,onCerrar}){
     {error&&<p style={{color:'var(--red)',fontWeight:600,fontSize:14,margin:'10px 0 0'}}>⚠️ {error}</p>}
   </Card>;
 }
-const ACCESO_ZEUS={1:{e:'✅',t:'Entró a Zeus'},0:{e:'⛔',t:'No entró a Zeus'},null:{e:'❔',t:'Sin dato de acceso'}};
+const ACCESO_ZEUS={1:{e:'✅',t:'Entró a Zeus'},0:{e:'⛔',t:'No entró a Zeus'},null:{e:'🚫',t:'No aparece en Zeus'}};
 // Cuenta de un grupo de personas ya evaluadas: lo que va arriba (todo el equipo) y en cada líder/coach.
+// Quien no aparece en Zeus no entra en n ni en los %: se cuenta aparte en sinZeus.
 function cuentaZeus(lista){
-  const c={n:lista.length,entraron:0,alerta:0,ini:{verde:0,amarillo:0,rojo:0},chk:{verde:0,amarillo:0,rojo:0},com:0,comOk:0};
+  const c={n:0,sinZeus:0,entraron:0,alerta:0,ini:{verde:0,amarillo:0,rojo:0},chk:{verde:0,amarillo:0,rojo:0},sal:{verde:0,amarillo:0,rojo:0},com:0,comOk:0};
   lista.forEach(({p,ev})=>{
+    if(ev.sinZeus){c.sinZeus++;return;}
+    c.n++;
     if(ev.a===1)c.entraron++;
     if(ev.alerta)c.alerta++;
-    c.ini[ev.cIni]++;c.chk[ev.cChk]++;
+    c.ini[ev.cIni]++;c.chk[ev.cChk]++;c.sal[ev.cSal]++;
     (p.com||[]).forEach(m=>{c.com++;if(cumpleCom(m))c.comOk++;});
   });
   return c;
@@ -7834,19 +7840,24 @@ function activoEnDiaZeus(p,f){
   const alta=fechaDMY(p.fechaAlta),baja=fechaDMY(p.fechaBaja);
   return!(f<ZEUS_INICIO_DATOS||(alta&&f<alta)||(baja&&f>baja));
 }
-const diasConCheck=p=>{const s=new Set();(p.checks||[]).forEach(c=>s.add(c[0]));return s;};
+// TIPO MARCAJE (J de Detalle Check): ENTRADA y SALIDA son dos datos distintos. tipo 'E' | 'S' | sin
+// tipo = cualquiera (solo para el mapa).
+const diasConCheck=(p,tipo)=>{const s=new Set();(p.checks||[]).forEach(c=>{if(!tipo||(c[4]==='S')===(tipo==='S'))s.add(c[0]);});return s;};
 const nombreMapa=n=>String(n||'').split(' ').slice(0,2).join(' ');
 const escHTML=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const conCoords=c=>c[2]!=null&&c[3]!=null;
 
 function PuntosSemana({p,lunes}){
-  const dias=diasConCheck(p);
-  return <span style={{display:'inline-flex',gap:3}} aria-label={`Check ${dias.size} de 7 días`}>
-    {LETRAS_DIA.map((l,i)=>{const activo=activoEnDiaZeus(p,diaDeSemana(lunes,i)),hizo=dias.has(i);
-      return <span key={i} title={`${DIAS_ZEUS[i]}: ${!activo?'no estaba':hizo?'hizo check':'sin check'}`}
-        style={{width:19,height:19,borderRadius:'50%',display:'inline-flex',alignItems:'center',justifyContent:'center',fontSize:10,fontWeight:800,
+  // Bolita verde = check de ENTRADA ese día; puntito azul en la esquina = también marcó SALIDA.
+  const ent=diasConCheck(p,'E'),sal=diasConCheck(p,'S');
+  return <span style={{display:'inline-flex',gap:3}} aria-label={`Entrada ${ent.size} días, salida ${sal.size} días`}>
+    {LETRAS_DIA.map((l,i)=>{const activo=activoEnDiaZeus(p,diaDeSemana(lunes,i)),hizo=ent.has(i),salio=sal.has(i);
+      return <span key={i} title={`${DIAS_ZEUS[i]}: ${!activo?'no estaba':`${hizo?'con':'sin'} entrada · ${salio?'con':'sin'} salida`}`}
+        style={{position:'relative',width:19,height:19,borderRadius:'50%',display:'inline-flex',alignItems:'center',justifyContent:'center',fontSize:10,fontWeight:800,
           background:hizo?'var(--green)':activo?'var(--kbg)':'transparent',color:hizo?'#fff':'var(--dim)',
-          border:`1.5px ${activo?'solid':'dashed'} ${hizo?'var(--green)':'var(--border)'}`,opacity:activo?1:.45}}>{l}</span>;})}
+          border:`1.5px ${activo?'solid':'dashed'} ${hizo?'var(--green)':'var(--border)'}`,opacity:activo?1:.45}}>{l}
+        {salio&&<span style={{position:'absolute',right:-3,bottom:-3,width:9,height:9,borderRadius:'50%',background:'var(--accent)',border:'1.5px solid var(--card)'}}/>}
+      </span>;})}
   </span>;
 }
 function InsigniaInicio({ev}){
@@ -7861,12 +7872,13 @@ function BarraAvance({n,de,color}){
 }
 // Para leer en palabras lo que dicen los puntos.
 function fraseZeus(p,ev,lunes){
-  const dias=diasConCheck(p);
-  const falto=LETRAS_DIA.map((_,i)=>i).filter(i=>activoEnDiaZeus(p,diaDeSemana(lunes,i))&&!dias.has(i)).map(i=>DIAS_ZEUS[i]);
+  const falto=tipo=>{const d=diasConCheck(p,tipo);return LETRAS_DIA.map((_,i)=>i).filter(i=>activoEnDiaZeus(p,diaDeSemana(lunes,i))&&!d.has(i)).map(i=>DIAS_ZEUS[i]);};
+  const frase=(verbo,n,f)=>`${verbo} ${n} de ${ev.dias} día${ev.dias!==1?'s':''} (meta ${ev.meta})${f.length&&f.length<ev.dias?`: le faltó ${f.join(', ')}`:''}.`;
   return{
-    acceso:ev.a===1?'Entró a Zeus esta semana.':ev.a===0?'No entró a Zeus esta semana.':'Zeus no trae su acceso de esta semana.',
+    acceso:ev.a===1?'Entró a Zeus esta semana.':ev.a===0?'No entró a Zeus esta semana.':'No aparece en Zeus esta semana: puede que no tenga usuario o que Zeus lo tenga en otro distrito. Pide que lo revisen. No cuenta en los porcentajes.',
     inicio:`Hizo su Inicio del día ${ev.ini} ${ev.ini===1?'vez':'veces'} (meta ${ev.meta}).`,
-    check:`Hizo check ${ev.chk} de ${ev.dias} día${ev.dias!==1?'s':''}${falto.length&&falto.length<ev.dias?`: le faltó ${falto.join(', ')}`:''}.`,
+    check:frase('Marcó su entrada',ev.chk,falto('E')),
+    salida:frase('Marcó su salida',ev.sal,falto('S')),
   };
 }
 
@@ -7882,6 +7894,7 @@ function DetalleZeus({p,ev,datos,lunes,onMapa}){
       <div>{ACCESO_ZEUS[ev.a].e} {fr.acceso}</div>
       <div>☀️ {fr.inicio}</div>
       <div>📍 {fr.check}</div>
+      <div>🏁 {fr.salida}</div>
       {ev.dias<7&&<div style={{fontSize:13,color:'var(--dim)'}}>No estuvo la semana completa: su meta es proporcional a {ev.dias} día{ev.dias!==1?'s':''}.</div>}
     </div>
     <div style={subt}>Su semana</div>
@@ -7913,10 +7926,10 @@ function DetalleZeus({p,ev,datos,lunes,onMapa}){
         <table style={{borderCollapse:'collapse',fontSize:13}}>
           <tbody>
             <tr><td style={{paddingRight:10,color:'var(--dim)'}}>Semana</td>{datos.tira.map(k=><td key={k} style={{textAlign:'center',padding:'0 4px',color:'var(--dim)'}}>{Number(k.split('-')[1])}</td>)}</tr>
-            {[['☀️ Inicio','cIni'],['📍 Check','cChk']].map(([l,campo])=><tr key={l}>
+            {[['☀️ Inicio','cIni'],['📍 Entrada','cChk'],['🏁 Salida','cSal']].map(([l,campo])=><tr key={l}>
               <td style={{paddingRight:10,fontWeight:700,whiteSpace:'nowrap'}}>{l}</td>
               {datos.tira.map(k=>{const s=datos.semanas.find(x=>x.k===k),e=evalZeus(p,k,s?.lunes);
-                return <td key={k} style={{textAlign:'center',padding:'0 4px'}} title={e?`${campo==='cIni'?e.ini:e.chk} de ${e.meta}`:'No estaba'}>{e?SEM_EMOJI[e[campo]]:'·'}</td>;})}
+                return <td key={k} style={{textAlign:'center',padding:'0 4px'}} title={!e?'No estaba':e.sinZeus?'No aparece en Zeus':`${campo==='cIni'?e.ini:campo==='cChk'?e.chk:e.sal} de ${e.meta}`}>{!e?'·':e.sinZeus?'🚫':SEM_EMOJI[e[campo]]}</td>;})}
             </tr>)}
           </tbody>
         </table>
@@ -7940,8 +7953,9 @@ function FilaZeus({x,datos,lunes,abierto,onToggle,onMapa,etiqueta}){
         </span>
       </span>
       <span style={{display:'flex',alignItems:'center',gap:8,flexShrink:0,marginLeft:'auto'}}>
-        <PuntosSemana p={p} lunes={lunes}/>
-        <InsigniaInicio ev={ev}/>
+        {ev.sinZeus
+          ?<span style={{fontSize:12,fontWeight:700,color:'var(--dim)',background:'var(--kbg)',padding:'3px 8px',borderRadius:10,whiteSpace:'nowrap'}}>🚫 No aparece en Zeus</span>
+          :<><PuntosSemana p={p} lunes={lunes}/><InsigniaInicio ev={ev}/></>}
       </span>
     </button>
     {abierto&&<DetalleZeus p={p} ev={ev} datos={datos} lunes={lunes} onMapa={onMapa}/>}
@@ -7964,12 +7978,13 @@ function GrupoZeus({nodo,nivel,ctx}){
         <div style={{display:'flex',alignItems:'center',gap:6}}>
           <span style={{color:'var(--dim)',fontSize:13,transform:abierto?'rotate(90deg)':'none',transition:'transform .15s'}}>▶</span>
           <span style={{fontWeight:800,fontSize:15,minWidth:0}}>{esLider?'Líder':'Equipo de'} {nombreCorto(p.nombre)}</span>
-          <span style={{fontSize:12,color:'var(--dim)',whiteSpace:'nowrap'}}>· {c.n} persona{c.n!==1?'s':''}</span>
+          <span style={{fontSize:12,color:'var(--dim)',whiteSpace:'nowrap'}}>· {c.n} persona{c.n!==1?'s':''}{c.sinZeus>0&&<span title="No aparecen en Zeus (no cuentan)"> · 🚫 {c.sinZeus}</span>}</span>
           {c.alerta>0&&<span style={{marginLeft:'auto',fontSize:12,fontWeight:800,color:'var(--yellow)',background:'var(--ybg)',padding:'2px 7px',borderRadius:10,whiteSpace:'nowrap'}}>⚠️ {c.alerta}</span>}
         </div>
         <div style={{display:'grid',gridTemplateColumns:'auto 1fr auto',gap:'4px 8px',alignItems:'center',fontSize:12,marginTop:8}}>
           <span>☀️ Inicio</span><BarraAvance n={c.ini.verde} de={c.n} color="var(--green)"/><b>{c.ini.verde} de {c.n}</b>
-          <span>📍 Check</span><BarraAvance n={c.chk.verde} de={c.n} color="var(--green)"/><b>{c.chk.verde} de {c.n}</b>
+          <span>📍 Entrada</span><BarraAvance n={c.chk.verde} de={c.n} color="var(--green)"/><b>{c.chk.verde} de {c.n}</b>
+          <span>🏁 Salida</span><BarraAvance n={c.sal.verde} de={c.n} color="var(--green)"/><b>{c.sal.verde} de {c.n}</b>
         </div>
       </button>
       <button onClick={()=>ctx.abrirMapa({titulo:`${esLider?'Líder':'Equipo de'} ${nombreCorto(p.nombre)}`,lista:[nodo,...todos],modo:'dia'})} title="Ver al equipo en el mapa"
@@ -8016,13 +8031,13 @@ function MapaZeus({titulo,lista,lunes,modo:modoIni,persona:personaIni,onCerrar})
   const[listo,setListo]=useState(0); // sube cuando el mapa ya existe, para pintar los puntos
   // Puntos a pintar según el modo.
   const puntos=useMemo(()=>{
-    if(modo==='dia')return conChecks.flatMap(x=>x.p.checks.filter(c=>c[0]===dia&&conCoords(c)).map(c=>({x,c,color:colorDe[x.p.numEmp],etq:`${c[1]} · ${nombreMapa(x.p.nombre)}`})))
+    if(modo==='dia')return conChecks.flatMap(x=>x.p.checks.filter(c=>c[0]===dia&&conCoords(c)).map(c=>({x,c,color:colorDe[x.p.numEmp],etq:`${c[4]==='S'?'🏁 Salida ':''}${c[1]} · ${nombreMapa(x.p.nombre)}`})))
       .sort((a,b)=>a.c[1].localeCompare(b.c[1]));
     const x=lista.find(y=>y.p.numEmp===persona);if(!x)return[];
     return(x.p.checks||[]).filter(conCoords).slice().sort((a,b)=>a[0]-b[0]||a[1].localeCompare(b[1]))
-      .map(c=>({x,c,color:COLORES_MAPA[c[0]%COLORES_MAPA.length],etq:`${LETRAS_DIA[c[0]]} ${c[1]}`}));
+      .map(c=>({x,c,color:COLORES_MAPA[c[0]%COLORES_MAPA.length],etq:`${LETRAS_DIA[c[0]]} ${c[4]==='S'?'🏁 ':''}${c[1]}`}));
   },[modo,dia,persona,lista]);
-  const sinCheckDia=modo==='dia'?lista.filter(x=>activoEnDiaZeus(x.p,diaDeSemana(lunes,dia))&&!(x.p.checks||[]).some(c=>c[0]===dia)):[];
+  const sinCheckDia=modo==='dia'?lista.filter(x=>!x.ev?.sinZeus&&activoEnDiaZeus(x.p,diaDeSemana(lunes,dia))&&!(x.p.checks||[]).some(c=>c[0]===dia&&c[4]!=='S')):[];
   useEffect(()=>{
     const prev=document.body.style.overflow;document.body.style.overflow='hidden';
     let vivo=true;
@@ -8067,7 +8082,7 @@ function MapaZeus({titulo,lista,lunes,modo:modoIni,persona:personaIni,onCerrar})
         </button>)}
       </div>}
       {modo==='persona'&&lista.length>1&&<div style={{marginTop:8}}>
-        <Select value={persona} onChange={setPersona} options={lista.map(x=>({value:x.p.numEmp,label:`${nombreCorto(x.p.nombre)} · ${diasConCheck(x.p).size} día${diasConCheck(x.p).size!==1?'s':''} con check`}))}/>
+        <Select value={persona} onChange={setPersona} options={lista.map(x=>({value:x.p.numEmp,label:`${nombreCorto(x.p.nombre)} · ${diasConCheck(x.p,'E').size} entrada${diasConCheck(x.p,'E').size!==1?'s':''} · ${diasConCheck(x.p,'S').size} salida${diasConCheck(x.p,'S').size!==1?'s':''}`}))}/>
       </div>}
     </div>
     <div style={{flex:1,minHeight:220,position:'relative'}}>
@@ -8083,7 +8098,7 @@ function MapaZeus({titulo,lista,lunes,modo:modoIni,persona:personaIni,onCerrar})
         <span style={{flex:1,minWidth:0}}>{modo==='dia'?nombreCorto(pt.x.p.nombre):<><b>{pt.c[1]}</b> {diaDeSemana(lunes,pt.c[0])?ddmm(diaDeSemana(lunes,pt.c[0])):''}</>} <span style={{color:'var(--dim)',fontSize:12}}>{pt.c[4]==='S'?'salida':'entrada'}</span></span>
         <a href={ligaMapa(pt.c[2],pt.c[3])} target="_blank" rel="noopener" style={{color:'var(--accent)',fontSize:13,fontWeight:700,textDecoration:'none'}}>Google Maps ↗</a>
       </div>)}
-      {sinCheckDia.length>0&&<p style={{fontSize:13,color:'var(--red)',margin:'8px 0 0'}}><b>Sin check este día ({sinCheckDia.length}):</b> {sinCheckDia.map(x=>nombreCorto(x.p.nombre)).join(', ')}</p>}
+      {sinCheckDia.length>0&&<p style={{fontSize:13,color:'var(--red)',margin:'8px 0 0'}}><b>Sin entrada este día ({sinCheckDia.length}):</b> {sinCheckDia.map(x=>nombreCorto(x.p.nombre)).join(', ')}</p>}
     </div>
   </div>;
 }
@@ -8091,9 +8106,11 @@ function MapaZeus({titulo,lista,lunes,modo:modoIni,persona:personaIni,onCerrar})
 const FILTROS_ZEUS=[
   {id:'todos',l:'Todos'},
   {id:'alerta',l:'⚠️ Entraron sin registrarse',f:e=>e.alerta},
-  {id:'noentro',l:'⛔ No entraron',f:e=>e.a!==1},
-  {id:'rojoIni',l:'☀️ Inicio bajo',f:e=>e.cIni==='rojo'},
-  {id:'rojoChk',l:'📍 Check bajo',f:e=>e.cChk==='rojo'},
+  {id:'noentro',l:'⛔ No entraron',f:e=>e.a===0},
+  {id:'rojoIni',l:'☀️ Inicio bajo',f:e=>!e.sinZeus&&e.cIni==='rojo'},
+  {id:'rojoChk',l:'📍 Entrada baja',f:e=>!e.sinZeus&&e.cChk==='rojo'},
+  {id:'rojoSal',l:'🏁 Salida baja',f:e=>!e.sinZeus&&e.cSal==='rojo'},
+  {id:'sinZeus',l:'🚫 No aparecen en Zeus',f:e=>e.sinZeus,soloSiHay:true},
 ];
 function ZeusTab({session,refreshKey}){
   const[sem,setSem]=useState('');
@@ -8182,9 +8199,13 @@ function ZeusTab({session,refreshKey}){
       <div style={{height:1,background:'var(--border)',margin:'12px 0'}}/>
       {renglonMeta('📲','Entraron a Zeus',c.entraron,c.n,'Al menos una vez en la semana.')}
       {renglonMeta('☀️','Cumplieron su Inicio del día',c.ini.verde,c.n,'Lo hicieron 6 de 7 días (o su parte si no estuvieron toda la semana).')}
-      {renglonMeta('📍','Cumplieron su check',c.chk.verde,c.n,'Se registraron con ubicación 6 de 7 días.')}
+      {renglonMeta('📍','Cumplieron su check de entrada',c.chk.verde,c.n,'Marcaron ENTRADA con ubicación 6 de 7 días.')}
+      {renglonMeta('🏁','Cumplieron su check de salida',c.sal.verde,c.n,'Marcaron SALIDA con ubicación 6 de 7 días.')}
       {c.alerta>0&&<button onClick={()=>setFiltro('alerta')} style={{width:'100%',textAlign:'left',padding:'10px 12px',borderRadius:10,background:'var(--ybg)',border:'none',borderLeft:'4px solid var(--yellow)',fontSize:14,lineHeight:1.4,cursor:'pointer',color:'var(--text)'}}>
         ⚠️ <b>{c.alerta} persona{c.alerta!==1?'s':''}</b> entr{c.alerta!==1?'aron':'ó'} a Zeus pero no hic{c.alerta!==1?'ieron':'o'} su Inicio del día completo. <b style={{color:'var(--accent)'}}>Ver quiénes →</b>
+      </button>}
+      {c.sinZeus>0&&<button onClick={()=>{setFiltro('sinZeus');setDetalle(null);}} style={{width:'100%',textAlign:'left',padding:'10px 12px',marginTop:8,borderRadius:10,background:'var(--kbg)',border:'none',borderLeft:'4px solid var(--dim)',fontSize:14,lineHeight:1.4,cursor:'pointer',color:'var(--text)'}}>
+        🚫 <b>{c.sinZeus} persona{c.sinZeus!==1?'s':''}</b> de la plantilla no aparece{c.sinZeus!==1?'n':''} en Zeus esta semana (sin usuario o en otro distrito). No cuenta{c.sinZeus!==1?'n':''} en los porcentajes. <b style={{color:'var(--accent)'}}>Ver quiénes →</b>
       </button>}
       <p style={{fontSize:12,color:'var(--dim)',textAlign:'center',margin:'10px 0 0'}}>Datos de Zeus al {datos.datosAl||'—'} · se actualiza cada semana</p>
       {error&&<p style={{fontSize:13,color:'var(--red)',fontWeight:600,margin:'8px 0 0'}}>⚠️ No se pudo leer esa semana: {error}</p>}
@@ -8194,14 +8215,16 @@ function ZeusTab({session,refreshKey}){
     <Card>
       <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:10}}>
         {FILTROS_ZEUS.map(f=>{const n=f.f?evaluados.filter(x=>f.f(x.ev)).length:evaluados.length,act=f.id===filtro;
+          if(f.soloSiHay&&!n&&!act)return null;
           return <button key={f.id} onClick={()=>{setFiltro(f.id);setDetalle(null);}} aria-pressed={act}
             style={{padding:'6px 10px',borderRadius:999,border:`1.5px solid ${act?'var(--accent)':'var(--border)'}`,background:act?'var(--accent)':'var(--card)',color:act?'#fff':'var(--text)',fontSize:13,fontWeight:700,cursor:'pointer'}}>{f.l} · {n}</button>;})}
       </div>
       <div style={{display:'flex',flexWrap:'wrap',alignItems:'center',gap:'4px 14px',fontSize:12,color:'var(--dim)',padding:'8px 10px',background:'var(--bg)',borderRadius:8,marginBottom:10}}>
-        <span><span style={{display:'inline-flex',width:14,height:14,borderRadius:'50%',background:'var(--green)',verticalAlign:'middle'}}/> hizo check ese día</span>
-        <span><span style={{display:'inline-flex',width:14,height:14,borderRadius:'50%',background:'var(--kbg)',border:'1.5px solid var(--border)',verticalAlign:'middle'}}/> no hizo</span>
+        <span><span style={{display:'inline-flex',width:14,height:14,borderRadius:'50%',background:'var(--green)',verticalAlign:'middle'}}/> marcó entrada ese día</span>
+        <span><span style={{display:'inline-flex',width:9,height:9,borderRadius:'50%',background:'var(--accent)',verticalAlign:'middle'}}/> también marcó salida</span>
+        <span><span style={{display:'inline-flex',width:14,height:14,borderRadius:'50%',background:'var(--kbg)',border:'1.5px solid var(--border)',verticalAlign:'middle'}}/> sin entrada</span>
         <span>☀️ 5/6 = Inicio del día hecho / meta</span>
-        <span>✅ entró · ⛔ no entró a Zeus</span>
+        <span>✅ entró · ⛔ no entró a Zeus · 🚫 no aparece en Zeus (no cuenta)</span>
       </div>
       {evaluados.length===0&&<p style={{fontSize:14,color:'var(--dim)'}}>No hay personas para medir en esta semana.</p>}
       {lista
