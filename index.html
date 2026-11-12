@@ -7286,6 +7286,9 @@ const MANUAL_COMUNES={
     {colores:[['🟢','Llega','Se registró **6 de 7 días** o más.'],['🟡','Le falta 1','5 de 7.'],['🔴','Le faltan 2 o más','4 o menos, o ninguno.']]},
     {lista:['Quien **entró o se dio de baja a media semana** tiene meta **proporcional** a los días que estuvo. Ejemplo: entró en jueves = 4 días → meta 3.','Las **bajas** siguen apareciendo en las semanas en que estuvieron, bajo el coach y el líder de los que dependían (dice **baja dd/mm**).']},
     {ojo:'**⚠️ Entró y no se registró**: esa semana sí entró a Zeus, pero su **Inicio del día** no llega a la meta. Es a quien hay que buscar primero.'},
+    {sub:'Actualizar Zeus cada semana (solo Director)'},
+    {pasos:['Descarga el **Uso de Zeus .xlsx** completo de la semana, tal como llega (el nacional, con tablas dinámicas y todo). Debe ser **.xlsx**, no .xlsb.','Desde una **computadora**, entra a la app y toca **📲 Zeus → ⬆️ Subir archivo de Zeus de la semana**.','Elige el archivo. La app lo lee en tu computadora (alrededor de un minuto) y se queda **solo con LA LAGUNA**; las tablas dinámicas no se suben.','Revisa cuántas filas salieron de cada hoja y la fecha del **último check**: debe ser el domingo de la semana que acaba de cerrar.','Toca **Reemplazar el libro de Zeus**. En uno o dos minutos queda; la pestaña ya muestra la semana nueva para todos.']},
+    {alto:'**Reemplaza todo el libro de Zeus** (misma liga) con lo que trae el archivo: sube siempre el archivo **más reciente**, que trae el año completo. Si algo falla a medias, el libro se queda como estaba.'},
   ]},
   incidencias:{icon:'🗂️',titulo:'Reporte de incidencias',cuando:'Para saber quién faltó, llegó tarde o no estuvo, en las fechas que tú elijas.',bloques:[
     {p:'Junta las ausencias que cada coach marca en su **arranque**: faltas, retardos, vacaciones, incapacidad, permisos autorizados, descansos y otros.'},
@@ -7605,6 +7608,205 @@ const ordenPuestoZeus=pos=>{const c=puestoCortoZeus(pos);return c==='Líder'?0:c
 async function fetchZeus(token,verComo,sem){
   return leerServidor(`${DOPOST_URL}?accion=zeus&token=${encodeURIComponent(token)}${qsVerComo(verComo)}${sem?`&sem=${encodeURIComponent(sem)}`:''}`,{cache:true,ms:60000,reintentos:1});
 }
+// ─── Subir el archivo semanal de Zeus (solo Director) ───
+// El "Uso de Zeus_2026.xlsx" que llega cada semana es NACIONAL: ~213 MB, 2.4 millones de filas y 6
+// tablas dinámicas con ~440 MB de caché. Subirlo tal cual no cabe (Apps Script acepta ~50 MB por
+// envío) y abrirlo entero revienta la memoria del navegador. Por eso se lee AQUÍ, por partes: el
+// xlsx es un zip, File.slice permite saltar directo a cada hoja, y cada hoja se descomprime en
+// trozos (fflate) quedándose solo con las filas cuyo Distrito es LA LAGUNA (~2%). Las tablas
+// dinámicas ni se abren. Al Apps Script solo viajan esas filas (unos MB) y allá reemplazan las hojas
+// del libro de Zeus (misma liga) — ver subirZeus en apps-script.gs.
+const ZEUS_DISTRITO='LA LAGUNA';
+const ZEUS_HOJAS_XLSX=['Detalle Logg in','Detalle Check','Ejecucion por usuario 01-32','Ejecucion por usuario 33'];
+let fflateCargado=null;
+function cargarFflate(){
+  if(window.fflate)return Promise.resolve(window.fflate);
+  if(!fflateCargado)fflateCargado=new Promise((res,rej)=>{
+    const s=document.createElement('script');s.src='./vendor/fflate.min.js';
+    s.onload=()=>res(window.fflate);s.onerror=()=>{fflateCargado=null;rej(new Error('no se pudo cargar el lector de xlsx, revisa la conexión'));};
+    document.head.appendChild(s);
+  });
+  return fflateCargado;
+}
+const desescaparXML=s=>s.indexOf('&')<0?s:s.replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos);/gi,(m,e)=>
+  e[0]==='#'?String.fromCodePoint(e[1]==='x'||e[1]==='X'?parseInt(e.slice(2),16):+e.slice(1)):{amp:'&',lt:'<',gt:'>',quot:'"',apos:"'"}[e.toLowerCase()]);
+const letraAIndice=l=>{let n=0;for(const ch of l)n=n*26+ch.charCodeAt(0)-64;return n-1;};
+// Directorio del zip (al final del archivo): nombre → {método, tamaño comprimido, inicio del encabezado local}.
+async function leerDirectorioZip(file){
+  const cola=Math.min(file.size,65557);
+  const fin=new DataView(await file.slice(file.size-cola).arrayBuffer());
+  let p=-1;for(let i=cola-22;i>=0;i--)if(fin.getUint32(i,true)===0x06054b50){p=i;break;}
+  if(p<0)throw new Error('no parece un archivo .xlsx');
+  const tam=fin.getUint32(p+12,true),ini=fin.getUint32(p+16,true);
+  if(ini===0xffffffff)throw new Error('el archivo es demasiado grande para leerlo (zip64)');
+  const cd=new DataView(await file.slice(ini,ini+tam).arrayBuffer()),dec=new TextDecoder();
+  const ent={};
+  for(let o=0;o+46<=tam&&cd.getUint32(o,true)===0x02014b50;){
+    const n=cd.getUint16(o+28,true),x=cd.getUint16(o+30,true),c=cd.getUint16(o+32,true);
+    const nombre=dec.decode(new Uint8Array(cd.buffer,o+46,n));
+    ent[nombre]={metodo:cd.getUint16(o+10,true),comp:cd.getUint32(o+20,true),local:cd.getUint32(o+42,true)};
+    o+=46+n+x+c;
+  }
+  return ent;
+}
+// Recorre una entrada del zip en trozos de texto: onTexto(trozo) por cada pedazo descomprimido.
+async function recorrerEntradaZip(file,e,fflate,onTexto,onBytes){
+  const lh=new DataView(await file.slice(e.local,e.local+30).arrayBuffer());
+  const ini=e.local+30+lh.getUint16(26,true)+lh.getUint16(28,true);
+  const dec=new TextDecoder('utf-8');
+  const inf=e.metodo===8?new fflate.Inflate(d=>onTexto(dec.decode(d,{stream:true}))):null;
+  if(e.metodo!==8&&e.metodo!==0)throw new Error('compresión no soportada en el xlsx');
+  const TROZO=4*1024*1024;
+  for(let o=0;o<e.comp;o+=TROZO){
+    const b=new Uint8Array(await file.slice(ini+o,ini+Math.min(o+TROZO,e.comp)).arrayBuffer());
+    const ultimo=o+TROZO>=e.comp;
+    if(inf)inf.push(b,ultimo);else onTexto(dec.decode(b,{stream:!ultimo}));
+    onBytes?.(b.length);
+    await new Promise(r=>setTimeout(r,0)); // deja respirar a la pantalla (barra de avance)
+  }
+  onTexto(dec.decode());
+}
+async function textoEntradaZip(file,ent,nombre,fflate){
+  const e=ent[nombre];if(!e)return'';
+  let t='';await recorrerEntradaZip(file,e,fflate,x=>{t+=x;});return t;
+}
+// Lee el xlsx y regresa {hojas:[{nombre,encabezado,filas,total}]} solo con las filas de LA LAGUNA.
+// onAvance(fracción 0..1, texto).
+async function leerXlsxZeus(file,onAvance){
+  const fflate=await cargarFflate();
+  const ent=await leerDirectorioZip(file);
+  const wb=await textoEntradaZip(file,ent,'xl/workbook.xml',fflate);
+  const rels=await textoEntradaZip(file,ent,'xl/_rels/workbook.xml.rels',fflate);
+  const destino={};
+  for(const m of rels.matchAll(/<Relationship\b[^>]*>/g)){
+    const id=(m[0].match(/\bId="([^"]+)"/)||[])[1],t=(m[0].match(/\bTarget="([^"]+)"/)||[])[1];
+    if(id&&t)destino[id]=t.startsWith('/')?t.slice(1):'xl/'+t;
+  }
+  const hojasLibro=[...wb.matchAll(/<sheet\b[^>]*>/g)].map(m=>({nombre:desescaparXML((m[0].match(/\bname="([^"]+)"/)||[])[1]||''),ruta:destino[(m[0].match(/\br:id="([^"]+)"/)||[])[1]]}));
+  // Las de "Ejecucion por usuario" que no sean la 01-32 van a la 33 (si Excel abre una 34 por el
+  // límite de filas, no se pierde).
+  const aDestino=n=>ZEUS_HOJAS_XLSX.includes(n)?n:/^Ejecucion por usuario/i.test(n)?'Ejecucion por usuario 33':null;
+  const leer=hojasLibro.filter(h=>aDestino(h.nombre)&&ent[h.ruta]);
+  const faltan=ZEUS_HOJAS_XLSX.slice(0,3).filter(n=>!leer.some(h=>h.nombre===n));
+  if(faltan.length)throw new Error(`al archivo le falta${faltan.length>1?'n':''} la${faltan.length>1?'s':''} hoja${faltan.length>1?'s':''} ${faltan.map(n=>`"${n}"`).join(', ')}`);
+  onAvance?.(0,'Leyendo textos del archivo…');
+  const ssTxt=await textoEntradaZip(file,ent,'xl/sharedStrings.xml',fflate);
+  const ss=[];
+  for(const m of ssTxt.matchAll(/<si>([\s\S]*?)<\/si>/g))ss.push(desescaparXML([...m[1].matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map(x=>x[1]).join('')));
+  const idxDistrito=ss.findIndex(s=>s.trim().toUpperCase()===ZEUS_DISTRITO);
+  const aguja=idxDistrito>=0?`<v>${idxDistrito}</v>`:ZEUS_DISTRITO;
+  const celdas=fila=>{
+    const out=[];
+    for(const m of fila.matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)){
+      const ref=(m[1].match(/\br="([A-Z]+)/)||[])[1];if(!ref)continue;
+      const t=(m[1].match(/\bt="(\w+)"/)||[])[1],cuerpo=m[2]||'';
+      const v=(cuerpo.match(/<v>([\s\S]*?)<\/v>/)||[])[1];
+      let val='';
+      if(t==='s')val=v!=null?(ss[+v]??''):'';
+      else if(t==='inlineStr')val=desescaparXML([...cuerpo.matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map(x=>x[1]).join(''));
+      else if(t==='str'||t==='e')val=v!=null&&t==='str'?desescaparXML(v):'';
+      else if(v!=null)val=t==='b'?v:+v;
+      out[letraAIndice(ref)]=val;
+    }
+    return out;
+  };
+  const total=leer.reduce((s,h)=>s+ent[h.ruta].comp,0);let hecho=0;
+  const porDestino={};
+  for(const h of leer){
+    const dest=aDestino(h.nombre);
+    const hoja=porDestino[dest]=porDestino[dest]||{nombre:dest,encabezado:null,filas:[],total:0,colDistrito:-1};
+    let buf='',primera=true;
+    const procesar=fila=>{
+      if(primera){
+        primera=false;
+        const enc=celdas(fila);
+        if(!hoja.encabezado){
+          let ancho=enc.length;while(ancho>0&&(enc[ancho-1]==null||String(enc[ancho-1]).trim()===''))ancho--;
+          hoja.encabezado=Array.from({length:ancho},(_,i)=>enc[i]==null?'':String(enc[i]).trim());
+          hoja.colDistrito=hoja.encabezado.findIndex(x=>x.toUpperCase()==='DISTRITO');
+          if(hoja.colDistrito<0)throw new Error(`la hoja "${h.nombre}" no trae la columna Distrito`);
+        }
+        return;
+      }
+      if(!fila.includes('<c'))return;
+      hoja.total++;
+      if(!fila.includes(aguja))return;
+      const c=celdas(fila);
+      if(String(c[hoja.colDistrito]??'').trim().toUpperCase()!==ZEUS_DISTRITO)return;
+      hoja.filas.push(hoja.encabezado.map((_,i)=>c[i]??''));
+    };
+    await recorrerEntradaZip(file,ent[h.ruta],fflate,t=>{
+      buf+=t;
+      const fin=buf.lastIndexOf('</row>');if(fin<0)return;
+      const partes=buf.slice(0,fin).split('</row>');buf=buf.slice(fin+6);
+      for(const f of partes)procesar(f);
+    },n=>{hecho+=n;onAvance?.(hecho/total,`Leyendo "${h.nombre}"…`);});
+  }
+  return{hojas:ZEUS_HOJAS_XLSX.map(n=>porDestino[n]).filter(Boolean)};
+}
+// Fecha de serie de Excel (días desde 30/12/1899) → Date local.
+const fechaDeSerie=n=>{const d=new Date(1899,11,30);d.setDate(d.getDate()+Math.floor(n));return d;};
+function resumenXlsxZeus(r){
+  const check=r.hojas.find(h=>h.nombre==='Detalle Check');
+  const iF=check?check.encabezado.findIndex(x=>/FECHA/i.test(x)):-1;
+  let max=0;if(iF>=0)check.filas.forEach(f=>{if(typeof f[iF]==='number'&&f[iF]>max)max=f[iF];});
+  return{ultimoCheck:max?fechaDeSerie(max):null};
+}
+function SubirZeus({session,onListo,onCerrar}){
+  const[archivo,setArchivo]=useState(null);
+  const[avance,setAvance]=useState(null); // {f,txt}
+  const[leido,setLeido]=useState(null);
+  const[error,setError]=useState('');
+  const[enviando,setEnviando]=useState(false);
+  const[resultado,setResultado]=useState(null);
+  const elegir=async f=>{
+    setArchivo(f);setLeido(null);setError('');setResultado(null);
+    if(!f)return;
+    if(!/\.xlsx$/i.test(f.name)){setError('Elige el archivo .xlsx (no el .xlsb ni otro formato).');return;}
+    const t0=Date.now();
+    try{
+      setAvance({f:0,txt:'Abriendo el archivo…'});
+      const r=await leerXlsxZeus(f,(x,txt)=>setAvance({f:x,txt}));
+      setLeido({...r,...resumenXlsxZeus(r),seg:Math.round((Date.now()-t0)/1000)});
+    }catch(e){console.error(e);setError(`No se pudo leer el archivo: ${e.message}`);}
+    setAvance(null);
+  };
+  const enviar=async()=>{
+    setEnviando(true);setError('');
+    try{
+      const payload={accion:'subirZeus',token:session.token,hojas:leido.hojas.map(h=>({nombre:h.nombre,encabezado:h.encabezado,filas:h.filas}))};
+      // Sin reintento: reemplazar el libro tarda hasta un par de minutos y repetirlo a medias no ayuda.
+      const j=await pedirJSON(DOPOST_URL,{method:'POST',body:JSON.stringify(payload),headers:{'Content-Type':'text/plain'}},330000);
+      if(!j.ok)throw new Error(j.error||'el servidor no pudo guardarlo');
+      setResultado(j);olvidarLecturas();onListo?.();
+    }catch(e){console.error(e);setError(`No se pudo subir: ${e.message}`);}
+    setEnviando(false);
+  };
+  const ocupado=!!avance||enviando;
+  return <Card title="⬆️ Actualizar el libro de Zeus" actions={!ocupado&&<button onClick={onCerrar} style={{background:'none',border:'none',fontSize:18,cursor:'pointer',color:'var(--dim)'}} aria-label="Cerrar">✕</button>}>
+    <p style={{fontSize:14,lineHeight:1.45,margin:'0 0 10px'}}>Elige el <b>Uso de Zeus .xlsx</b> completo de la semana, tal como llega. La app se queda solo con <b>{ZEUS_DISTRITO}</b>, deja fuera las tablas dinámicas y <b>reemplaza</b> el libro de Zeus (misma liga). Hazlo desde una <b>computadora</b>: el archivo pesa cientos de MB.</p>
+    {!resultado&&<input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" disabled={ocupado} onChange={e=>elegir(e.target.files?.[0]||null)} style={{fontSize:14,maxWidth:'100%'}}/>}
+    {avance&&<div style={{marginTop:12}}>
+      <div style={{fontSize:13,color:'var(--dim)',marginBottom:4}}>{avance.txt} {Math.round(avance.f*100)}%</div>
+      <div style={{height:8,background:'var(--border)',borderRadius:4,overflow:'hidden'}}><div style={{width:`${avance.f*100}%`,height:'100%',background:'var(--accent)',transition:'width .2s'}}/></div>
+      <p style={{fontSize:12,color:'var(--dim)',margin:'6px 0 0'}}>No cierres esta pantalla. En computadora tarda alrededor de un minuto.</p>
+    </div>}
+    {leido&&!resultado&&<div style={{marginTop:12,fontSize:14}}>
+      <div style={{fontWeight:800,marginBottom:6}}>Esto se va a guardar (leído en {leido.seg} s):</div>
+      {leido.hojas.map(h=><div key={h.nombre} style={{display:'flex',justifyContent:'space-between',gap:8,padding:'4px 0',borderBottom:'1px solid var(--border)'}}>
+        <span>{h.nombre}</span><b style={{whiteSpace:'nowrap'}}>{h.filas.length.toLocaleString('es-MX')} <span style={{fontWeight:400,color:'var(--dim)'}}>de {h.total.toLocaleString('es-MX')}</span></b>
+      </div>)}
+      <p style={{margin:'8px 0',color:'var(--dim)',fontSize:13}}>Último check en el archivo: <b style={{color:'var(--text)'}}>{leido.ultimoCheck?leido.ultimoCheck.toLocaleDateString('es-MX'):'—'}</b>. Revisa que sea la semana que acaba de cerrar.</p>
+      {leido.hojas.some(h=>!h.filas.length)&&<p style={{color:'var(--red)',fontWeight:600,fontSize:13}}>⚠️ Alguna hoja no trae filas de {ZEUS_DISTRITO}. Revisa que sea el archivo correcto.</p>}
+      <Btn onClick={enviar} disabled={enviando||leido.hojas.some(h=>h.nombre!=='Ejecucion por usuario 33'&&!h.filas.length)} style={{width:'100%'}}>{enviando?'⏳ Reemplazando el libro de Zeus… (hasta 2 min)':'Reemplazar el libro de Zeus'}</Btn>
+    </div>}
+    {resultado&&<div style={{marginTop:6,padding:'10px 12px',borderRadius:10,background:'var(--gbg)',borderLeft:'4px solid var(--green)',fontSize:14,lineHeight:1.5}}>
+      ✅ Libro de Zeus actualizado en {Math.round((resultado.ms||0)/1000)} s. Datos al <b>{resultado.datosAl||'—'}</b>.
+      <div style={{fontSize:13,color:'var(--dim)'}}>{(resultado.hojas||[]).map(h=>`${h.nombre}: ${h.filas.toLocaleString('es-MX')}`).join(' · ')}</div>
+    </div>}
+    {error&&<p style={{color:'var(--red)',fontWeight:600,fontSize:14,margin:'10px 0 0'}}>⚠️ {error}</p>}
+  </Card>;
+}
 function PastillaZeus({c,v,meta}){
   return <span style={{display:'inline-block',minWidth:52,textAlign:'center',padding:'2px 6px',borderRadius:12,fontSize:13,fontWeight:700,whiteSpace:'nowrap',
     background:c?STATUS[c].bg:'var(--input)',color:c?STATUS[c].border:'var(--dim)',border:`1.5px solid ${c?STATUS[c].border:'var(--border)'}`}}>{c?SEM_EMOJI[c]:'⚪'} {v}/{meta}</span>;
@@ -7727,6 +7929,14 @@ function ZeusTab({session,refreshKey}){
   const[abiertos,setAbiertos]=useState(new Set());
   const[detalle,setDetalle]=useState(null);
   const[filtro,setFiltro]=useState('todos');
+  // Solo el Director, en su propia sesión (no en vista prestada), sube el archivo semanal.
+  const puedeSubir=session.role==='director'&&!session.verComo;
+  const[verSubir,setVerSubir]=useState(false);
+  const[recarga,setRecarga]=useState(0);
+  const tarjetaSubir=puedeSubir&&verSubir&&<SubirZeus session={session} onCerrar={()=>setVerSubir(false)} onListo={()=>{setDetalle(null);setSem('');setRecarga(k=>k+1);}}/>;
+  const botonSubir=puedeSubir&&!verSubir&&<div style={{textAlign:'center',marginTop:8}}>
+    <button onClick={()=>setVerSubir(true)} style={{padding:'6px 12px',borderRadius:8,border:'1.5px solid var(--accent)',background:'var(--card)',color:'var(--accent)',fontSize:13,fontWeight:700,cursor:'pointer'}}>⬆️ Subir archivo de Zeus de la semana</button>
+  </div>;
   useEffect(()=>{
     let vivo=true;setCargando(true);setError('');
     fetchZeus(session.token,session.verComo,sem)
@@ -7738,7 +7948,7 @@ function ZeusTab({session,refreshKey}){
       .catch(e=>{if(vivo)setError(e.message||'no hubo respuesta');})
       .finally(()=>{if(vivo)setCargando(false);});
     return()=>{vivo=false;};
-  },[session.token,session.verComo,sem,refreshKey]);
+  },[session.token,session.verComo,sem,refreshKey,recarga]);
 
   const semInfo=datos?.semanas.find(s=>s.k===datos.sem);
   const evaluados=useMemo(()=>{
@@ -7754,10 +7964,14 @@ function ZeusTab({session,refreshKey}){
   useEffect(()=>{if(raices.length===1)setAbiertos(new Set([raices[0].p.nombre]));},[datos?.sem,raices.length]);
   const toggle=n=>setAbiertos(s=>{const x=new Set(s);x.has(n)?x.delete(n):x.add(n);return x;});
 
-  if(!datos)return <Card>
-    {cargando?<div style={{textAlign:'center',padding:20}}><Spinner/><p style={{fontSize:14,color:'var(--dim)',marginTop:10}}>Cargando Zeus… la primera vez después de que se actualiza el libro puede tardar hasta un minuto.</p></div>
-      :<p style={{fontSize:14,color:'var(--red)',fontWeight:600}}>⚠️ No se pudo leer Zeus: {error}. Toca 🔄 para reintentar.</p>}
-  </Card>;
+  if(!datos)return <div>
+    {tarjetaSubir}
+    <Card>
+      {cargando?<div style={{textAlign:'center',padding:20}}><Spinner/><p style={{fontSize:14,color:'var(--dim)',marginTop:10}}>Cargando Zeus… la primera vez después de que se actualiza el libro puede tardar hasta un minuto.</p></div>
+        :<p style={{fontSize:14,color:'var(--red)',fontWeight:600}}>⚠️ No se pudo leer Zeus: {error}. Toca 🔄 para reintentar.</p>}
+      {!cargando&&botonSubir}
+    </Card>
+  </div>;
 
   const idx=datos.semanas.findIndex(s=>s.k===datos.sem);
   const lunes=fechaDeYMD(semInfo?.lunes),domingo=lunes?new Date(lunes.getFullYear(),lunes.getMonth(),lunes.getDate()+6):null;
@@ -7769,6 +7983,7 @@ function ZeusTab({session,refreshKey}){
   const pct=(a,b)=>b?Math.round(a*100/b)+'%':'—';
   const navBtn={padding:'6px 12px',borderRadius:8,border:'1.5px solid var(--border)',background:'var(--card)',fontSize:16,fontWeight:800,cursor:'pointer',color:'var(--text)'};
   return <div>
+    {tarjetaSubir}
     <Card>
       <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8}}>
         <button style={{...navBtn,opacity:idx>0?1:.35}} disabled={idx<=0||cargando} onClick={()=>{setDetalle(null);setSem(datos.semanas[idx-1].k);}} aria-label="Semana anterior">◀</button>
@@ -7780,6 +7995,7 @@ function ZeusTab({session,refreshKey}){
       </div>
       <p style={{fontSize:12,color:'var(--dim)',textAlign:'center',margin:'6px 0 0'}}>Datos de Zeus al {datos.datosAl||'—'} · el libro se actualiza cada semana</p>
       {error&&<p style={{fontSize:13,color:'var(--red)',fontWeight:600,margin:'8px 0 0'}}>⚠️ No se pudo leer esa semana: {error}</p>}
+      {botonSubir}
     </Card>
 
     <Card title="Resumen del equipo">
