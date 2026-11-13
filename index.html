@@ -129,6 +129,7 @@ textarea{resize:vertical}
 .login-marca{text-align:center;margin-bottom:28px}
 .login-logo{font-size:48px;margin-bottom:8px}
 .login-pie{font-size:13px;color:var(--dim);text-align:center;margin-top:16px}
+.login-firma{display:inline-block;font-size:11px;opacity:.75;margin-top:6px;word-break:break-all}
 @media (orientation:landscape) and (max-height:540px){
   .login-fondo{padding:12px}
   .login-tarjeta{max-width:720px;padding:20px 26px;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.3fr);grid-template-areas:"marca form" "pie form";column-gap:28px;align-items:center}
@@ -2410,7 +2411,7 @@ function LoginScreen({onLogin,aviso}){
           {loading?<Spinner/>:'Iniciar sesión'}
         </Btn>
         </div>
-        <p className="login-pie">Distrito La Laguna · Totalplay</p>
+        <p className="login-pie">Distrito La Laguna · Totalplay<br/><span className="login-firma">Designed by Lone Wolf | lone.wolf.verified@gmail.com</span></p>
       </div>
     </div>
   );
@@ -7166,6 +7167,7 @@ p{margin:4px 0}
 </style></head><body>
 <div class="header"><h1>📋 Reporte de Supervisión</h1><p>${escapeHtml(user.nombre)}${rolLabel?' · '+escapeHtml(rolLabel):''}</p><p>Generado el ${escapeHtml(fmt(today()))} · ${recs.length} registro${recs.length!==1?'s':''}</p></div>
 ${cuerpo||'<p style="text-align:center;color:#6b7086;padding:40px">Sin registros.</p>'}
+<p style="text-align:center;font-size:11px;color:#6b7086;margin:28px 0 0">Designed by Lone Wolf | lone.wolf.verified@gmail.com</p>
 </body></html>`;
 }
 
@@ -8308,6 +8310,7 @@ function ManualTab({rolPropio}){
           <Btn variant="secondary" onClick={()=>setAbierta(null)} style={{width:'100%',marginTop:8,fontSize:14}}>Cerrar lección</Btn>
         </div>}
       </div>;})}
+    <p style={{fontSize:11,color:'var(--dim)',textAlign:'center',margin:'18px 0 4px',opacity:.75,wordBreak:'break-all'}}>Designed by Lone Wolf | lone.wolf.verified@gmail.com</p>
   </div>;
 }
 
