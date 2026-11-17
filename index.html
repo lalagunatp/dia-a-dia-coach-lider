@@ -8402,7 +8402,14 @@ function MainApp({session:sesionRecibida,setSession,onLogout,sessionBase,vistas,
   // cierre de la semana no dependan de haber capturado en este mismo teléfono (ver
   // juntarPlanesDelSheet). En vista prestada ya vienen dentro de registrosVista.
   const[planesSheet,setPlanesSheet]=useState(null); // null = todavía no llegan
-  const recordsPlan=useMemo(()=>enVista?data.records:juntarPlanesDelSheet(data.records,planesSheet),[enVista,data.records,planesSheet]);
+  // Solo los planes/resultados de QUIEN ESTÁ EN SESIÓN: los registros locales son del teléfono, no
+  // de la persona, y si en el mismo equipo entró antes otro coach, su plan se tomaba como "el plan
+  // de esta semana" — salía ✏️ Editar plan prellenado con lo del otro y se guardaba a nombre propio
+  // (pasó el 17/11/2026: Duarte, Fierros y Briones guardaron el texto del plan de Pulido).
+  const recordsPlan=useMemo(()=>{
+    const todos=enVista?data.records:juntarPlanesDelSheet(data.records,planesSheet);
+    return todos.filter(r=>(r.type!=='plan'&&r.type!=='plan_resultado')||!r.registradoPor||r.registradoPor===user.nombre);
+  },[enVista,data.records,planesSheet,user.nombre]);
   const planesListos=enVista?registrosVista!==null:planesSheet!==null;
   // Compromisos: hallazgos y revisiones del Sheet (propios y, para líder/director, los de su
   // equipo) más lo de este teléfono — para que vencer, revisar y medir no dependa de en qué
