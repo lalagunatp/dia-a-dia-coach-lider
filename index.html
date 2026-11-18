@@ -4133,9 +4133,69 @@ function registrarRevision({data,setData,session,toast,c,rev}){
 }
 
 // ─── Feedback ───
+// Borrador de Hallazgos: lo que se va capturando se guarda en este teléfono, por persona, para que
+// si se cambia de app, se apaga la pantalla o se cambia de sección no se pierda. Se borra al guardar
+// el hallazgo o al cambiar de día sin guardar (un borrador de otro día nunca se recupera).
+const formHallazgoVacio=()=>({date:today(),vendedor:'',tipo:TIPO_CAMPO,hallazgos:'',compromisos:'',fecha_revision:'',semaforo:'',photo:null,fotos:[],campo:campoVacio()});
+const borradorKey=nombre=>'sv2-borrador-hallazgo-'+nombre;
+function leerBorrador(nombre){
+  try{
+    const k=borradorKey(nombre),s=localStorage.getItem(k);
+    if(!s)return null;
+    const b=JSON.parse(s);
+    if(!b||b.dia!==today()){localStorage.removeItem(k);return null;}
+    return b.form||null;
+  }catch{return null;}
+}
+// Devuelve false si ni siquiera sin fotos cupo (localStorage está lleno).
+function guardarBorrador(nombre,dia,form){
+  const k=borradorKey(nombre);
+  try{localStorage.setItem(k,JSON.stringify({dia,form}));return 'completo';}
+  catch{
+    try{localStorage.setItem(k,JSON.stringify({dia,form:{...form,photo:null,fotos:[]}}));return 'sinFotos';}
+    catch{return false;}
+  }
+}
+function borrarBorrador(nombre){try{localStorage.removeItem(borradorKey(nombre));}catch{}}
+const borradorVacio=f=>!f.vendedor&&!f.hallazgos.trim()&&!f.compromisos.trim()&&!f.fecha_revision&&!f.semaforo
+  &&!f.photo&&!f.fotos.length&&f.tipo===TIPO_CAMPO&&JSON.stringify(f.campo)===JSON.stringify(campoVacio());
+
 function FeedbackTab({data,setData,team,toast,session,refreshKey,compromisos=[],recordsSemaforo=data.records}){
   const esLider=session.role==='lider';
-  const[form,setForm]=useState({date:today(),vendedor:'',tipo:TIPO_CAMPO,hallazgos:'',compromisos:'',fecha_revision:'',semaforo:'',photo:null,fotos:[],campo:campoVacio()});
+  const nombreBorrador=session.user.nombre;
+  const[borradorInicial]=useState(()=>session.soloLectura?null:leerBorrador(nombreBorrador));
+  const[form,setForm]=useState(()=>borradorInicial?{...formHallazgoVacio(),...borradorInicial}:formHallazgoVacio());
+  // Día en que se empezó lo que está en pantalla: si cambia el día, se descarta.
+  const diaRef=useRef(today());
+  const avisoFotosRef=useRef(false);
+  useEffect(()=>{if(borradorInicial)toast('📝 Recuperamos lo que estabas capturando');},[]);
+  const formRef=useRef(form);formRef.current=form;
+  const persistirBorrador=()=>{
+    if(session.soloLectura)return;
+    const f=formRef.current;
+    if(borradorVacio(f)){borrarBorrador(nombreBorrador);return;}
+    const r=guardarBorrador(nombreBorrador,diaRef.current,f);
+    if(r==='sinFotos'&&!avisoFotosRef.current){avisoFotosRef.current=true;toast('⚠️ El teléfono no tiene espacio para guardar las fotos del borrador');}
+  };
+  // Se guarda poco después de cada cambio, y de inmediato si la app se oculta (cambio de app o pantalla apagada).
+  useEffect(()=>{const t=setTimeout(persistirBorrador,400);return()=>clearTimeout(t);},[form]);
+  useEffect(()=>{
+    const alOcultar=()=>{if(document.hidden)persistirBorrador();};
+    document.addEventListener('visibilitychange',alOcultar);
+    window.addEventListener('pagehide',persistirBorrador);
+    const revisarDia=()=>{
+      if(today()!==diaRef.current){diaRef.current=today();setForm(formHallazgoVacio());}
+    };
+    const id=setInterval(revisarDia,60000);
+    document.addEventListener('visibilitychange',revisarDia);
+    return()=>{
+      clearInterval(id);
+      document.removeEventListener('visibilitychange',alOcultar);
+      document.removeEventListener('visibilitychange',revisarDia);
+      window.removeEventListener('pagehide',persistirBorrador);
+      persistirBorrador(); // al cambiar de sección se guarda lo último antes de salir
+    };
+  },[]);
   const esAcompanamiento=form.tipo===TIPO_CAMPO;
   const esEvidenciaExterna=form.tipo==='Evidencia de asignación externa';
   const conCompromiso=!esEvidenciaExterna&&!!form.compromisos.trim();
@@ -4190,7 +4250,8 @@ function FeedbackTab({data,setData,team,toast,session,refreshKey,compromisos=[],
     setEnviado(avisoCompromiso);
     if(avisoCompromiso)window.scrollTo({top:0,behavior:'smooth'});
     const upd={...data,records:[...data.records,rec]};setData(upd);saveAndSync(upd,rec,toast,setData);toast(avisoCompromiso?'✅ Hallazgo y compromiso guardados':'✅ Hallazgo guardado');
-    setForm({date:today(),vendedor:'',tipo:TIPO_CAMPO,hallazgos:'',compromisos:'',fecha_revision:'',semaforo:'',photo:null,fotos:[],campo:campoVacio()});
+    borrarBorrador(nombreBorrador); // ya quedó guardado: el borrador se va
+    setForm(formHallazgoVacio());
   };
   const selectedMember=form.vendedor?team.find(m=>m.nombre===form.vendedor):null;
   // El semáforo no se elige aquí. A un vendedor el automático ya se calcula solo, así que el hallazgo
@@ -7387,6 +7448,7 @@ const MANUAL_ROLES={
         {sub:'Compromisos'},
         {p:'Escribe **Qué + Quién + Cuándo**. Si escribes un compromiso, **tienes que** poner la **Fecha de revisión**. Ese día te sale en el Dashboard para revisarlo. Al guardar se abre WhatsApp para mandarle el compromiso a la persona.'},
         {ojo:'El **semáforo** del vendedor se calcula solo, por eso aquí no sale. Solo aparece, con su motivo, si **tú se lo cambiaste a mano** en los últimos 7 días (en **Dashboard → Equipo**), y se guarda con el hallazgo.'},
+        {p:'**Borrador:** lo que vas capturando se guarda solo en el teléfono. Si cambias de app, apagas la pantalla o te sales de la sección, al volver sale otra vez lo que tenías (verás el aviso **📝 Recuperamos lo que estabas capturando**). El borrador se borra al **guardar el hallazgo** o al **cambiar de día** sin guardar.'},
         {alto:'No se guarda si: falta el integrante · en Trabajo en campo faltan casas tocadas, proveedor, resultado, dirección de alguna casa, motivo del rechazo, respuesta de streaming o la foto · en Evidencia de asignación externa no hay ninguna foto · hay un compromiso sin fecha de revisión.'},
       ]},
       {icon:'⏰',titulo:'Revisar compromisos',cuando:'El día que vence cada compromiso.',bloques:[
