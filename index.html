@@ -1647,12 +1647,12 @@ function rankingMedicion(m){
   if(!m.rankingEnt&&rm?.medirComo&&m.badge!==rm.medirComo)return{badge:rm.medirComo,bajada:{de:rm.medirComo,mes:rm.bajoEn||'',meses:rm.mesesAntes||0}};
   return{badge:m.badge,bajada:null};
 }
-// Cuentas sin pagar: las instaladas en los 30 días anteriores a la semana pasada (ni la semana en
-// curso ni la anterior entran, porque todavía no les toca pagarse).
+// Cuentas sin pagar: lo instalado entre hace 25 y hace 90 días (lo más reciente todavía no le toca
+// pagarse). Es la MISMA ventana de cuentasDelPeriodo (dias>=25 y <=90), así el semáforo cuadra con
+// el panel de cuentas sin pagar: de lo instalado en ese periodo, cuánto está pagado y cuánto no.
 function ventanaNPPF(ref){
-  const corte=startOfWeek(ref);corte.setDate(corte.getDate()-7); // lunes de la semana pasada
-  const ini=new Date(corte);ini.setDate(ini.getDate()-30);
-  return{ini,fin:new Date(corte.getTime()-1)};
+  const hoy=diasAntes(ref,0);
+  return{ini:diasAntes(hoy,90),fin:new Date(diasAntes(hoy,25).getTime()+DIA_MS-1)};
 }
 // Fecha de ingreso "dd/mm/aaaa" (como la manda el servidor) → Date a las 00:00, o null.
 function fechaDMY(s){
@@ -1730,7 +1730,7 @@ function semaforoAutomatico(m,ref){
   if(d.cuentas){
     const pct=d.sinPagar/d.cuentas*100,cobrar=d.sinPagar-Math.floor(d.cuentas*NPPF_META/100);
     r.nppf={color:color(pct<=NPPF_META,pct<=NPPF_BASE),valor:`${d.sinPagar} de ${d.cuentas} (${Math.round(pct)}%)`,
-      detalle:`Cuentas que instaló del ${fmtDateObj(d.nppf.ini)} al ${fmtDateObj(d.nppf.fin)} y siguen sin pagar. Meta: ${NPPF_META}% o menos. Base: ${NPPF_BASE}% o menos.`,
+      detalle:`De lo que instaló del ${fmtDateObj(d.nppf.ini)} al ${fmtDateObj(d.nppf.fin)} (de 25 a 90 días atrás), cuántas cuentas siguen sin pagar. Meta: ${NPPF_META}% o menos. Base: ${NPPF_BASE}% o menos.`,
       accion:cobrar>0?`se cobra${cobrar===1?' 1 de sus cuentas':`n ${cobrar} de sus cuentas`} sin pagar`:''};
   }
   // Conversión por grupo: de lo que validó (hasta hace una semana), cuánto ya se instaló.
@@ -7259,7 +7259,7 @@ const MANUAL_COMUNES={
     {p:'Se revisan **7 cosas** y cada una **vale puntos**: entre todas suman 100. Si llega a la **meta** (🟢) se lleva todos sus puntos; si pasa la **base** pero no llega a la meta (🟡), la mitad; si no llega ni a la base (🔴), cero. **La calificación es la suma.** Van de la que más vale a la que menos:'},
     {colores:[
       ['🎯','1. Instalaciones · 39 pts','Lo que instaló en los **últimos 30 días** contra el objetivo del mes de su ranking. Meta: su objetivo. Base: el mínimo del bono.'],
-      ['💰','2. Cuentas sin pagar · 19 pts','De lo que instaló en los 30 días **antes de la semana pasada**, cuánto sigue sin pagarse. Meta: **5% o menos**. Base: **10% o menos**.'],
+      ['💰','2. Cuentas sin pagar · 19 pts','De lo que instaló **de 25 a 90 días atrás**, cuánto sigue sin pagarse. Meta: **5% o menos**. Base: **10% o menos**.'],
       ['📅','3. Semanas con bono · 13 pts','De las **últimas 4 semanas que ya terminaron**, en cuántas llegó al mínimo del bono. Meta: **las 4**. Base: **3 de 4**.'],
       ['💵','4. ARPU · 10 pts','Lo que paga en promedio cada cliente que instaló en los **últimos 30 días**, sin IVA. Meta: **$480**. Base: **$460**.'],
       ['🏅','5. Ranking · 8 pts','🟢 Oro o Platino · 🟡 Bronce o Plata · 🔴 Condicionado o Entrenamiento.'],
@@ -7273,7 +7273,7 @@ const MANUAL_COMUNES={
       '🎯 **Instalaciones** y 💵 **ARPU**: los **30 días que terminan ayer**. Como 30 días son un mes, se le pide **el objetivo del mes completo** de su ranking.',
       '🔄 **Conversión**: lo que validó en los **30 días que terminan hace una semana**, y de eso cuánto ya se instaló (aunque se haya instalado después). Lo validado en la última semana no entra todavía: se le dan **7 días** para instalarse.',
       '📅 **Semanas con bono**: las **últimas 4 semanas que ya terminaron** (de lunes a domingo). La semana en curso no entra; el lunes ya cuenta la que terminó el domingo.',
-      '💰 **Cuentas sin pagar**: lo instalado en los **30 días antes del lunes de la semana pasada**. La semana actual y la pasada no entran porque todavía no les toca pagarse.',
+      '💰 **Cuentas sin pagar**: lo instalado **de 25 a 90 días atrás** (pagado o no), y de eso cuánto sigue sin pagarse. Lo instalado en los últimos 25 días no entra porque todavía no le toca pagarse; es el mismo periodo del panel de cuentas sin pagar.',
       '🏅 **Ranking**: el del mes actual en la hoja de ranking.',
       '📚 **Certificaciones**: lo que tenga aprobado hoy.',
       '⚫ **Negro**: los meses seguidos como Condicionado en la hoja de ranking.',
