@@ -1401,7 +1401,7 @@ async function fetchVentasComisiones(token,verComo){
     });
     const cuentasByHomologado={};
     Object.entries(json.cuentasByHomologado||{}).forEach(([k,lista])=>{
-      cuentasByHomologado[k]=lista.map(c=>({...c,fechaInstalacion:reviveFecha(c.fechaInstalacion)}));
+      cuentasByHomologado[k]=lista.map(c=>aplicarNPPF({...c,fechaInstalacion:reviveFecha(c.fechaInstalacion)}));
     });
     return{ventasByVendedor,cuentasByHomologado,asignacionesPorOS:json.asignacionesPorOS||{},generado:json.generado||null};
   }catch(e){console.error('Ventas fetch error:',e);return{...vacio,error:e.message||'no hubo respuesta'};}
@@ -1594,6 +1594,24 @@ function semanaMenos(semana,n,ref){
 // número TAL CUAL viene en V (la semana en que se paga la comisión), no la semana real en que se
 // pagó la cuenta — van corridas una entre sí, ver vSemanaPasada. Las que no traen semana no se
 // cuentan en ninguna: se sabe que ya se pagaron, pero no cuándo.
+// La hoja NPPF (col. E: NPPF / REVERSO / NORMAL) confirma el estado actual de cada cuenta, porque se
+// actualiza antes que COMISIONES. COMISIONES sigue siendo la base (fecha, coach, semana de pago):
+//  · NPPF o REVERSO → no pagada, aunque COMISIONES ya la dé por comisionada.
+//  · NORMAL, instalada hace 90 días o menos, y COMISIONES aún no la marca pagada → pagada recién: cuenta en la semana que se paga
+//    ahora (la misma "última semana" de vSemanaPasada), porque NPPF no dice cuándo se pagó.
+//  · NORMAL y COMISIONES ya la trae pagada, o cuenta que no está en NPPF → se queda como en COMISIONES.
+function aplicarNPPF(c){
+  const yaPagada=/^YA COMISIONADA/i.test(c.estatusPago);
+  if(c.nppf==='NPPF'||c.nppf==='REVERSO'){
+    return yaPagada?{...c,estatusPago:c.nppf,semanaPago:null}:c;
+  }
+  // Una cuenta de más de 90 días (fuera de la ventana de cuentas sin pagar) se queda como en COMISIONES.
+  const dias=c.fechaInstalacion?(Date.now()-c.fechaInstalacion.getTime())/86400000:null;
+  if(c.nppf==='NORMAL'&&!yaPagada&&dias!==null&&dias<=90){
+    return{...c,estatusPago:'YA COMISIONADA (confirmada en NPPF)',semanaPago:semanaISO(new Date())};
+  }
+  return c;
+}
 function pagadasEnSemana(pagadas,semana){
   return pagadas.filter(c=>c.semanaPago===semana).length;
 }
@@ -7465,7 +7483,7 @@ const MANUAL_ROLES={
         {sub:'🛒 Ventas del equipo'},
         {lista:['Toca **Semana** o **Mes**. Con **‹** ves la anterior; con **Volver** regresas a la de hoy.','🕒 dice a qué hora se tomaron los datos.','Ves **Oportunidades**, **Validadas** e **Instaladas**, y abajo el **% de avance** contra tu Plan.','El reloj 🎯 compara las instalaciones contra la meta.']},
         {sub:'Paneles que se abren al tocarlos'},
-        {lista:['❌ **Motivos de rechazo** de las oportunidades.','📦 **Instalaciones por plan**.','⏳ **Cuentas por instalar** (últimos 30 días). Las puedes mandar por WhatsApp.','💵 **ARPU** por vendedor.','💰 **Cuentas sin pagar**: instaladas hace 25 a 90 días y sin pagar. Entre más días, más urge.','✅ **Cuentas pagadas**: la semana pasada contra la anterior.']},
+        {lista:['❌ **Motivos de rechazo** de las oportunidades.','📦 **Instalaciones por plan**.','⏳ **Cuentas por instalar** (últimos 30 días). Las puedes mandar por WhatsApp.','💵 **ARPU** por vendedor.','💰 **Cuentas sin pagar**: instaladas hace 25 a 90 días y sin pagar. Entre más días, más urge. Se confirma con la hoja **NPPF** de la BASE: lo que ahí dice **NPPF** o **REVERSO** cuenta como no pagado, y lo que dice **NORMAL** cuenta como pagado aunque COMISIONES todavía no lo refleje (entra en la última semana). La fecha y el coach siguen saliendo de COMISIONES. La hoja se actualiza una vez al día, por la mañana.','✅ **Cuentas pagadas**: la semana pasada contra la anterior.']},
         {sub:'👥 La tarjeta de cada vendedor'},
         {lista:['**🎯 8/14 inst. del mes** y **🎯 2/4 inst. de la semana**: lo que lleva contra su meta. Siguen la semana y el mes que elegiste en **🛒 Ventas del equipo**.','Al final de cada una va su **💵 ARPU** (sin IVA) de ese mes o esa semana, con color: 🟢 **$480 o más** · 🟡 **$460 a $479** · 🔴 **menos de $460**. Por ejemplo: **🎯 8/14 inst. del mes · 💵 $486 🟢**.','Si no instaló nada en ese periodo no hay ARPU, y no sale.']},
         {sub:'🚦 El semáforo de tus vendedores'},
