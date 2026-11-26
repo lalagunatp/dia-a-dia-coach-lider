@@ -796,7 +796,7 @@ function textoCuentasSinPagar(m,cuentas,ref){
   const lineas=cuentas.map(c=>{
     const motivo=motivoNoPagado(c);
     const dias=diasDesde(c.fechaInstalacion,ref);
-    return `• ${c.cuenta} · ${c.cliente} · ${fmtDateObj(c.fechaInstalacion)} (${dias} día${dias!==1?'s':''}) · ${c.plan} · ${fmtMoney(c.importe)}${motivo?' · '+motivo:''}`;
+    return `• ${c.cuenta} · ${c.cliente} · ${fmtDateObj(c.fechaInstalacion)} (${dias} día${dias!==1?'s':''}) · ${c.plan}${c.adeudo!=null?' · debe '+fmtMoney(c.adeudo):''} · comisión sin ganar ${fmtMoney(c.importe)}${motivo?' · '+motivo:''}`;
   }).join('\n');
   return `📋 Cuentas sin pagar de ${m.nombre} (25 a 119 días de instaladas):\n\n${lineas}`;
 }
@@ -5198,8 +5198,9 @@ function DashboardTab({data,setData,team,coaches,session,setTab,toast,recordsPla
                 <span>{c.cuenta} · {c.cliente} · {fmtDateObj(c.fechaInstalacion)} <b style={{color:'var(--red)'}}>({diasSinPago} día{diasSinPago!==1?'s':''})</b></span>
               </div>
               <div style={{display:'flex',justifyContent:'space-between',gap:6,marginTop:1}}>
-                <span>{c.plan}</span>
-                <span style={{color:'var(--red)',fontWeight:600,textAlign:'right'}}>{fmtMoney(c.importe)}</span>
+                {/* Adeudo = lo que debe el cliente (hoja NPPF col. D); el monto de la derecha es la comisión (COMISIONES col. T). */}
+                <span>{c.plan}{c.adeudo!=null&&<> · <b style={{color:'var(--red)'}}>Debe {fmtMoney(c.adeudo)}</b></>}</span>
+                <span style={{color:'var(--red)',fontWeight:600,textAlign:'right'}} title="Comisión que todavía no se gana porque el cliente no ha pagado">Comisión sin ganar {fmtMoney(c.importe)}</span>
               </div>
             </div>;
           })}
@@ -7489,7 +7490,7 @@ const MANUAL_ROLES={
         {sub:'🛒 Ventas del equipo'},
         {lista:['Toca **Semana** o **Mes**. Con **‹** ves la anterior; con **Volver** regresas a la de hoy.','🕒 dice a qué hora se tomaron los datos.','Ves **Oportunidades**, **Validadas** e **Instaladas**, y abajo el **% de avance** contra tu Plan.','El reloj 🎯 compara las instalaciones contra la meta.']},
         {sub:'Paneles que se abren al tocarlos'},
-        {lista:['❌ **Motivos de rechazo** de las oportunidades.','📦 **Instalaciones por plan**.','⏳ **Cuentas por instalar** (últimos 30 días). Las puedes mandar por WhatsApp.','💵 **ARPU** por vendedor.','💰 **Cuentas sin pagar**: instaladas hace 25 a 119 días y sin pagar. Entre más días, más urge. Se confirma con la hoja **NPPF** de la BASE: lo que ahí dice **NPPF** o **REVERSO** cuenta como no pagado, y lo que dice **NORMAL** cuenta como pagado aunque COMISIONES todavía no lo refleje (entra en la última semana). La fecha y el coach siguen saliendo de COMISIONES. La hoja se actualiza una vez al día, por la mañana.','✅ **Cuentas pagadas**: la semana pasada contra la anterior.']},
+        {lista:['❌ **Motivos de rechazo** de las oportunidades.','📦 **Instalaciones por plan**.','⏳ **Cuentas por instalar** (últimos 30 días). Las puedes mandar por WhatsApp.','💵 **ARPU** por vendedor.','💰 **Cuentas sin pagar**: instaladas hace 25 a 119 días y sin pagar. Entre más días, más urge. Se confirma con la hoja **NPPF** de la BASE: lo que ahí dice **NPPF** o **REVERSO** cuenta como no pagado, y lo que dice **NORMAL** cuenta como pagado aunque COMISIONES todavía no lo refleje (entra en la última semana). La fecha y el coach siguen saliendo de COMISIONES. Junto al plan sale **Debe $…**: lo que el cliente debe según la hoja NPPF. A la derecha, **Comisión sin ganar $…**: la comisión de esa cuenta, que no se gana mientras el cliente no pague. La hoja se actualiza una vez al día, por la mañana.','✅ **Cuentas pagadas**: la semana pasada contra la anterior.']},
         {sub:'👥 La tarjeta de cada vendedor'},
         {lista:['**🎯 8/14 inst. del mes** y **🎯 2/4 inst. de la semana**: lo que lleva contra su meta. Siguen la semana y el mes que elegiste en **🛒 Ventas del equipo**.','Al final de cada una va su **💵 ARPU** (sin IVA) de ese mes o esa semana, con color: 🟢 **$480 o más** · 🟡 **$460 a $479** · 🔴 **menos de $460**. Por ejemplo: **🎯 8/14 inst. del mes · 💵 $486 🟢**.','Si no instaló nada en ese periodo no hay ARPU, y no sale.']},
         {sub:'🚦 El semáforo de tus vendedores'},
